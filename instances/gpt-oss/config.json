@@ -1,0 +1,51 @@
+{
+  "$schema": "../llama-instance-schema.json",
+  "name": "gpt-oss",
+  "binary": {
+    "binary_id": "a9576b8e-4d9a-4f76-a392-8748632b35ed",
+    "version": "b7572",
+    "variant": "win-vulkan-x64",
+    "source_url": "https://github.com/ggml-org/llama.cpp/releases/download/b7572/llama-b7572-bin-win-vulkan-x64.zip"
+  },
+  "model": {
+    "path": "models/gpt-oss-20b-Q4_K_S.gguf",
+    "context_size": 4096,
+    "batch_size": 512,
+    "threads": 16
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8001,
+    "timeout": 600,
+    "parallel": 4
+  },
+  "gpu": {
+    "backend": "vulkan",
+    "device_id": 0,
+    "layers": 30
+  },
+  "env": {
+    "GGML_VULKAN_DEVICE": "0"
+  },
+  "args": [],
+  "healthcheck": {
+    "path": "/health",
+    "interval": 10,
+    "timeout": 5,
+    "retries": 3,
+    "start_period": 60
+  },
+  "restart_policy": {
+    "enabled": true,
+    "max_retries": 5,
+    "backoff_multiplier": 2.0,
+    "initial_delay": 1.0,
+    "max_delay": 300.0
+  },
+  "logs": {
+    "stdout": "logs/gpt-oss/stdout.log",
+    "stderr": "logs/gpt-oss/stderr.log",
+    "max_size_mb": 100,
+    "rotation": 5
+  }
+}

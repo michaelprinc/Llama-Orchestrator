@@ -1,0 +1,40 @@
+# llama-orchestrator specific ignores
+
+# State files (do not commit runtime state)
+state/
+
+# Log files
+logs/
+
+# Compiled Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Virtual environment
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Downloaded binaries (should be downloaded locally)
+bin/*.exe
+bin/*.dll
+
+# Binary installations (UUID-based directories with llama.cpp binaries)
+# Keep only registry.json in version control
+bins/*/
+!bins/registry.json
+
+# Model files (too large for git)
+models/*.gguf
