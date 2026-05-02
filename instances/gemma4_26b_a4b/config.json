@@ -1,0 +1,66 @@
+{
+    "name": "gemma4_26b_a4b",
+    "binary": {
+        "binary_id": null,
+        "version": "latest",
+        "variant": "win-vulkan-x64",
+        "source_url": null,
+        "sha256": null
+    },
+    "model": {
+        "path": "K:\\Data_science_projects\\WireGuard\\infra-local\\llama-orchestrator\\models\\google_gemma-4-26B-A4B-it-Q4_K_S.gguf",
+        "context_size": 4096,
+        "batch_size": 512,
+        "threads": 8
+    },
+    "server": {
+        "host": "127.0.0.1",
+        "port": 8014,
+        "timeout": 600,
+        "parallel": 1
+    },
+    "gpu": {
+        "backend": "vulkan",
+        "device_id": 0,
+        "layers": 999
+    },
+    "env": {},
+    "args": [
+        "--no-mmproj",
+        "--reasoning",
+        "off",
+        "--flash-attn",
+        "auto"
+    ],
+    "healthcheck": {
+        "type": "http",
+        "path": "/health",
+        "expected_status": [
+            200
+        ],
+        "expected_body": null,
+        "custom_script": null,
+        "interval": 10,
+        "timeout": 5,
+        "retries": 3,
+        "retry_delay": 1.0,
+        "start_period": 60,
+        "backoff_enabled": true,
+        "backoff_base": 1.0,
+        "backoff_max": 60.0,
+        "backoff_jitter": 0.1
+    },
+    "restart_policy": {
+        "enabled": true,
+        "max_retries": 5,
+        "backoff_multiplier": 2.0,
+        "initial_delay": 1.0,
+        "max_delay": 300.0
+    },
+    "logs": {
+        "stdout": "logs/{name}/stdout.log",
+        "stderr": "logs/{name}/stderr.log",
+        "max_size_mb": 100,
+        "rotation": 5
+    }
+}

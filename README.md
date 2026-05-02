@@ -33,6 +33,9 @@ llama-orch ps
 # View dashboard
 llama-orch dashboard
 
+# Open desktop GUI
+llama-orch gui
+
 # Stop instance
 llama-orch down gpt-oss
 ```
@@ -76,6 +79,7 @@ llama-orch down gpt-oss
 | `llama-orch logs <name>` | View instance logs |
 | `llama-orch describe <name>` | Show full config + status |
 | `llama-orch dashboard` | Live TUI dashboard |
+| `llama-orch gui` | Windows desktop GUI for model management |
 | `llama-orch config validate` | Validate configuration |
 | `llama-orch daemon start` | Start background daemon |
 
@@ -134,6 +138,53 @@ llama-orchestrator/
 - Windows 10/11
 - llama.cpp server binary (Vulkan/CPU)
 - AMD GPU with Vulkan support (optional)
+
+## Windows Autostart
+
+The project can start automatically after Windows boots by registering a Task
+Scheduler task. The scheduled task runs `scripts/Start-Autostart.ps1`, which
+starts the orchestrator daemon and writes audit entries to
+`logs/autostart-audit.log`.
+
+```powershell
+# Run from the llama-orchestrator project root.
+# AtStartup usually requires an elevated PowerShell session.
+.\scripts\Install-AutostartTask.ps1 -Trigger AtStartup
+
+# Start the daemon and all configured model instances at user logon.
+.\scripts\Install-AutostartTask.ps1 -Trigger AtLogOn -StartInstances
+
+# Start only selected model instances.
+.\scripts\Install-AutostartTask.ps1 -Trigger AtLogOn -StartInstances -InstanceNames gpt-oss
+
+# Remove the scheduled task.
+.\scripts\Install-AutostartTask.ps1 -Uninstall
+```
+
+Both install and bootstrap scripts support `-Verbose` and `-WhatIf`.
+
+## Desktop GUI
+
+Launch the desktop management UI with:
+
+```powershell
+llama-orch gui
+# or
+.\scripts\llama.ps1 gui
+```
+
+The GUI supports:
+
+- Viewing configured model instances with status, health, PID, port, backend,
+  model path, runtime args, and uptime.
+- Starting, stopping, restarting, and health-checking selected instances.
+- Starting and stopping the orchestrator daemon.
+- Adding a new GGUF-backed model instance config.
+- Managing these llama-server args for new or selected instances:
+  `--no-mmproj --reasoning off --flash-attn auto`.
+- Installing a `llama-server.exe` binary from GitHub releases with
+  `win-vulkan-x64` selected by default.
+- Opening instance config files, log folders, and the project folder.
 
 ## Development
 

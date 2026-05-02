@@ -161,16 +161,17 @@ def start_instance(name: str, wait_for_ready: bool = True) -> InstanceState:
     Raises:
         ProcessError: If instance cannot be started
     """
-    # Validate executable exists
-    exe_valid, exe_msg = validate_executable()
-    if not exe_valid:
-        raise ProcessError(name, exe_msg)
-    
     # Load config
     try:
         config = get_instance_config(name)
     except ConfigLoadError as e:
         raise ProcessError(name, f"Failed to load config: {e.message}", e) from e
+    
+    # Validate executable exists after loading config so UUID-based binary
+    # resolution works for per-instance binary selections.
+    exe_valid, exe_msg = validate_executable(config)
+    if not exe_valid:
+        raise ProcessError(name, exe_msg)
     
     # Check current state
     state = load_state(name)

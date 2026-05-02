@@ -17,6 +17,7 @@ Commands:
     binary info         Show binary details
     binary remove       Remove a binary
     binary latest       Show latest available version
+    gui                  Launch Windows desktop GUI
 """
 
 from pathlib import Path
@@ -637,6 +638,23 @@ def dashboard() -> None:
                 live.update(build_table())
     except KeyboardInterrupt:
         console.print("\n[dim]Dashboard closed.[/dim]")
+
+
+@app.command()
+def gui() -> None:
+    """
+    Launch the desktop GUI for model instance management.
+
+    Example:
+        llama-orch gui
+    """
+    try:
+        from llama_orchestrator.gui import launch_gui
+    except Exception as e:
+        console.print(f"[red]Failed to load GUI:[/red] {e}")
+        raise typer.Exit(1)
+
+    launch_gui()
 
 
 @app.command()

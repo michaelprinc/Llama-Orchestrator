@@ -22,7 +22,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$ProjectRoot = $ScriptDir
+$ProjectRoot = Split-Path -Parent $ScriptDir
 
 # Check for virtual environment
 $VenvPath = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
