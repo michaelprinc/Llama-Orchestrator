@@ -9,7 +9,7 @@
   },
   "model": {
     "path": "models/Qwen3.6-35B-A3B-Q4_K_M.gguf",
-    "context_size": 32768,
+    "context_size": 65536,
     "batch_size": 512,
     "threads": 16
   },
@@ -46,7 +46,7 @@
     "--no-mmproj",
     "--jinja",
     "--reasoning",
-    "off",
+    "on",
     "--flash-attn",
     "on"
   ],
