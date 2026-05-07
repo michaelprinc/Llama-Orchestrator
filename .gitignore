@@ -38,3 +38,4 @@ bins/*/
 
 # Model files (too large for git)
 models/*.gguf
+*.gguf

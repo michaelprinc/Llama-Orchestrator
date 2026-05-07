@@ -1,0 +1,68 @@
+{
+  "name": "gemma3_270m_it_cpu4",
+  "binary": {
+    "binary_id": "546a6052-b49e-4940-8ebc-18084fe8aa33",
+    "version": "b9009",
+    "variant": "win-vulkan-x64",
+    "source_url": "https://github.com/ggml-org/llama.cpp/releases/download/b9009/llama-b9009-bin-win-vulkan-x64.zip",
+    "sha256": "aa502be0e6910726f88de6b2d2d7a61cb2163194c0b6cd1766d22d29b044662a"
+  },
+  "model": {
+    "path": "models/gemma-3-270m-it-Q8_0.gguf",
+    "context_size": 8192,
+    "batch_size": 512,
+    "threads": 4
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8019,
+    "timeout": 600,
+    "parallel": 1
+  },
+  "gpu": {
+    "backend": "cpu",
+    "device_id": 0,
+    "layers": 0
+  },
+  "env": {},
+  "args": [
+    "--parallel",
+    "1",
+    "--device",
+    "none",
+    "--n-gpu-layers",
+    "0",
+    "--no-mmproj"
+  ],
+  "healthcheck": {
+    "type": "http",
+    "path": "/health",
+    "expected_status": [
+      200
+    ],
+    "expected_body": null,
+    "custom_script": null,
+    "interval": 10,
+    "timeout": 5,
+    "retries": 3,
+    "retry_delay": 1.0,
+    "start_period": 60,
+    "backoff_enabled": true,
+    "backoff_base": 1.0,
+    "backoff_max": 60.0,
+    "backoff_jitter": 0.1
+  },
+  "restart_policy": {
+    "enabled": true,
+    "max_retries": 5,
+    "backoff_multiplier": 2.0,
+    "initial_delay": 1.0,
+    "max_delay": 300.0
+  },
+  "logs": {
+    "stdout": "logs/{name}/stdout.log",
+    "stderr": "logs/{name}/stderr.log",
+    "max_size_mb": 100,
+    "rotation": 5
+  }
+}
