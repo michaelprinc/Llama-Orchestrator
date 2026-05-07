@@ -9,9 +9,9 @@
     },
     "model": {
         "path": "K:\\Data_science_projects\\WireGuard\\infra-local\\llama-orchestrator\\models\\google_gemma-4-26B-A4B-it-Q4_K_S.gguf",
-        "context_size": 128000,
+        "context_size": 4096,
         "batch_size": 512,
-        "threads": 16
+        "threads": 8
     },
     "server": {
         "host": "127.0.0.1",
@@ -21,25 +21,16 @@
     },
     "gpu": {
         "backend": "vulkan",
-        "device_id": 1,
+        "device_id": 0,
         "layers": 999
     },
     "env": {},
     "args": [
-        "--parallel",
-        "1",
-        "--main-gpu",
-        "1",
-        "--no-mmap",
-        "--cache-type-k",
-        "q4_0",
-        "--cache-type-v",
-        "q4_0",
         "--no-mmproj",
         "--reasoning",
         "on",
         "--flash-attn",
-        "on"
+        "auto"
     ],
     "healthcheck": {
         "type": "http",

@@ -1,5 +1,5 @@
 {
-    "name": "gemma4_26b_a4b",
+    "name": "gemma4_e4b_it_q4km_instance2",
     "binary": {
         "binary_id": null,
         "version": "latest",
@@ -8,14 +8,14 @@
         "sha256": null
     },
     "model": {
-        "path": "K:\\Data_science_projects\\WireGuard\\infra-local\\llama-orchestrator\\models\\google_gemma-4-26B-A4B-it-Q4_K_S.gguf",
-        "context_size": 128000,
+        "path": "K:\\Data_science_projects\\WireGuard\\infra-local\\llama-orchestrator\\models\\gemma-4-E4B-it-Q4_K_M.gguf",
+        "context_size": 32768,
         "batch_size": 512,
-        "threads": 16
+        "threads": 4
     },
     "server": {
         "host": "127.0.0.1",
-        "port": 8014,
+        "port": 8018,
         "timeout": 600,
         "parallel": 1
     },
@@ -26,15 +26,6 @@
     },
     "env": {},
     "args": [
-        "--parallel",
-        "1",
-        "--main-gpu",
-        "1",
-        "--no-mmap",
-        "--cache-type-k",
-        "q4_0",
-        "--cache-type-v",
-        "q4_0",
         "--no-mmproj",
         "--reasoning",
         "on",
