@@ -1,5 +1,5 @@
 {
-  "name": "gemma3_270m_it_igpu",
+  "name": "qwen35_08b_q4km_igpu",
   "binary": {
     "binary_id": "67b04bdb-8759-4fd6-872c-6311bfade8ce",
     "version": "b9071",
@@ -8,14 +8,14 @@
     "sha256": null
   },
   "model": {
-    "path": "models/gemma-3-270m-it-Q8_0.gguf",
-    "context_size": 32768,
-    "batch_size": 512,
+    "path": "models/Qwen3.5-0.8B-Q4_K_M.gguf",
+    "context_size": 8192,
+    "batch_size": 128,
     "threads": 16
   },
   "server": {
     "host": "127.0.0.1",
-    "port": 8020,
+    "port": 8023,
     "timeout": 600,
     "parallel": 1
   },
@@ -34,7 +34,10 @@
     "Vulkan0",
     "--main-gpu",
     "0",
-    "--no-mmproj"
+    "--no-mmproj",
+    "--jinja",
+    "--reasoning",
+    "off"
   ],
   "healthcheck": {
     "type": "http",
@@ -48,7 +51,7 @@
     "timeout": 5,
     "retries": 3,
     "retry_delay": 1.0,
-    "start_period": 60,
+    "start_period": 90,
     "backoff_enabled": true,
     "backoff_base": 1.0,
     "backoff_max": 60.0,

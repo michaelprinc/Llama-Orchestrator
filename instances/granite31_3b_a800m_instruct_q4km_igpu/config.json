@@ -1,5 +1,5 @@
 {
-  "name": "gemma3_270m_it_igpu",
+  "name": "granite31_3b_a800m_instruct_q4km_igpu",
   "binary": {
     "binary_id": "67b04bdb-8759-4fd6-872c-6311bfade8ce",
     "version": "b9071",
@@ -8,14 +8,14 @@
     "sha256": null
   },
   "model": {
-    "path": "models/gemma-3-270m-it-Q8_0.gguf",
-    "context_size": 32768,
-    "batch_size": 512,
+    "path": "models/granite-3.1-3b-a800m-instruct-Q4_K_M.gguf",
+    "context_size": 8192,
+    "batch_size": 128,
     "threads": 16
   },
   "server": {
     "host": "127.0.0.1",
-    "port": 8020,
+    "port": 8022,
     "timeout": 600,
     "parallel": 1
   },
