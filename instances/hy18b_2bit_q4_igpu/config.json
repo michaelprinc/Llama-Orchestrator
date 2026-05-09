@@ -15,7 +15,7 @@
   },
   "server": {
     "host": "127.0.0.1",
-    "port": 8024,
+    "port": 8028,
     "timeout": 600,
     "parallel": 1
   },
