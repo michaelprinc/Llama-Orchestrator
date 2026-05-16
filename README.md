@@ -94,15 +94,24 @@ llama-orch down gpt-oss
 | `llama-orch dashboard` | Live TUI dashboard with recent events panel |
 | `llama-orch gui` | Windows desktop GUI for model management |
 | `llama-orch config validate` | Validate configuration |
+| `llama-orch config lint` | Validate all discovered instance configs |
 | `llama-orch daemon start` | Start background daemon |
+| `llama-orch daemon status` | Show daemon status |
+| `llama-orch daemon stop` | Stop background daemon |
 | `llama-orch daemon install` | Install the daemon as a Windows service via NSSM |
 | `llama-orch daemon uninstall` | Remove the Windows service |
+| `llama-orch binary install [version]` | Install a llama.cpp `llama-server` package from GitHub releases |
+| `llama-orch binary list` | List installed versioned binaries |
+| `llama-orch binary info <uuid>` | Show metadata for an installed binary |
+| `llama-orch binary remove <uuid>` | Remove an installed binary after confirmation |
+| `llama-orch binary latest` | Show the latest available llama.cpp release |
 
 ## CLI Notes
 
 - `llama-orch up <name> --no-detach` keeps the server attached to the current terminal.
 - `llama-orch logs <name> --stream both` shows merged stdout and stderr output.
 - `llama-orch dashboard --events-for <name>` filters the recent-events panel to one instance.
+- `llama-orch binary remove <uuid>` prompts before deleting the binary directory; use `--force` only for scripted cleanup.
 - Commands return standard exit codes for automation: `2` usage, `10-19` config, `20-39` instance/process, `50-69` binary/daemon.
 
 ## Configuration
@@ -112,6 +121,13 @@ Instance configs are stored in `instances/<name>/config.json`:
 ```json
 {
   "name": "gpt-oss",
+  "binary": {
+    "binary_id": "a9576b8e-4d9a-4f76-a392-8748632b35ed",
+    "version": "b7572",
+    "variant": "win-vulkan-x64",
+    "source_url": "https://github.com/ggml-org/llama.cpp/releases/download/b7572/llama-b7572-bin-win-vulkan-x64.zip",
+    "sha256": null
+  },
   "model": {
     "path": "../../models/gpt-oss-20b-Q4_K_S.gguf",
     "context_size": 4096,
@@ -128,26 +144,64 @@ Instance configs are stored in `instances/<name>/config.json`:
     "device_id": 1,
     "layers": 30
   },
+  "env": {
+    "GGML_VULKAN_DEVICE": "1"
+  },
+  "args": [
+    "--no-mmproj",
+    "--reasoning", "off",
+    "--flash-attn", "auto"
+  ],
+  "tags": ["router", "vulkan"],
   "healthcheck": {
+    "type": "http",
+    "path": "/health",
+    "expected_status": [200],
     "interval": 10,
     "timeout": 5,
-    "retries": 3
+    "retries": 3,
+    "retry_delay": 1.0,
+    "start_period": 60,
+    "backoff_enabled": true,
+    "backoff_base": 1.0,
+    "backoff_max": 60.0,
+    "backoff_jitter": 0.1
   },
   "restart_policy": {
     "enabled": true,
-    "max_retries": 5
+    "max_retries": 5,
+    "backoff_multiplier": 2.0,
+    "initial_delay": 1.0,
+    "max_delay": 300.0
+  },
+  "logs": {
+    "stdout": "logs/gpt-oss/stdout.log",
+    "stderr": "logs/gpt-oss/stderr.log",
+    "max_size_mb": 100,
+    "rotation": 5
   }
 }
 ```
+
+The `binary.binary_id` UUID is the primary join into `bins/registry.json`.
+If it is missing, the resolver can fall back to `version` plus `variant`. If
+the whole `binary` section is absent, legacy `bin/llama-server.exe` resolution
+is still supported for older configs.
 
 ## Directory Structure
 
 ```
 llama-orchestrator/
-├── bin/llama-server.exe      # llama.cpp binary
+├── bins/                     # Versioned llama.cpp binaries
+│   ├── registry.json         # UUID registry and default binary pointer
+│   └── <uuid>/               # Installed package with llama-server.exe and DLLs
+├── bin/llama-server.exe      # Legacy fallback path
 ├── instances/                 # Instance configurations
 │   └── <name>/config.json
 ├── state/state.sqlite        # Runtime state
+├── state/benchmark_history.sqlite
+├── state/benchmark_settings.json
+├── benchmarks/prompts/default.txt
 ├── logs/<name>/              # Instance logs
 │   ├── stdout.log
 │   └── stderr.log
@@ -191,13 +245,21 @@ If `nssm.exe` is available in `PATH`, the daemon can be installed as a Windows s
 
 ```powershell
 llama-orch daemon install
+llama-orch daemon status
+llama-orch daemon stop
 llama-orch daemon uninstall
 
 # Custom service name
 llama-orch daemon install --service-name llama-orch-dev
 ```
 
-The service entry point runs the orchestrator daemon in foreground mode and writes daemon stdout/stderr logs under `logs/daemon/`.
+Run service installation from an elevated PowerShell session and make sure
+`nssm.exe` is available in `PATH`. The service entry point runs the
+orchestrator daemon in foreground mode and writes daemon stdout/stderr logs
+under `logs/daemon/`. Manual Windows Services UI smoke verification is still a
+tracked operational check; CLI install/uninstall coverage exists, but service
+start/stop should be verified on the target Windows host before relying on it
+for unattended operation.
 
 ## Desktop GUI
 
@@ -212,15 +274,53 @@ llama-orch gui
 The GUI supports:
 
 - Viewing configured model instances with status, health, PID, port, backend,
-  model path, runtime args, and uptime.
+  model path, runtime args, tags, benchmark TPS, first-token latency, VRAM MB,
+  prompt file, and uptime.
 - Starting, stopping, restarting, and health-checking selected instances.
 - Starting and stopping the orchestrator daemon.
 - Adding a new GGUF-backed model instance config.
 - Managing these llama-server args for new or selected instances:
   `--no-mmproj --reasoning off --flash-attn auto`.
 - Installing a `llama-server.exe` binary from GitHub releases with
-  `win-vulkan-x64` selected by default.
+- `win-vulkan-x64` selected by default. The toolbar action is named
+  `Install llama-server` because the installer supports CPU, Vulkan, CUDA,
+  HIP/Radeon, and SYCL variants.
 - Opening instance config files, log folders, and the project folder.
+- Choosing visible table columns from the `Columns` menu.
+- Filtering by instance tags and applying batch actions to visible rows.
+- Running `Quick benchmark` from the detail bar or row context menu.
+- Selecting and opening the editable benchmark prompt with
+  `Edit Benchmark Prompt` and `Open prompt`.
+- Cloning a row with an incremented/suggested port.
+- Diffing runtime args for two selected rows.
+- Copying a selected instance launch command with `Copy CLI`.
+- Editing the `Runtime args` cell inline; saving restarts the instance when it
+  is already running.
+
+GUI status display intentionally separates engine state from readiness:
+`running + loading` is shown as `loading`, while `running + healthy` is shown
+as `ready`. The underlying runtime status remains `running`.
+
+Persisted GUI-observed state currently includes the selected benchmark prompt
+(`state/benchmark_settings.json`) and manual health/benchmark health updates in
+the runtime state and `health_history`. Column visibility, tag filter, and
+window geometry reset on GUI launch.
+
+### Quick Benchmark and VRAM
+
+The default benchmark prompt lives at `benchmarks/prompts/default.txt`.
+Benchmark settings persist to `state/benchmark_settings.json`; benchmark
+attempts append to `state/benchmark_history.sqlite` with prompt file, prompt
+SHA256, output token count, TPS, latency, VRAM MB, config hash, status, and
+error text.
+
+`Quick benchmark` requires the selected instance to expose a live llama.cpp
+`/completion` endpoint. VRAM is best-effort: vendor CLI tools
+(`nvidia-smi`, `amd-smi`, `rocm-smi`) are sampled first, then the benchmark
+falls back to parsing the instance `stderr.log`. The fallback prioritizes
+logged Vulkan model buffer size and can estimate `total - free` for the
+configured device. This depends on llama.cpp log format stability, so missing
+VRAM data is reported as `-`.
 
 ## Development
 
@@ -231,11 +331,21 @@ cd llama-orchestrator
 uv sync
 
 # Run tests
-pytest
+uv run pytest
+
+# Focus the current GUI/benchmark slice
+uv run pytest tests/test_gui.py tests/test_benchmark.py -v --no-cov
+
+# Lint touched GUI/benchmark files
+uv run ruff check src\llama_orchestrator\benchmark.py src\llama_orchestrator\gui.py tests\test_benchmark.py tests\test_gui.py
 
 # Run in dev mode
 python -m llama_orchestrator --help
 ```
+
+If running `pytest` outside `uv`, set `PYTHONPATH=src` first. Repository-wide
+Ruff may still report older pre-existing style issues; the May 2026 GUI and
+benchmark changes were validated with Ruff scoped to touched files.
 
 ## Documentation
 
@@ -245,6 +355,14 @@ python -m llama_orchestrator --help
 - [V2 Checklist](docs/LLAMA_ORCH_V2_CHECKLIST.md) - Detailed task tracking
 - [V2 Dependency Map](docs/LLAMA_ORCH_V2_DEPENDENCY_MAP.md) - Module dependency graph
 - [V2 Risk Register](docs/LLAMA_ORCH_V2_RISK_REGISTER.md) - Risk assessment and mitigation
+- [Binary Management](docs/BINARY_MANAGEMENT.md) - Versioned llama.cpp binary registry and CLI workflows
+
+### Recent Implementation Reports
+
+- [Benchmark GUI improvements](../../reports/implementation/infra-local/llama-orchestrator/2026/20260516-llama-orchestrator-benchmark-gui-improvements.md)
+- [GUI state and VRAM corrections](../../reports/implementation/infra-local/llama-orchestrator/2026/20260516-llama-orchestrator-gui-state-vram-corrections.md)
+- [GUI install label update](../../reports/implementation/infra-local/llama-orchestrator/2026/20260516-llama-orchestrator-gui-install-label.md)
+- [Routing classification consolidated results](../../reports/implementation/infra-local/llama-orchestrator/2026/20260509-routing-classification-consolidated-results.md)
 
 ### Original Documentation
 

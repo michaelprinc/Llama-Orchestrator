@@ -1,7 +1,7 @@
 # llama.cpp Version Scaling - Implementation Checklist
 
 > Generated: 2025-12-29
-> Updated: 2025-01-XX (Phase 1-4 Complete)
+> Updated: 2026-05-16 (Phase 1-4 Complete, documentation refreshed)
 > Complexity: **Complex** (multi-module, new dependencies, schema changes)
 > Estimated Total Effort: **8-12 hours**
 
@@ -185,11 +185,16 @@ This checklist covers the implementation of a scalable llama.cpp binary version 
 - [ ] Acceptance: All integration tests pass
 
 ### 5.3 Update Documentation
-- [ ] Update `README.md` with binary management section
-- [ ] Add `docs/BINARY_MANAGEMENT.md` detailed guide
-- [ ] Document config.json `binary` section
-- [ ] Add migration guide from legacy `bin/`
-- [ ] Acceptance: Documentation is complete and accurate
+- [x] Update `README.md` with binary management section
+- [x] Add `docs/BINARY_MANAGEMENT.md` detailed guide
+- [x] Document config.json `binary` section
+- [x] Add migration guide from legacy `bin/`
+- [x] Acceptance: Documentation is complete and accurate for implemented binary workflows
+
+**Documentation refresh:** Completed on 2026-05-16. The docs now cover the
+implemented `binary install/list/info/remove/latest` workflows, UUID-primary
+registry resolution, config pinning, modern `bins/` layout, and legacy `bin/`
+fallback. Non-implemented CLI items remain open in phases 3 and 4.
 
 ---
 
@@ -230,7 +235,7 @@ This checklist covers the implementation of a scalable llama.cpp binary version 
 | Backward compatible with legacy `bin/` | [x] |
 | CLI commands for binary management | [x] |
 | Unit tests with >80% coverage | [ ] |
-| Documentation complete | [ ] |
+| Documentation complete | [x] |
 
 ---
 

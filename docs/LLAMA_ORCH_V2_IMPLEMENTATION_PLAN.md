@@ -5,8 +5,26 @@
 > **Complexity:** Critical  
 > **Estimated Total Effort:** 40-60 hours  
 > **Primary Author:** GitHub Copilot (implementation_planner_complex profile)
+> **Current documentation refresh:** 2026-05-16
 
 ---
+
+## Current Implementation Note (2026-05-16)
+
+This document is a historical V2 implementation plan. The active local
+implementation lives in `infra-local/llama-orchestrator/` and is recorded as
+the primary local version in
+`docs/reference/infra-local/llama-orchestrator-primary-version.md`.
+
+The local 2.0.0 checkout now includes the V2 process/state, daemon, health,
+CLI, dashboard, desktop GUI, quick benchmark, and versioned binary-management
+workflows. Current user-facing behavior is documented in `README.md`,
+`docs/BINARY_MANAGEMENT.md`, and the May 2026 implementation reports under
+`reports/implementation/infra-local/llama-orchestrator/2026/`.
+
+Known documentation nuance: sections below may describe planned or partially
+solved states from the original V2 design. Treat this note and the current
+README as authoritative for operational usage.
 
 ## Table of Contents
 

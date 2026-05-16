@@ -5,12 +5,34 @@
 > **Complexity:** Critical  
 > **Total Tasks:** 35  
 > **Estimated Effort:** 40-60 hours
+> **Current documentation refresh:** 2026-05-16
 
 ---
 
 ## Overview
 
 Tento checklist sleduje implementaci Llama Orchestrator V2 dle [Implementation Plan](./LLAMA_ORCH_V2_IMPLEMENTATION_PLAN.md).
+
+### Current Status Addendum (2026-05-16)
+
+The active local implementation is `llama-orchestrator` `2.0.0` under
+`infra-local/llama-orchestrator/`. V2 process/state, daemon, health, CLI,
+dashboard, desktop GUI, GUI quick benchmark, and versioned binary-management
+workflows are implemented in the local checkout.
+
+Latest GUI and benchmark documentation now records:
+
+- Desktop GUI state semantics: `running + loading` displays as `loading`, while
+  `running + healthy` displays as `ready`.
+- Quick benchmark metrics persist to `state/benchmark_history.sqlite`.
+- Benchmark prompt settings persist to `state/benchmark_settings.json`.
+- VRAM reporting uses vendor CLI tools first and instance `stderr.log` fallback.
+- GUI install wording is `Install llama-server`, not `Install Vulkan`.
+
+Manual Windows Services UI smoke testing remains a target-host operational
+check. The CLI service install/uninstall path is implemented, but unattended
+operation should still be verified on the Windows machine where the service
+will run.
 
 ### Status Legend
 
@@ -346,14 +368,15 @@ Tento checklist sleduje implementaci Llama Orchestrator V2 dle [Implementation P
 |-------|-------|-----------|----------|
 | Pre-Flight | 4 | 4 | 100% |
 | Phase 1 | 35 | 35 | 100% |
-| Phase 2 | 25 | 18 | 72% |
+| Phase 2 | 25 | 24 | 96% |
 | Phase 3 | 20 | 20 | 100% |
-| Phase 4 | 12 | 8 | 67% |
-| Final | 15 | 13 | 87% |
-| **Total** | **111** | **98** | **88%** |
+| Phase 4 | 12 | 12 | 100% |
+| Final | 15 | 14 | 93% |
+| **Total** | **111** | **106** | **95%** |
 
-> **Note:** Deferred items (Windows Service, TUI Dashboard) planned for v2.1
+> **Note:** The TUI dashboard is implemented. The remaining Phase 2 gap is
+> target-host manual Windows Services UI smoke testing.
 
 ---
 
-*Last updated: 2025-01-XX (V2 Implementation Complete)*
+*Last updated: 2026-05-16 (documentation refreshed against local 2.0.0 state)*
