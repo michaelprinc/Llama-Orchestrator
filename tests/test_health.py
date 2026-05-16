@@ -13,7 +13,9 @@ from llama_orchestrator.health.checker import (
     HealthCheckStatus,
     check_health,
     check_health_with_fallback,
+    check_instance_health,
 )
+from llama_orchestrator.health.probes import ProbeResult
 from llama_orchestrator.engine.state import HealthStatus
 
 
@@ -200,3 +202,57 @@ class TestCheckHealthWithFallback:
             # Should have tried both endpoints
             assert call_count == 2
             assert result.status == HealthCheckStatus.OK
+
+
+class TestCheckInstanceHealth:
+    """Tests for instance-level health check wiring."""
+
+    def test_uses_legacy_fallback_for_default_http(self):
+        """Default HTTP config should keep the legacy llama.cpp parser path."""
+        config = MagicMock()
+        config.server.host = "127.0.0.1"
+        config.server.port = 8001
+        config.healthcheck.type = "http"
+        config.healthcheck.path = "/health"
+        config.healthcheck.expected_status = [200]
+        config.healthcheck.expected_body = None
+        config.healthcheck.custom_script = None
+        config.healthcheck.timeout = 5
+
+        with patch("llama_orchestrator.health.checker.get_instance_config", return_value=config), \
+             patch("llama_orchestrator.health.checker.check_health_with_fallback") as mock_fallback, \
+             patch("llama_orchestrator.health.checker.ProbeFactory.from_instance_config") as mock_factory:
+            mock_fallback.return_value = HealthCheckResult(status=HealthCheckStatus.OK)
+
+            result = check_instance_health("test")
+
+            assert result.status == HealthCheckStatus.OK
+            mock_fallback.assert_called_once_with(host="127.0.0.1", port=8001, timeout=5.0)
+            mock_factory.assert_not_called()
+
+    def test_uses_configured_probe_for_non_default_healthcheck(self):
+        """Non-default probe configs should execute through the V2 probe factory."""
+        config = MagicMock()
+        config.server.host = "127.0.0.1"
+        config.server.port = 8001
+        config.healthcheck.type = "tcp"
+        config.healthcheck.path = "/health"
+        config.healthcheck.expected_status = [200]
+        config.healthcheck.expected_body = None
+        config.healthcheck.custom_script = None
+        config.healthcheck.timeout = 5
+
+        probe = MagicMock()
+        probe.check_with_retry.return_value = ProbeResult(
+            success=True,
+            response_time_ms=12.5,
+            message="TCP connection successful",
+        )
+
+        with patch("llama_orchestrator.health.checker.get_instance_config", return_value=config), \
+             patch("llama_orchestrator.health.checker.ProbeFactory.from_instance_config", return_value=probe) as mock_factory:
+            result = check_instance_health("test")
+
+            assert result.status == HealthCheckStatus.OK
+            mock_factory.assert_called_once_with(config)
+            probe.check_with_retry.assert_called_once_with("127.0.0.1", 8001)

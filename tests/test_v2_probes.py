@@ -5,11 +5,13 @@ Tests for pluggable health probes (V2).
 import socket
 import subprocess
 import time
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 
+from llama_orchestrator.config.schema import HealthcheckConfig, InstanceConfig, ModelConfig
 from llama_orchestrator.health.probes import (
     CustomProbe,
     HealthProbe,
@@ -495,6 +497,26 @@ class TestProbeFactory:
         
         assert isinstance(probe, TCPProbe)
         assert probe.timeout == 3.0
+
+    def test_from_instance_config_with_schema_healthcheck(self):
+        """Test creating probe from schema-backed healthcheck config."""
+        config = InstanceConfig(
+            name="schema-probe",
+            model=ModelConfig(path=Path("models/test.gguf")),
+            healthcheck=HealthcheckConfig(
+                type="tcp",
+                timeout=4,
+                retries=2,
+                retry_delay=0.5,
+            ),
+        )
+
+        probe = ProbeFactory.from_instance_config(config)
+
+        assert isinstance(probe, TCPProbe)
+        assert probe.timeout == 4
+        assert probe.retries == 2
+        assert probe.retry_delay == 0.5
     
     def test_from_instance_config_no_healthcheck(self):
         """Test creating probe when no healthcheck config."""

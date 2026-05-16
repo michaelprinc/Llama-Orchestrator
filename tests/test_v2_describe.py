@@ -5,8 +5,6 @@ Tests for describe command utilities.
 from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from llama_orchestrator.cli_describe import (
     InstanceDescription,
     build_description,
@@ -16,18 +14,18 @@ from llama_orchestrator.cli_describe import (
 
 class TestInstanceDescription:
     """Tests for InstanceDescription dataclass."""
-    
+
     def test_default_values(self):
         """Test default values."""
         desc = InstanceDescription(name="test")
-        
+
         assert desc.name == "test"
         assert desc.status == "unknown"
         assert desc.health == "unknown"
         assert desc.pid is None
         assert desc.restart_count == 0
         assert desc.recent_events == []
-    
+
     def test_to_dict(self):
         """Test conversion to dictionary."""
         desc = InstanceDescription(
@@ -37,65 +35,69 @@ class TestInstanceDescription:
             status="running",
             health="healthy",
             pid=12345,
+            memory_percent=10.5,
+            memory_rss_mb=256.0,
         )
-        
+
         result = desc.to_dict()
-        
+
         assert result["name"] == "test"
         assert result["configuration"]["port"] == 8080
         assert result["runtime"]["status"] == "running"
         assert result["runtime"]["pid"] == 12345
-    
+        assert result["runtime"]["memory_percent"] == 10.5
+        assert result["runtime"]["memory_rss_mb"] == 256.0
+
     def test_uptime_str_zero(self):
         """Test uptime string when zero."""
         desc = InstanceDescription(name="test", uptime_seconds=0)
         assert desc.uptime_str == "-"
-    
+
     def test_uptime_str_seconds(self):
         """Test uptime string with seconds."""
         desc = InstanceDescription(name="test", uptime_seconds=45)
         assert "45s" in desc.uptime_str
-    
+
     def test_uptime_str_minutes(self):
         """Test uptime string with minutes."""
         desc = InstanceDescription(name="test", uptime_seconds=125)
         assert "2m" in desc.uptime_str
-    
+
     def test_uptime_str_hours(self):
         """Test uptime string with hours."""
-        desc = InstanceDescription(name="test", uptime_seconds=3665)  # 1h 1m 5s
+        desc = InstanceDescription(name="test", uptime_seconds=3665)
         assert "1h" in desc.uptime_str
-    
+
     def test_uptime_str_days(self):
         """Test uptime string with days."""
-        desc = InstanceDescription(name="test", uptime_seconds=90000)  # ~1d
+        desc = InstanceDescription(name="test", uptime_seconds=90000)
         assert "1d" in desc.uptime_str
-    
+
     def test_status_color_running(self):
         """Test status color for running."""
         desc = InstanceDescription(name="test", status="running")
         assert desc.status_color == "green"
-    
+
     def test_status_color_stopped(self):
         """Test status color for stopped."""
         desc = InstanceDescription(name="test", status="stopped")
         assert desc.status_color == "dim"
-    
+
     def test_status_color_crashed(self):
         """Test status color for crashed."""
         desc = InstanceDescription(name="test", status="crashed")
         assert desc.status_color == "red"
-    
+
     def test_health_color_healthy(self):
         """Test health color for healthy."""
         desc = InstanceDescription(name="test", health="healthy")
         assert desc.health_color == "green"
-    
+
     def test_health_color_unhealthy(self):
         """Test health color for unhealthy."""
         desc = InstanceDescription(name="test", health="unhealthy")
         assert desc.health_color == "red"
-    
+
     def test_health_color_degraded(self):
         """Test health color for degraded."""
         desc = InstanceDescription(name="test", health="degraded")
@@ -104,27 +106,28 @@ class TestInstanceDescription:
 
 class TestBuildDescription:
     """Tests for build_description function."""
-    
+
     @patch("llama_orchestrator.engine.state.load_runtime")
     @patch("llama_orchestrator.engine.state.get_recent_events")
     def test_build_with_name_only(self, mock_events, mock_load_runtime):
         """Test building description with just name."""
         mock_load_runtime.return_value = None
         mock_events.return_value = []
-        
+
         desc = build_description("test")
-        
+
         assert desc.name == "test"
         assert desc.status == "unknown"
-    
+
     @patch("llama_orchestrator.engine.state.load_runtime")
     @patch("llama_orchestrator.engine.state.get_recent_events")
-    def test_build_with_config(self, mock_events, mock_load_runtime):
+    @patch("llama_orchestrator.engine.command.build_command")
+    def test_build_with_config(self, mock_build_command, mock_events, mock_load_runtime):
         """Test building description with config."""
         mock_load_runtime.return_value = None
         mock_events.return_value = []
-        
-        # Create mock config
+        mock_build_command.return_value = ["llama-server", "--port", "8080"]
+
         config = MagicMock()
         config.model.path = "/path/to/model.gguf"
         config.model.context_size = 4096
@@ -137,22 +140,24 @@ class TestBuildDescription:
         config.gpu.layers = 32
         config.logs.stdout = "logs/stdout.log"
         config.logs.stderr = "logs/stderr.log"
-        
+
         desc = build_description("test", config=config)
-        
+
         assert desc.model_path == "/path/to/model.gguf"
         assert desc.context_size == 4096
         assert desc.port == 8080
         assert desc.gpu_backend == "vulkan"
-    
+        assert desc.effective_command == "llama-server --port 8080"
+
+    @patch("llama_orchestrator.engine.process.get_process_info")
     @patch("llama_orchestrator.engine.validator.validate_process")
     @patch("llama_orchestrator.engine.state.load_runtime")
     @patch("llama_orchestrator.engine.state.get_recent_events")
-    def test_build_with_runtime(self, mock_events, mock_load_runtime, mock_validate):
+    def test_build_with_runtime(self, mock_events, mock_load_runtime, mock_validate, mock_process_info):
         """Test building description with runtime state."""
         mock_events.return_value = []
-        
-        # Create mock runtime
+        mock_process_info.return_value = {"memory_percent": 12.5, "memory_rss": 256 * 1024 * 1024}
+
         runtime = MagicMock()
         runtime.pid = 12345
         runtime.status = "running"
@@ -163,31 +168,38 @@ class TestBuildDescription:
         runtime.binary_version = "b1234"
         runtime.last_health_check = datetime.now()
         runtime.last_health_latency_ms = 50.5
-        
+
         mock_load_runtime.return_value = runtime
-        
-        # Mock process validation
         mock_validate.return_value = MagicMock(
             is_valid=True,
             exists=True,
             cmdline="llama-server --port 8080",
         )
-        
+
         desc = build_description("test", runtime=runtime)
-        
+
         assert desc.pid == 12345
         assert desc.status == "running"
         assert desc.health == "healthy"
         assert desc.restart_count == 2
         assert desc.process_valid is True
-    
+        assert desc.memory_percent == 12.5
+        assert desc.memory_rss_mb == 256.0
+
     @patch("llama_orchestrator.engine.state.load_runtime")
     @patch("llama_orchestrator.engine.state.get_recent_events")
-    def test_build_with_events(self, mock_events, mock_load_runtime):
+    @patch("llama_orchestrator.engine.state.get_health_history")
+    def test_build_with_events(self, mock_health_history, mock_events, mock_load_runtime):
         """Test building description with events."""
         mock_load_runtime.return_value = None
-        
-        # Create mock events
+        mock_health_history.return_value = [
+            {
+                "health": "healthy",
+                "response_time_ms": 42.0,
+                "error_message": "",
+                "checked_at": datetime.now().timestamp(),
+            }
+        ]
         mock_events.return_value = [
             MagicMock(
                 timestamp=datetime.now(),
@@ -200,27 +212,29 @@ class TestBuildDescription:
                 message="Health check passed",
             ),
         ]
-        
+
         desc = build_description("test", include_events=True)
-        
+
         assert len(desc.recent_events) == 2
         assert desc.recent_events[0]["type"] == "started"
-    
+        assert len(desc.health_history) == 1
+        assert desc.health_history[0]["health"] == "healthy"
+
     @patch("llama_orchestrator.engine.state.load_runtime")
     @patch("llama_orchestrator.engine.state.get_recent_events")
     def test_build_without_events(self, mock_events, mock_load_runtime):
         """Test building description without events."""
         mock_load_runtime.return_value = None
-        
+
         desc = build_description("test", include_events=False)
-        
+
         mock_events.assert_not_called()
         assert desc.recent_events == []
 
 
 class TestFormatDescriptionRich:
     """Tests for format_description_rich function."""
-    
+
     def test_format_basic(self):
         """Test basic formatting."""
         desc = InstanceDescription(
@@ -231,14 +245,14 @@ class TestFormatDescriptionRich:
             status="running",
             health="healthy",
         )
-        
+
         output = format_description_rich(desc)
-        
+
         assert "Configuration" in output
         assert "Runtime Status" in output
         assert "/path/to/model.gguf" in output
         assert "8080" in output
-    
+
     def test_format_with_v2_details(self):
         """Test formatting with V2 details."""
         desc = InstanceDescription(
@@ -248,13 +262,13 @@ class TestFormatDescriptionRich:
             last_health_check=datetime.now(),
             last_health_latency_ms=50.5,
         )
-        
+
         output = format_description_rich(desc)
-        
+
         assert "Runtime Details (V2)" in output
         assert "Config Hash" in output
         assert "Binary" in output
-    
+
     def test_format_with_process_validation(self):
         """Test formatting with process validation."""
         desc = InstanceDescription(
@@ -264,12 +278,12 @@ class TestFormatDescriptionRich:
             process_exists=True,
             process_cmdline="llama-server --port 8080",
         )
-        
+
         output = format_description_rich(desc)
-        
+
         assert "Process Validation" in output
         assert "Valid" in output
-    
+
     def test_format_with_events(self):
         """Test formatting with events."""
         desc = InstanceDescription(
@@ -282,12 +296,12 @@ class TestFormatDescriptionRich:
                 },
             ],
         )
-        
+
         output = format_description_rich(desc)
-        
+
         assert "Recent Events" in output
         assert "started" in output
-    
+
     def test_format_paths(self):
         """Test that paths are included."""
         desc = InstanceDescription(
@@ -296,17 +310,42 @@ class TestFormatDescriptionRich:
             stderr_log="logs/test/stderr.log",
             state_db_path="state/test.db",
         )
-        
+
         output = format_description_rich(desc)
-        
+
         assert "Paths" in output
         assert "stdout.log" in output
         assert "state/test.db" in output
 
+    def test_format_with_effective_command_and_health_history(self):
+        """Test that effective command, memory, and health history are rendered."""
+        desc = InstanceDescription(
+            name="test",
+            effective_command="llama-server --port 8080",
+            memory_rss_mb=512.0,
+            memory_percent=24.5,
+            health_history=[
+                {
+                    "health": "healthy",
+                    "response_time_ms": 42.0,
+                    "checked_at": "2024-01-01T12:00:00",
+                }
+            ],
+        )
+
+        output = format_description_rich(desc)
+
+        assert "Command:" in output
+        assert "llama-server --port 8080" in output
+        assert "Memory:" in output
+        assert "512.0 MiB" in output
+        assert "Health History" in output
+        assert "healthy" in output
+
 
 class TestDescribeIntegration:
     """Integration tests for describe functionality."""
-    
+
     def test_full_description_roundtrip(self):
         """Test creating description and converting to dict."""
         desc = InstanceDescription(
@@ -326,6 +365,8 @@ class TestDescribeIntegration:
             started_at=datetime.now() - timedelta(hours=2),
             uptime_seconds=7200,
             restart_count=0,
+            memory_percent=8.5,
+            memory_rss_mb=384.0,
             config_hash="abc123",
             binary_version="b1234",
             process_valid=True,
@@ -336,21 +377,19 @@ class TestDescribeIntegration:
             stdout_log="logs/test/stdout.log",
             stderr_log="logs/test/stderr.log",
         )
-        
-        # Convert to dict
+
         data = desc.to_dict()
-        
-        # Verify structure
+
         assert data["name"] == "integration-test"
         assert data["configuration"]["port"] == 8080
         assert data["runtime"]["pid"] == 12345
+        assert data["runtime"]["memory_rss_mb"] == 384.0
         assert data["process"]["valid"] is True
         assert len(data["events"]) == 1
-        
-        # Format for Rich
+
         output = format_description_rich(desc)
-        
-        # Verify output contains key information
+
         assert "running" in output.lower()
         assert "healthy" in output.lower()
         assert "8080" in output
+        assert "Memory:" in output

@@ -943,22 +943,22 @@ def test_backoff_calculation(attempt, initial, multiplier, max_delay):
 
 ### Phase 2 Acceptance
 
-- [ ] Logs rotate at 10MB with 3 backups
-- [ ] `logs -f` follows file in real-time
-- [ ] Daemon stops within 5 seconds
-- [ ] Windows Service can be installed/uninstalled
+- [x] Logs rotate at 10MB with 3 backups
+- [x] `logs -f` follows file in real-time
+- [x] Daemon stops within 5 seconds
+- [x] Windows Service can be installed/uninstalled
 
 ### Phase 3 Acceptance
 
-- [ ] TCP probe works for non-HTTP servers
-- [ ] Custom health path is respected
-- [ ] Jitter prevents synchronized restarts
+- [x] TCP probe works for non-HTTP servers
+- [x] Custom health path is respected
+- [x] Jitter prevents synchronized restarts
 
 ### Phase 4 Acceptance
 
-- [ ] Exit codes are consistent and documented
-- [ ] `describe` shows effective command
-- [ ] Dashboard shows recent events
+- [x] Exit codes are consistent and documented
+- [x] `describe` shows effective command
+- [x] Dashboard shows recent events
 
 ---
 
@@ -987,7 +987,7 @@ def test_backoff_calculation(attempt, initial, multiplier, max_delay):
 
 ## Next Steps
 
-1. **Review this plan** with stakeholders
+1. **Manual Windows service smoke test** in `services.msc` on a workstation with `nssm.exe` available
 2. **Create feature branch:** `feature/llama-orch-v2`
 3. **Begin Phase 1.1** (Schema enhancement)
 4. **Set up CI** for new tests

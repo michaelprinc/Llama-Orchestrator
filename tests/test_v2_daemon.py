@@ -15,7 +15,9 @@ from llama_orchestrator.daemon.service import (
     DaemonService,
     DaemonStatus,
     get_daemon_status,
+    get_stop_request_file,
     is_daemon_running,
+    stop_daemon,
 )
 
 
@@ -129,6 +131,24 @@ class TestDaemonHelpers:
         assert isinstance(status, DaemonStatus)
         assert isinstance(status.running, bool)
 
+    def test_stop_daemon_writes_stop_request(self, tmp_path, monkeypatch):
+        """Stopping the daemon should request cooperative shutdown first."""
+        pid_file = tmp_path / "daemon.pid"
+        stop_file = tmp_path / "daemon.stop"
+        pid_file.write_text("1234")
+
+        monkeypatch.setattr("llama_orchestrator.daemon.service.get_pid_file", lambda: pid_file)
+        monkeypatch.setattr("llama_orchestrator.daemon.service.get_stop_request_file", lambda: stop_file)
+
+        states = iter([True, False, False])
+        monkeypatch.setattr(
+            "llama_orchestrator.daemon.service.is_daemon_running",
+            lambda: next(states),
+        )
+
+        assert stop_daemon() is True
+        assert stop_file.exists() is False
+
 
 class TestEventBasedLoop:
     """Tests for event-based loop mechanism."""
@@ -163,3 +183,25 @@ class TestEventBasedLoop:
         
         # Should complete much faster than timeout
         assert elapsed < 0.2
+
+
+class TestDaemonShutdown:
+    """Tests for cooperative daemon shutdown."""
+
+    def test_stop_waits_for_stopped_event(self):
+        """Daemon.stop should wait for cleanup completion, not just the stop flag."""
+        daemon = DaemonService(shutdown_timeout=1.0)
+        daemon._start_time = time.time()
+
+        def finish_shutdown():
+            time.sleep(0.05)
+            daemon._stopped_event.set()
+
+        thread = threading.Thread(target=finish_shutdown)
+        thread.start()
+
+        try:
+            assert daemon.stop(timeout=0.5) is True
+            assert daemon._stop_event.is_set() is True
+        finally:
+            thread.join()

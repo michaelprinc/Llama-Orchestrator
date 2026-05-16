@@ -17,8 +17,12 @@ from llama_orchestrator.engine.process import restart_instance
 from llama_orchestrator.engine.state import (
     HealthStatus,
     InstanceStatus,
+    RuntimeState,
     load_state,
+    load_runtime,
+    record_health_check,
     save_state,
+    save_runtime,
 )
 from llama_orchestrator.health.checker import (
     HealthCheckResult,
@@ -154,9 +158,31 @@ class HealthMonitor:
             health_state.consecutive_failures += 1
         
         # Update state in database
+        checked_at = time.time()
         state.health = new_health
-        state.last_health_check = time.time()
+        state.last_health_check = checked_at
         save_state(state)
+
+        runtime = load_runtime(name) or RuntimeState(name=name)
+        runtime.pid = state.pid
+        runtime.port = config.server.port
+        runtime.status = state.status
+        runtime.health = new_health
+        runtime.started_at = runtime.started_at or state.start_time
+        runtime.last_seen_at = checked_at
+        runtime.restart_attempts = state.restart_count
+        if result.is_healthy:
+            runtime.last_health_ok_at = checked_at
+            runtime.last_error = ""
+        elif result.error_message:
+            runtime.last_error = result.error_message
+        save_runtime(runtime)
+        record_health_check(
+            name,
+            new_health,
+            response_time_ms=result.response_time_ms,
+            error_message=result.error_message or "",
+        )
         
         # Notify on health change
         if old_health != new_health and self.on_health_change:
@@ -176,8 +202,10 @@ class HealthMonitor:
         health_state: InstanceHealthState,
     ) -> bool:
         """Check if an instance should be restarted."""
+        restart_policy = config.restart_policy
+
         # Skip if restart policy is disabled
-        if not config.restart.enabled:
+        if not restart_policy.enabled:
             return False
         
         # Skip if still in start period
@@ -189,10 +217,10 @@ class HealthMonitor:
             return False
         
         # Check max restart attempts
-        if health_state.restart_attempts >= config.restart.max_retries:
+        if health_state.restart_attempts >= restart_policy.max_retries:
             logger.warning(
                 f"Instance {name} exceeded max restart attempts "
-                f"({config.restart.max_retries})"
+                f"({restart_policy.max_retries})"
             )
             return False
         
@@ -200,9 +228,9 @@ class HealthMonitor:
         if health_state.last_restart_time:
             delay = self._calculate_backoff(
                 health_state.restart_attempts,
-                config.restart.initial_delay,
-                config.restart.backoff_multiplier,
-                config.restart.max_delay,
+                restart_policy.initial_delay,
+                restart_policy.backoff_multiplier,
+                restart_policy.max_delay,
             )
             elapsed = time.time() - health_state.last_restart_time
             if elapsed < delay:

@@ -450,17 +450,21 @@ class ProbeFactory:
             Configured HealthProbe instance
         """
         # Get healthcheck config, defaulting to HTTP probe
-        healthcheck = getattr(instance_config, "healthcheck", None) or {}
+        healthcheck = getattr(instance_config, "healthcheck", None)
+
+        if healthcheck is None:
+            return get_default_probe()
+
+        if hasattr(healthcheck, "to_probe_dict"):
+            return ProbeFactory.from_dict(healthcheck.to_probe_dict())
+
+        if hasattr(healthcheck, "model_dump"):
+            return ProbeFactory.from_dict(healthcheck.model_dump())
         
         if isinstance(healthcheck, dict):
             return ProbeFactory.from_dict(healthcheck)
         
-        # Default HTTP probe
-        return HTTPProbe(
-            path="/health",
-            expected_status=[200],
-            timeout=5.0,
-        )
+        return get_default_probe()
 
 
 # Default probe for backward compatibility

@@ -39,6 +39,11 @@ def get_log_file() -> Path:
     return get_state_dir() / "daemon.log"
 
 
+def get_stop_request_file() -> Path:
+    """Get path to the cooperative daemon stop request file."""
+    return get_state_dir() / "daemon.stop"
+
+
 @dataclass
 class DaemonStatus:
     """Status information for the daemon."""
@@ -86,6 +91,7 @@ class DaemonService:
         
         # V2: Use threading.Event instead of boolean flag
         self._stop_event = threading.Event()
+        self._stopped_event = threading.Event()
         self._start_time: float | None = None
         self._health_checks = 0
         self._reconciliations = 0
@@ -116,6 +122,7 @@ class DaemonService:
         """Run the daemon in foreground mode."""
         self._setup()
         self._stop_event.clear()
+        self._stopped_event.clear()
         self._start_time = time.time()
         
         # Write PID file
@@ -141,6 +148,7 @@ class DaemonService:
             self._main_loop()
         finally:
             self._cleanup()
+            self._stopped_event.set()
     
     def _daemonize(self) -> None:
         """Daemonize the process (Unix-style double-fork, Windows compatibility)."""
@@ -205,6 +213,10 @@ daemon._run_foreground()
     
     def _setup(self) -> None:
         """Setup logging and other initialization."""
+        stop_request = get_stop_request_file()
+        if stop_request.exists():
+            stop_request.unlink()
+
         # Setup file logging
         log_file = get_log_file()
         log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -251,6 +263,10 @@ daemon._run_foreground()
         
         # Remove PID file
         self._remove_pid_file()
+
+        stop_request = get_stop_request_file()
+        if stop_request.exists():
+            stop_request.unlink()
         
         log_event(
             event_type="daemon_stopped",
@@ -287,6 +303,11 @@ daemon._run_foreground()
         
         while not self._stop_event.is_set():
             try:
+                if get_stop_request_file().exists():
+                    logger.info("Daemon stop requested via stop file")
+                    self._stop_event.set()
+                    continue
+
                 # Run reconciliation if due
                 if self._reconciler:
                     self._reconciler.run_if_due()
@@ -343,17 +364,18 @@ daemon._run_foreground()
             timeout = self.shutdown_timeout
         
         logger.info(f"Stopping daemon (timeout: {timeout}s)...")
+
+        if self._start_time is None:
+            self._stop_event.set()
+            self._stopped_event.set()
+            return True
+
         self._stop_event.set()
-        
-        # Wait for main loop to exit
-        start = time.time()
-        while not self._stop_event.is_set():
-            if time.time() - start > timeout:
-                logger.warning("Daemon stop timeout exceeded")
-                return False
-            time.sleep(0.1)
-        
-        return True
+        if self._stopped_event.wait(timeout=timeout):
+            return True
+
+        logger.warning("Daemon stop timeout exceeded")
+        return False
     
     @property
     def is_running(self) -> bool:
@@ -464,29 +486,45 @@ def stop_daemon() -> bool:
         pid = int(pid_file.read_text().strip())
     except (ValueError, IOError):
         return False
-    
-    # Send termination signal
+
+    stop_request = get_stop_request_file()
+
+    # Request cooperative shutdown first
     try:
-        if sys.platform == "win32":
-            import subprocess
-            subprocess.run(["taskkill", "/PID", str(pid), "/F"], check=True)
-        else:
-            os.kill(pid, signal.SIGTERM)
-        
-        # Wait for process to exit
+        stop_request.parent.mkdir(parents=True, exist_ok=True)
+        stop_request.write_text(str(time.time()))
+
+        # Wait for cooperative exit
         for _ in range(50):  # Wait up to 5 seconds
             if not is_daemon_running():
                 return True
             time.sleep(0.1)
-        
-        # Force kill if still running
+
+        # Escalate to process termination if needed
         if sys.platform == "win32":
+            import subprocess
+
+            subprocess.run(["taskkill", "/PID", str(pid)], check=False)
+            for _ in range(20):
+                if not is_daemon_running():
+                    return True
+                time.sleep(0.1)
+
             subprocess.run(["taskkill", "/PID", str(pid), "/F"], check=True)
         else:
+            os.kill(pid, signal.SIGTERM)
+            for _ in range(20):
+                if not is_daemon_running():
+                    return True
+                time.sleep(0.1)
+
             os.kill(pid, signal.SIGKILL)
-        
+
         return True
-        
+
     except Exception as e:
         logger.error(f"Failed to stop daemon: {e}")
         return False
+    finally:
+        if stop_request.exists() and not is_daemon_running():
+            stop_request.unlink()

@@ -15,6 +15,7 @@ import httpx
 
 from llama_orchestrator.config import get_instance_config
 from llama_orchestrator.engine.state import HealthStatus
+from llama_orchestrator.health.probes import ProbeFactory, ProbeResult
 
 if TYPE_CHECKING:
     from llama_orchestrator.config import InstanceConfig
@@ -60,6 +61,47 @@ class HealthCheckResult:
             HealthCheckStatus.UNREACHABLE: HealthStatus.UNHEALTHY,
             HealthCheckStatus.TIMEOUT: HealthStatus.UNHEALTHY,
         }.get(self.status, HealthStatus.UNKNOWN)
+
+
+def _uses_legacy_http_flow(config: "InstanceConfig") -> bool:
+    """Keep the old HTTP parser for the default llama.cpp health endpoint."""
+    healthcheck = config.healthcheck
+    return (
+        healthcheck.type == "http"
+        and healthcheck.path == "/health"
+        and healthcheck.expected_status == [200]
+        and healthcheck.expected_body is None
+        and healthcheck.custom_script is None
+    )
+
+
+def _probe_result_to_health_check_result(result: ProbeResult) -> HealthCheckResult:
+    """Convert a generic probe result into the legacy health check result contract."""
+    if result.success:
+        return HealthCheckResult(
+            status=HealthCheckStatus.OK,
+            response_time_ms=result.response_time_ms,
+            raw_response=result.details,
+        )
+
+    message = result.message or ""
+    message_lower = message.lower()
+
+    if result.status_code == 503:
+        status = HealthCheckStatus.LOADING
+    elif "timeout" in message_lower:
+        status = HealthCheckStatus.TIMEOUT
+    elif any(token in message_lower for token in ["connection failed", "refused", "unreachable", "tcp connection failed"]):
+        status = HealthCheckStatus.UNREACHABLE
+    else:
+        status = HealthCheckStatus.ERROR
+
+    return HealthCheckResult(
+        status=status,
+        response_time_ms=result.response_time_ms,
+        error_message=message,
+        raw_response=result.details,
+    )
 
 
 def check_health(
@@ -205,9 +247,15 @@ def check_instance_health(name: str, timeout: float | None = None) -> HealthChec
     config = get_instance_config(name)
     
     check_timeout = timeout if timeout is not None else config.healthcheck.timeout
-    
-    return check_health_with_fallback(
-        host=config.server.host,
-        port=config.server.port,
-        timeout=float(check_timeout),
-    )
+
+    if _uses_legacy_http_flow(config):
+        return check_health_with_fallback(
+            host=config.server.host,
+            port=config.server.port,
+            timeout=float(check_timeout),
+        )
+
+    probe = ProbeFactory.from_instance_config(config)
+    probe.timeout = float(check_timeout)
+    probe_result = probe.check_with_retry(config.server.host, config.server.port)
+    return _probe_result_to_health_check_result(probe_result)

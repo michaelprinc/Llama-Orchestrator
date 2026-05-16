@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import subprocess
 import time
+from contextlib import suppress
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -20,10 +21,19 @@ from llama_orchestrator.config import (
     get_project_root,
 )
 from llama_orchestrator.engine.command import build_command, build_env, validate_executable
+from llama_orchestrator.engine.detach import start_detached
+from llama_orchestrator.engine.locking import instance_lock
+from llama_orchestrator.engine.logging_config import get_instance_log_handler
 from llama_orchestrator.engine.state import (
     HealthStatus,
     InstanceState,
     InstanceStatus,
+    RuntimeState,
+    load_all_states,
+    load_all_runtime,
+    load_runtime,
+    log_event,
+    save_runtime,
     delete_state,
     load_state,
     save_state,
@@ -41,6 +51,47 @@ class ProcessError(Exception):
         self.message = message
         self.cause = cause
         super().__init__(f"[{instance}] {message}")
+
+
+def _runtime_to_state(runtime: RuntimeState) -> InstanceState:
+    """Convert V2 runtime data to the legacy state shape used by the CLI."""
+    return InstanceState(
+        name=runtime.name,
+        pid=runtime.pid,
+        status=runtime.status,
+        health=runtime.health,
+        start_time=runtime.started_at,
+        restart_count=runtime.restart_attempts,
+        error_message=runtime.last_error,
+    )
+
+
+def _sync_runtime_from_state(
+    state: InstanceState,
+    config: "InstanceConfig | None" = None,
+    cmdline: str = "",
+    last_error: str | None = None,
+) -> RuntimeState:
+    """Mirror the legacy state updates into the V2 runtime table."""
+    runtime = load_runtime(state.name) or RuntimeState(name=state.name)
+    runtime.pid = state.pid
+    runtime.port = config.server.port if config else runtime.port
+    runtime.cmdline = cmdline or runtime.cmdline
+    runtime.status = state.status
+    runtime.health = state.health
+    runtime.started_at = state.start_time if state.start_time is not None else runtime.started_at
+    runtime.last_seen_at = time.time()
+    runtime.restart_attempts = state.restart_count
+    if state.health == HealthStatus.HEALTHY:
+        runtime.last_health_ok_at = runtime.last_seen_at
+    if last_error is not None:
+        runtime.last_error = last_error
+    elif state.error_message:
+        runtime.last_error = state.error_message
+    elif state.status == InstanceStatus.STOPPED:
+        runtime.last_error = ""
+    save_runtime(runtime)
+    return runtime
 
 
 def get_log_files(name: str) -> tuple[Path, Path]:
@@ -68,6 +119,7 @@ def get_process_info(pid: int) -> dict | None:
     """Get information about a running process."""
     try:
         proc = psutil.Process(pid)
+        memory_info = proc.memory_info()
         return {
             "pid": pid,
             "name": proc.name(),
@@ -75,6 +127,7 @@ def get_process_info(pid: int) -> dict | None:
             "create_time": proc.create_time(),
             "cmdline": proc.cmdline(),
             "memory_percent": proc.memory_percent(),
+            "memory_rss": memory_info.rss,
             "cpu_percent": proc.cpu_percent(),
         }
     except (psutil.NoSuchProcess, psutil.AccessDenied):
@@ -143,11 +196,12 @@ def check_stale_state(state: InstanceState) -> InstanceState:
             state.health = HealthStatus.UNKNOWN
             state.error_message = "Process died unexpectedly"
             save_state(state)
+            _sync_runtime_from_state(state, last_error=state.error_message)
     
     return state
 
 
-def start_instance(name: str, wait_for_ready: bool = True) -> InstanceState:
+def start_instance(name: str, wait_for_ready: bool = True, detach: bool = False) -> InstanceState:
     """
     Start a llama-server instance.
     
@@ -161,107 +215,178 @@ def start_instance(name: str, wait_for_ready: bool = True) -> InstanceState:
     Raises:
         ProcessError: If instance cannot be started
     """
-    # Load config
-    try:
-        config = get_instance_config(name)
-    except ConfigLoadError as e:
-        raise ProcessError(name, f"Failed to load config: {e.message}", e) from e
-    
-    # Validate executable exists after loading config so UUID-based binary
-    # resolution works for per-instance binary selections.
-    exe_valid, exe_msg = validate_executable(config)
-    if not exe_valid:
-        raise ProcessError(name, exe_msg)
-    
-    # Check current state
-    state = load_state(name)
-    if state is not None:
-        state = check_stale_state(state)
-        if state.status == InstanceStatus.RUNNING:
-            raise ProcessError(name, f"Instance is already running (PID: {state.pid})")
-    else:
-        state = InstanceState(name=name)
-    
-    # Build command and environment
-    from llama_orchestrator.health.ports import validate_port_for_instance
+    with instance_lock(name, operation="start"):
+        # Load config
+        try:
+            config = get_instance_config(name)
+        except ConfigLoadError as e:
+            raise ProcessError(name, f"Failed to load config: {e.message}", e) from e
 
-    port_valid, port_message = validate_port_for_instance(
-        config.server.port,
-        name,
-        config.server.host,
-    )
-    if not port_valid:
-        state.status = InstanceStatus.ERROR
-        state.health = HealthStatus.ERROR
-        state.error_message = port_message
-        save_state(state)
-        raise ProcessError(name, port_message)
+        # Validate executable exists after loading config so UUID-based binary
+        # resolution works for per-instance binary selections.
+        exe_valid, exe_msg = validate_executable(config)
+        if not exe_valid:
+            raise ProcessError(name, exe_msg)
 
-    cmd = build_command(config)
-    env = build_env(config)
-    
-    # Get log files
-    stdout_log, stderr_log = get_log_files(name)
-    
-    # Update state to starting
-    state.status = InstanceStatus.STARTING
-    state.health = HealthStatus.UNKNOWN
-    state.error_message = ""
-    save_state(state)
-    
-    try:
-        # Open log files
-        stdout_file = open(stdout_log, "a", encoding="utf-8")
-        stderr_file = open(stderr_log, "a", encoding="utf-8")
-        
-        # Write startup marker
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        stdout_file.write(f"\n{'='*60}\n")
-        stdout_file.write(f"Starting instance at {timestamp}\n")
-        stdout_file.write(f"Command: {' '.join(cmd)}\n")
-        stdout_file.write(f"{'='*60}\n\n")
-        stdout_file.flush()
-        
-        # Start the process
-        proc = subprocess.Popen(
-            cmd,
-            stdout=stdout_file,
-            stderr=stderr_file,
-            env=env,
-            cwd=str(get_project_root()),
-            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,  # Windows: allow Ctrl+Break
+        # Check current state
+        state = load_state(name)
+        if state is not None:
+            state = check_stale_state(state)
+            if state.status == InstanceStatus.RUNNING:
+                raise ProcessError(name, f"Instance is already running (PID: {state.pid})")
+        else:
+            runtime = load_runtime(name)
+            state = _runtime_to_state(runtime) if runtime is not None else InstanceState(name=name)
+
+        # Build command and environment
+        from llama_orchestrator.health.ports import validate_port_for_instance
+
+        port_valid, port_message = validate_port_for_instance(
+            config.server.port,
+            name,
+            config.server.host,
         )
-        
-        # Update state
-        state.pid = proc.pid
-        state.start_time = time.time()
-        state.status = InstanceStatus.RUNNING
-        state.health = HealthStatus.LOADING
-        save_state(state)
-        
-        # Brief wait to check if process started successfully
-        time.sleep(0.5)
-        
-        if proc.poll() is not None:
-            # Process exited immediately
+        if not port_valid:
             state.status = InstanceStatus.ERROR
             state.health = HealthStatus.ERROR
-            state.error_message = f"Process exited with code {proc.returncode}"
+            state.error_message = port_message
             save_state(state)
-            raise ProcessError(name, state.error_message)
-        
-        return state
-        
-    except Exception as e:
-        # Update state on failure
-        state.status = InstanceStatus.ERROR
-        state.health = HealthStatus.ERROR
-        state.error_message = str(e)
+            _sync_runtime_from_state(state, config=config, last_error=port_message)
+            raise ProcessError(name, port_message)
+
+        cmd = build_command(config)
+        cmdline = " ".join(cmd)
+        env = build_env(config)
+
+        log_handler = get_instance_log_handler(
+            name,
+            max_bytes=config.logs.max_size_mb * 1024 * 1024,
+            backup_count=config.logs.rotation,
+        )
+
+        # Update state to starting
+        state.status = InstanceStatus.STARTING
+        state.health = HealthStatus.UNKNOWN
+        state.error_message = ""
         save_state(state)
-        
-        if not isinstance(e, ProcessError):
-            raise ProcessError(name, f"Failed to start: {e}", e) from e
-        raise
+        _sync_runtime_from_state(state, config=config, cmdline=cmdline, last_error="")
+
+        stdout_file = None
+        stderr_file = None
+        try:
+            if detach:
+                detach_result = start_detached(
+                    name,
+                    cmd,
+                    env=env,
+                    port=config.server.port,
+                    cwd=get_project_root(),
+                    rotate_logs=True,
+                )
+                if not detach_result.success or detach_result.pid is None:
+                    error_message = detach_result.error or "Detached start failed"
+                    state.status = InstanceStatus.ERROR
+                    state.health = HealthStatus.ERROR
+                    state.error_message = error_message
+                    save_state(state)
+                    _sync_runtime_from_state(state, config=config, cmdline=cmdline, last_error=error_message)
+                    raise ProcessError(name, error_message)
+
+                state.pid = detach_result.pid
+                state.start_time = time.time()
+                state.status = InstanceStatus.RUNNING
+                state.health = HealthStatus.LOADING
+                save_state(state)
+                _sync_runtime_from_state(state, config=config, cmdline=cmdline, last_error="")
+                return state
+
+            # Open log files
+            stdout_file, stderr_file = log_handler.get_file_handles()
+
+            # Write startup marker
+            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+            stdout_file.write(f"\n{'='*60}\n")
+            stdout_file.write(f"Starting instance at {timestamp}\n")
+            stdout_file.write(f"Command: {cmdline}\n")
+            stdout_file.write(f"{'='*60}\n\n")
+            stdout_file.flush()
+
+            # Start the process
+            proc = subprocess.Popen(
+                cmd,
+                stdout=stdout_file,
+                stderr=stderr_file,
+                env=env,
+                cwd=str(get_project_root()),
+                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,  # Windows: allow Ctrl+Break
+            )
+
+            # Release parent-side handles immediately after spawn
+            stdout_file.close()
+            stderr_file.close()
+            stdout_file = None
+            stderr_file = None
+
+            # Update state
+            started_at = time.time()
+            state.pid = proc.pid
+            state.start_time = started_at
+            state.status = InstanceStatus.RUNNING
+            state.health = HealthStatus.LOADING
+            save_state(state)
+            _sync_runtime_from_state(state, config=config, cmdline=cmdline, last_error="")
+            log_event(
+                event_type="started",
+                message=f"Instance started (PID: {proc.pid}, port: {config.server.port})",
+                instance_name=name,
+                meta={"pid": proc.pid, "port": config.server.port},
+            )
+
+            # Brief wait to check if process started successfully
+            time.sleep(0.5)
+
+            if proc.poll() is not None:
+                # Process exited immediately
+                state.status = InstanceStatus.ERROR
+                state.health = HealthStatus.ERROR
+                state.error_message = f"Process exited with code {proc.returncode}"
+                save_state(state)
+                _sync_runtime_from_state(state, config=config, cmdline=cmdline, last_error=state.error_message)
+                log_event(
+                    event_type="start_failed",
+                    message=state.error_message,
+                    instance_name=name,
+                    level="error",
+                    meta={"exit_code": proc.returncode},
+                )
+                raise ProcessError(name, state.error_message)
+
+            return state
+
+        except Exception as e:
+            # Update state on failure
+            state.status = InstanceStatus.ERROR
+            state.health = HealthStatus.ERROR
+            state.error_message = str(e)
+            save_state(state)
+            _sync_runtime_from_state(state, config=config, cmdline=cmdline, last_error=state.error_message)
+            log_event(
+                event_type="start_failed",
+                message=state.error_message,
+                instance_name=name,
+                level="error",
+            )
+
+            if not isinstance(e, ProcessError):
+                raise ProcessError(name, f"Failed to start: {e}", e) from e
+            raise
+        finally:
+            with suppress(Exception):
+                if stdout_file is not None:
+                    stdout_file.close()
+            with suppress(Exception):
+                if stderr_file is not None:
+                    stderr_file.close()
 
 
 def stop_instance(name: str, force: bool = False, timeout: float = 10.0) -> InstanceState:
@@ -279,47 +404,63 @@ def stop_instance(name: str, force: bool = False, timeout: float = 10.0) -> Inst
     Raises:
         ProcessError: If instance cannot be stopped
     """
-    state = load_state(name)
-    
-    if state is None:
-        raise ProcessError(name, "Instance not found in state")
-    
-    state = check_stale_state(state)
-    
-    if state.status == InstanceStatus.STOPPED:
-        return state
-    
-    if state.pid is None:
+    with instance_lock(name, operation="stop"):
+        state = load_state(name)
+        runtime = load_runtime(name)
+
+        if state is None:
+            if runtime is None:
+                raise ProcessError(name, "Instance not found in state")
+            state = _runtime_to_state(runtime)
+
+        state = check_stale_state(state)
+
+        if state.status == InstanceStatus.STOPPED:
+            _sync_runtime_from_state(state, last_error="")
+            return state
+
+        if state.pid is None:
+            state.status = InstanceStatus.STOPPED
+            state.health = HealthStatus.UNKNOWN
+            save_state(state)
+            _sync_runtime_from_state(state, last_error="")
+            return state
+
+        # Update state to stopping
+        state.status = InstanceStatus.STOPPING
+        save_state(state)
+        _sync_runtime_from_state(state)
+
+        # Kill the process
+        kill_process_tree(state.pid, timeout=0 if force else timeout)
+
+        # Update state
+        stopped_pid = state.pid
+        state.pid = None
         state.status = InstanceStatus.STOPPED
         state.health = HealthStatus.UNKNOWN
+        state.error_message = ""
         save_state(state)
+        _sync_runtime_from_state(state, last_error="")
+        log_event(
+            event_type="stopped",
+            message=f"Instance stopped (PID: {stopped_pid}, force: {force})",
+            instance_name=name,
+            meta={"pid": stopped_pid, "force": force},
+        )
+
+        # Write to log
+        stdout_log, _ = get_log_files(name)
+        try:
+            with open(stdout_log, "a", encoding="utf-8") as f:
+                timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+                f.write(f"\n{'='*60}\n")
+                f.write(f"Instance stopped at {timestamp}\n")
+                f.write(f"{'='*60}\n\n")
+        except OSError:
+            pass
+
         return state
-    
-    # Update state to stopping
-    state.status = InstanceStatus.STOPPING
-    save_state(state)
-    
-    # Kill the process
-    killed = kill_process_tree(state.pid, timeout=0 if force else timeout)
-    
-    # Update state
-    state.pid = None
-    state.status = InstanceStatus.STOPPED
-    state.health = HealthStatus.UNKNOWN
-    save_state(state)
-    
-    # Write to log
-    stdout_log, _ = get_log_files(name)
-    try:
-        with open(stdout_log, "a", encoding="utf-8") as f:
-            timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-            f.write(f"\n{'='*60}\n")
-            f.write(f"Instance stopped at {timestamp}\n")
-            f.write(f"{'='*60}\n\n")
-    except OSError:
-        pass
-    
-    return state
 
 
 def restart_instance(name: str, force: bool = False) -> InstanceState:
@@ -334,7 +475,11 @@ def restart_instance(name: str, force: bool = False) -> InstanceState:
         Updated instance state
     """
     state = load_state(name)
-    
+    if state is None:
+        runtime = load_runtime(name)
+        if runtime is not None:
+            state = _runtime_to_state(runtime)
+
     # Increment restart count
     restart_count = 0
     if state is not None:
@@ -353,6 +498,13 @@ def restart_instance(name: str, force: bool = False) -> InstanceState:
     state = start_instance(name)
     state.restart_count = restart_count
     save_state(state)
+    _sync_runtime_from_state(state)
+    log_event(
+        event_type="restarted",
+        message=f"Instance restarted (count: {restart_count})",
+        instance_name=name,
+        meta={"restart_count": restart_count},
+    )
     
     return state
 
@@ -364,9 +516,11 @@ def get_instance_status(name: str) -> InstanceState:
     Returns a corrected state (checks for stale PIDs).
     """
     state = load_state(name)
-    
     if state is None:
-        return InstanceState(name=name, status=InstanceStatus.STOPPED)
+        runtime = load_runtime(name)
+        if runtime is None:
+            return InstanceState(name=name, status=InstanceStatus.STOPPED)
+        state = _runtime_to_state(runtime)
     
     return check_stale_state(state)
 
@@ -379,9 +533,13 @@ def list_instances() -> dict[str, InstanceState]:
         Dictionary of instance name -> state
     """
     from llama_orchestrator.config import discover_instances
-    from llama_orchestrator.engine.state import load_all_states
     
     states = load_all_states()
+    runtime_states = load_all_runtime()
+
+    for name, runtime in runtime_states.items():
+        if name not in states:
+            states[name] = _runtime_to_state(runtime)
     
     # Also include instances that have configs but no state yet
     for name, _ in discover_instances():

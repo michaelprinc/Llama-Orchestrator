@@ -89,12 +89,21 @@ llama-orch down gpt-oss
 | `llama-orch restart <name>` | Restart an instance |
 | `llama-orch ps` | List all instances |
 | `llama-orch health <name>` | Check instance health |
-| `llama-orch logs <name>` | View instance logs |
-| `llama-orch describe <name>` | Show full config + status |
-| `llama-orch dashboard` | Live TUI dashboard |
+| `llama-orch logs <name>` | View stdout, stderr, or merged logs |
+| `llama-orch describe <name>` | Show config, runtime, memory, events, and health history |
+| `llama-orch dashboard` | Live TUI dashboard with recent events panel |
 | `llama-orch gui` | Windows desktop GUI for model management |
 | `llama-orch config validate` | Validate configuration |
 | `llama-orch daemon start` | Start background daemon |
+| `llama-orch daemon install` | Install the daemon as a Windows service via NSSM |
+| `llama-orch daemon uninstall` | Remove the Windows service |
+
+## CLI Notes
+
+- `llama-orch up <name> --no-detach` keeps the server attached to the current terminal.
+- `llama-orch logs <name> --stream both` shows merged stdout and stderr output.
+- `llama-orch dashboard --events-for <name>` filters the recent-events panel to one instance.
+- Commands return standard exit codes for automation: `2` usage, `10-19` config, `20-39` instance/process, `50-69` binary/daemon.
 
 ## Configuration
 
@@ -175,6 +184,20 @@ starts the orchestrator daemon and writes audit entries to
 ```
 
 Both install and bootstrap scripts support `-Verbose` and `-WhatIf`.
+
+## Windows Service
+
+If `nssm.exe` is available in `PATH`, the daemon can be installed as a Windows service directly from the CLI:
+
+```powershell
+llama-orch daemon install
+llama-orch daemon uninstall
+
+# Custom service name
+llama-orch daemon install --service-name llama-orch-dev
+```
+
+The service entry point runs the orchestrator daemon in foreground mode and writes daemon stdout/stderr logs under `logs/daemon/`.
 
 ## Desktop GUI
 

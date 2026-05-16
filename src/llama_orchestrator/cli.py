@@ -28,11 +28,15 @@ from rich.console import Console
 from rich.table import Table
 
 from llama_orchestrator import __version__
+from llama_orchestrator.cli_exit_codes import ExitCode
 
 # Initialize Typer app
 app = typer.Typer(
     name="llama-orch",
-    help="Docker-like CLI orchestration for llama.cpp server instances",
+    help=(
+        "Docker-like CLI orchestration for llama.cpp server instances. "
+        "Standard exit codes: 2 usage, 10-19 config, 20-39 instance/process, 50-69 binary/daemon."
+    ),
     add_completion=False,
     no_args_is_help=True,
 )
@@ -48,6 +52,23 @@ app.add_typer(binary_app, name="binary")
 
 # Rich console for pretty output
 console = Console()
+
+
+def _raise_exit(code: ExitCode) -> None:
+    """Raise a Typer exit with a standard exit code."""
+    raise typer.Exit(int(code))
+
+
+def _process_error_code(message: str, default: ExitCode) -> ExitCode:
+    """Map common process error messages to standard exit codes."""
+    lower_message = message.lower()
+    if "already running" in lower_message:
+        return ExitCode.INSTANCE_ALREADY_RUNNING
+    if "not found" in lower_message:
+        return ExitCode.INSTANCE_NOT_FOUND
+    if "port" in lower_message and ("in use" in lower_message or "already used" in lower_message):
+        return ExitCode.PORT_IN_USE
+    return default
 
 
 def version_callback(value: bool) -> None:
@@ -66,6 +87,9 @@ def main(
 ) -> None:
     """
     llama-orchestrator: Manage multiple llama.cpp server instances.
+
+    Standard exit codes: 2 usage, 10-19 config, 20-39 instance/process,
+    50-69 binary/daemon.
     """
     pass
 
@@ -78,7 +102,7 @@ def main(
 @app.command()
 def up(
     name: Annotated[str, typer.Argument(help="Instance name to start")],
-    detach: Annotated[bool, typer.Option("--detach", "-d", help="Run in background")] = True,
+    detach: Annotated[bool, typer.Option("--detach/--no-detach", "-d", help="Run in background")] = True,
 ) -> None:
     """
     Start a llama.cpp server instance.
@@ -106,7 +130,7 @@ def up(
             title="❌ Instance Not Found",
             border_style="red"
         ))
-        raise typer.Exit(1)
+        _raise_exit(ExitCode.INSTANCE_NOT_FOUND)
     
     # Check executable with config for UUID-based resolution
     exe_valid, exe_msg = validate_executable(config)
@@ -118,12 +142,12 @@ def up(
             title="❌ Executable Not Found",
             border_style="red"
         ))
-        raise typer.Exit(1)
+        _raise_exit(ExitCode.BINARY_NOT_FOUND)
     
     console.print(f"[green]Starting instance:[/green] {name}")
     
     try:
-        state = start_instance(name)
+        state = start_instance(name, detach=detach)
         console.print(Panel(
             f"[green]Instance '{name}' started successfully![/green]\n\n"
             f"PID: {state.pid}\n"
@@ -140,7 +164,7 @@ def up(
             title="❌ Start Failed",
             border_style="red"
         ))
-        raise typer.Exit(1)
+        _raise_exit(_process_error_code(e.message, ExitCode.PROCESS_START_FAILED))
 
 
 @app.command()
@@ -174,7 +198,7 @@ def down(
             title="❌ Stop Failed",
             border_style="red"
         ))
-        raise typer.Exit(1)
+        _raise_exit(_process_error_code(e.message, ExitCode.PROCESS_STOP_FAILED))
 
 
 @app.command()
@@ -208,7 +232,7 @@ def restart(
             title="❌ Restart Failed",
             border_style="red"
         ))
-        raise typer.Exit(1)
+        _raise_exit(_process_error_code(e.message, ExitCode.PROCESS_START_FAILED))
 
 
 @app.command()
@@ -314,7 +338,7 @@ def health(
     
     if name is None and not all_instances:
         console.print("[yellow]Specify an instance name or use --all[/yellow]")
-        raise typer.Exit(1)
+        _raise_exit(ExitCode.USAGE_ERROR)
     
     instances_to_check = [name] if name else [n for n, _ in discover_instances()]
     
@@ -361,6 +385,7 @@ def logs(
     name: Annotated[str, typer.Argument(help="Instance name")],
     tail: Annotated[int, typer.Option("--tail", "-n", help="Number of lines")] = 100,
     follow: Annotated[bool, typer.Option("--follow", "-f", help="Follow log output")] = False,
+    stream: Annotated[str, typer.Option("--stream", help="Log stream: stdout, stderr, or both")] = "stdout",
     stderr: Annotated[bool, typer.Option("--stderr", help="Show stderr instead")] = False,
 ) -> None:
     """
@@ -369,90 +394,105 @@ def logs(
     Example:
         llama-orch logs gpt-oss --tail 50
         llama-orch logs gpt-oss --follow
+        llama-orch logs gpt-oss --stream both
     """
     import time
     from llama_orchestrator.config import get_instance_config, get_logs_dir
+    from llama_orchestrator.engine.detach import get_latest_logs
     
     try:
         config = get_instance_config(name)
     except FileNotFoundError:
         console.print(f"[red]Instance '{name}' not found.[/red]")
-        raise typer.Exit(1)
+        _raise_exit(ExitCode.INSTANCE_NOT_FOUND)
+
+    selected_stream = stream.lower().strip()
+    if stderr and selected_stream == "stdout":
+        selected_stream = "stderr"
+
+    valid_streams = {"stdout", "stderr", "both"}
+    if selected_stream not in valid_streams:
+        console.print(f"[red]Invalid stream '{stream}'. Use stdout, stderr, or both.[/red]")
+        _raise_exit(ExitCode.USAGE_ERROR)
+
+    stream_names = ["stdout", "stderr"] if selected_stream == "both" else [selected_stream]
     
     # Determine log file path
     logs_dir = get_logs_dir() / name
-    log_file = logs_dir / ("stderr.log" if stderr else "stdout.log")
-    
-    if not log_file.exists():
-        console.print(f"[yellow]No log file found at {log_file}[/yellow]")
+
+    def get_active_log_file(log_type: str) -> Path | None:
+        fixed = logs_dir / f"{log_type}.log"
+        if fixed.exists():
+            return fixed
+
+        pattern = f"{log_type}.*.log"
+        matches = sorted(logs_dir.glob(pattern), reverse=True)
+        return matches[0] if matches else None
+
+    active_files = {log_type: get_active_log_file(log_type) for log_type in stream_names}
+
+    if not any(active_files.values()):
+        missing_paths = ", ".join(str(logs_dir / f"{log_type}.log") for log_type in stream_names)
+        console.print(f"[yellow]No log file found at {missing_paths}[/yellow]")
         console.print("[dim]Instance may not have been started yet.[/dim]")
-        raise typer.Exit(1)
-    
-    log_type = "stderr" if stderr else "stdout"
-    console.print(f"[dim]Showing {log_type} logs for instance '{name}'[/dim]")
-    console.print(f"[dim]Log file: {log_file}[/dim]\n")
-    
-    def read_last_n_lines(file_path, n):
-        """Read last n lines from a file efficiently."""
-        with open(file_path, 'rb') as f:
-            # Seek to end
-            f.seek(0, 2)
-            file_size = f.tell()
-            
-            if file_size == 0:
-                return []
-            
-            # Read backwards in chunks to find enough lines
-            lines = []
-            chunk_size = 8192
-            position = file_size
-            
-            while position > 0 and len(lines) <= n:
-                chunk_start = max(0, position - chunk_size)
-                f.seek(chunk_start)
-                chunk = f.read(position - chunk_start)
-                
-                # Split into lines and prepend
-                chunk_lines = chunk.decode('utf-8', errors='replace').splitlines(keepends=True)
-                lines = chunk_lines + lines
-                position = chunk_start
-            
-            return lines[-n:] if len(lines) > n else lines
+        _raise_exit(ExitCode.CONFIG_NOT_FOUND)
+
+    console.print(f"[dim]Showing {selected_stream} logs for instance '{name}'[/dim]")
+    for log_type in stream_names:
+        if active_files[log_type] is not None:
+            console.print(f"[dim]{log_type}: {active_files[log_type]}[/dim]")
+    console.print()
+
+    def print_log_line(log_type: str, line: str) -> None:
+        if selected_stream == "both":
+            console.print(f"[{ 'cyan' if log_type == 'stdout' else 'yellow' }]{log_type}[/]: {line.rstrip()}")
+        else:
+            console.print(line.rstrip())
     
     if follow:
         # Follow mode - stream new lines
         console.print("[dim]Following log output (Ctrl+C to stop)...[/dim]\n")
-        
+
         try:
-            with open(log_file, 'r', encoding='utf-8', errors='replace') as f:
-                # First show tail
-                f.seek(0, 2)  # End of file
-                file_size = f.tell()
-                
-                # Show last N lines first
-                lines = read_last_n_lines(log_file, tail)
-                for line in lines:
-                    console.print(line.rstrip())
-                
-                # Then follow
-                f.seek(0, 2)  # Back to end
+            latest_logs = get_latest_logs(name, tail)
+            for log_type in stream_names:
+                for line in latest_logs.get(log_type, []):
+                    print_log_line(log_type, line)
+
+            handles = {}
+            try:
+                for log_type, path in active_files.items():
+                    if path is None:
+                        continue
+                    handle = open(path, 'r', encoding='utf-8', errors='replace')
+                    handle.seek(0, 2)
+                    handles[log_type] = handle
+
                 while True:
-                    line = f.readline()
-                    if line:
-                        console.print(line.rstrip())
-                    else:
+                    saw_output = False
+                    for log_type, handle in handles.items():
+                        line = handle.readline()
+                        while line:
+                            saw_output = True
+                            print_log_line(log_type, line)
+                            line = handle.readline()
+
+                    if not saw_output:
                         time.sleep(0.1)
+            finally:
+                for handle in handles.values():
+                    handle.close()
         except KeyboardInterrupt:
             console.print("\n[dim]Stopped following logs.[/dim]")
     else:
-        # Show last N lines
-        lines = read_last_n_lines(log_file, tail)
-        
-        if not lines:
+        latest_logs = get_latest_logs(name, tail)
+
+        if not any(latest_logs.get(log_type) for log_type in stream_names):
             console.print("[dim]Log file is empty.[/dim]")
         else:
-            for line in lines:
-                console.print(line.rstrip())
+            for log_type in stream_names:
+                for line in latest_logs.get(log_type, []):
+                    print_log_line(log_type, line)
 
 
 @app.command()
@@ -467,71 +507,156 @@ def describe(
         llama-orch describe gpt-oss
         llama-orch describe gpt-oss --json
     """
-    import json
     from llama_orchestrator.config import get_instance_config
-    from llama_orchestrator.engine import load_state
+    from llama_orchestrator.cli_describe import build_description, format_description_rich
     from rich.panel import Panel
     
     try:
         config = get_instance_config(name)
     except FileNotFoundError:
         console.print(f"[red]Instance '{name}' not found.[/red]")
-        raise typer.Exit(1)
+        _raise_exit(ExitCode.INSTANCE_NOT_FOUND)
     
-    state = load_state(name)
+    description = build_description(name, config=config)
     
     if output_json:
-        # JSON output
-        output = {
-            "name": name,
-            "config": config.model_dump(),
-            "state": {
-                "pid": state.pid if state else None,
-                "status": state.status.value if state else "unknown",
-                "health": state.health.value if state else "unknown",
-                "started_at": state.started_at.isoformat() if state and state.started_at else None,
-                "restart_count": state.restart_count if state else 0,
-            } if state else None,
-        }
-        console.print(json.dumps(output, indent=2, default=str))
-    else:
-        # Rich panel output
-        status_text = state.status.value if state else "unknown"
-        health_text = state.health.value if state else "unknown"
-        pid_text = str(state.pid) if state and state.pid else "-"
-        uptime_text = state.uptime_str if state else "-"
-        
-        info = f"""
-[bold cyan]Configuration[/bold cyan]
-  Model:        {config.model.path}
-  Context:      {config.model.context_size}
-  Batch size:   {config.model.batch_size}
-  
-  Port:         {config.server.port}
-  Host:         {config.server.host}
-  Threads:      {config.model.threads}
-  
-  GPU Backend:  {config.gpu.backend}
-  GPU Device:   {config.gpu.device_id}
-  GPU Layers:   {config.gpu.layers}
-  
-[bold cyan]Runtime Status[/bold cyan]
-  Status:       {status_text}
-  Health:       {health_text}
-  PID:          {pid_text}
-  Uptime:       {uptime_text}
-  Restarts:     {state.restart_count if state else 0}
+        import json
 
-[bold cyan]Paths[/bold cyan]
-  Config:       instances/{name}/config.json
-  Stdout:       {config.logs.stdout}
-  Stderr:       {config.logs.stderr}
-"""
-        console.print(Panel(info.strip(), title=f"Instance: {name}", border_style="blue"))
+        console.print(json.dumps(description.to_dict(), indent=2, default=str))
+    else:
+        console.print(
+            Panel(
+                format_description_rich(description),
+                title=f"Instance: {name}",
+                border_style="blue",
+            )
+        )
+
+
+def _build_dashboard_table() -> Table:
+    """Build the dashboard instances table."""
+    from llama_orchestrator.config import discover_instances, get_instance_config
+    from llama_orchestrator.engine import list_instances
+    from llama_orchestrator.engine.state import InstanceStatus
+
+    table = Table(
+        title="llama-orchestrator Dashboard",
+        caption="Press Ctrl+C to exit",
+        expand=True,
+    )
+
+    table.add_column("Instance", style="cyan", no_wrap=True)
+    table.add_column("PID", style="magenta", justify="right")
+    table.add_column("Port", style="green", justify="right")
+    table.add_column("Backend", style="yellow")
+    table.add_column("Model", style="dim", max_width=30)
+    table.add_column("Status", style="bold", justify="center")
+    table.add_column("Health", style="bold", justify="center")
+    table.add_column("Uptime", style="dim", justify="right")
+
+    instances = list_instances()
+    instance_configs = {name for name, _ in discover_instances()}
+
+    # Merge config info with state info
+    all_names = set(instances.keys()) | instance_configs
+
+    for name in sorted(all_names):
+        state = instances.get(name)
+
+        # Get config info
+        try:
+            config = get_instance_config(name)
+            port = str(config.server.port)
+            backend = config.gpu.backend
+            model = config.model.path.name[:30]
+        except Exception:
+            port = "-"
+            backend = "-"
+            model = "-"
+
+        # State info
+        if state:
+            pid = str(state.pid) if state.pid else "-"
+
+            status_style = {
+                InstanceStatus.RUNNING: "green",
+                InstanceStatus.STARTING: "yellow",
+                InstanceStatus.STOPPING: "yellow",
+                InstanceStatus.STOPPED: "dim",
+                InstanceStatus.ERROR: "red",
+            }.get(state.status, "white")
+
+            status_text = f"[{status_style}]{state.status_symbol} {state.status.value}[/{status_style}]"
+            health_text = f"{state.health_symbol} {state.health.value}"
+            uptime = state.uptime_str
+        else:
+            pid = "-"
+            status_text = "[dim]○ stopped[/dim]"
+            health_text = "? unknown"
+            uptime = "-"
+
+        table.add_row(
+            name,
+            pid,
+            port,
+            backend,
+            model,
+            status_text,
+            health_text,
+            uptime,
+        )
+
+    if not all_names:
+        table.add_row(
+            "[dim]No instances configured[/dim]",
+            "", "", "", "", "", "", ""
+        )
+
+    return table
+
+
+def _build_dashboard_events_panel(events_for: str | None = None):
+    """Build the dashboard recent-events panel."""
+    from datetime import datetime
+
+    from rich.panel import Panel
+
+    from llama_orchestrator.engine import get_recent_events
+
+    events = get_recent_events(instance_name=events_for, limit=10)
+    if not events:
+        return Panel("[dim]No recent events.[/dim]", title="Recent Events", border_style="dim")
+
+    lines = []
+    for event in events[:10]:
+        timestamp = event.get("ts")
+        if isinstance(timestamp, int | float):
+            ts_text = datetime.fromtimestamp(timestamp).strftime("%H:%M:%S")
+        else:
+            ts_text = str(timestamp or "")[:8]
+        instance_name = event.get("instance_name") or "system"
+        lines.append(f"[{ts_text}] {instance_name}: {event.get('event_type')} - {event.get('message')}")
+
+    title = "Recent Events" if events_for is None else f"Recent Events ({events_for})"
+    return Panel("\n".join(lines), title=title, border_style="blue")
+
+
+def _build_dashboard_layout(events_for: str | None = None):
+    """Build the full dashboard layout."""
+    from rich.layout import Layout
+
+    layout = Layout()
+    layout.split_row(
+        Layout(_build_dashboard_table(), name="instances", ratio=3),
+        Layout(_build_dashboard_events_panel(events_for), name="events", ratio=2),
+    )
+    return layout
 
 
 @app.command()
-def dashboard() -> None:
+def dashboard(
+    events_for: Annotated[Optional[str], typer.Option("--events-for", help="Filter dashboard events by instance")] = None,
+) -> None:
     """
     Launch live TUI dashboard.
     
@@ -543,99 +668,15 @@ def dashboard() -> None:
     """
     import time
     from rich.live import Live
-    from rich.layout import Layout
-    from rich.panel import Panel
-    
-    from llama_orchestrator.config import discover_instances, get_instance_config
-    from llama_orchestrator.engine import list_instances
-    from llama_orchestrator.engine.state import InstanceStatus
-    from llama_orchestrator.health import check_instance_health
-    
-    def build_table() -> Table:
-        """Build the instances table."""
-        table = Table(
-            title="llama-orchestrator Dashboard",
-            caption="Press Ctrl+C to exit",
-            expand=True,
-        )
-        
-        table.add_column("Instance", style="cyan", no_wrap=True)
-        table.add_column("PID", style="magenta", justify="right")
-        table.add_column("Port", style="green", justify="right")
-        table.add_column("Backend", style="yellow")
-        table.add_column("Model", style="dim", max_width=30)
-        table.add_column("Status", style="bold", justify="center")
-        table.add_column("Health", style="bold", justify="center")
-        table.add_column("Uptime", style="dim", justify="right")
-        
-        instances = list_instances()
-        instance_configs = {name for name, _ in discover_instances()}
-        
-        # Merge config info with state info
-        all_names = set(instances.keys()) | instance_configs
-        
-        for name in sorted(all_names):
-            state = instances.get(name)
-            
-            # Get config info
-            try:
-                config = get_instance_config(name)
-                port = str(config.server.port)
-                backend = config.gpu.backend
-                model = config.model.path.name[:30]
-            except Exception:
-                port = "-"
-                backend = "-"
-                model = "-"
-            
-            # State info
-            if state:
-                pid = str(state.pid) if state.pid else "-"
-                
-                status_style = {
-                    InstanceStatus.RUNNING: "green",
-                    InstanceStatus.STARTING: "yellow",
-                    InstanceStatus.STOPPING: "yellow",
-                    InstanceStatus.STOPPED: "dim",
-                    InstanceStatus.ERROR: "red",
-                }.get(state.status, "white")
-                
-                status_text = f"[{status_style}]{state.status_symbol} {state.status.value}[/{status_style}]"
-                health_text = f"{state.health_symbol} {state.health.value}"
-                uptime = state.uptime_str
-            else:
-                pid = "-"
-                status_text = "[dim]○ stopped[/dim]"
-                health_text = "? unknown"
-                uptime = "-"
-            
-            table.add_row(
-                name,
-                pid,
-                port,
-                backend,
-                model,
-                status_text,
-                health_text,
-                uptime,
-            )
-        
-        if not all_names:
-            table.add_row(
-                "[dim]No instances configured[/dim]",
-                "", "", "", "", "", "", ""
-            )
-        
-        return table
     
     console.print("[bold]Starting dashboard...[/bold]")
     console.print("[dim]Press Ctrl+C to exit[/dim]\n")
     
     try:
-        with Live(build_table(), console=console, refresh_per_second=1) as live:
+        with Live(_build_dashboard_layout(events_for), console=console, refresh_per_second=1) as live:
             while True:
                 time.sleep(1)
-                live.update(build_table())
+                live.update(_build_dashboard_layout(events_for))
     except KeyboardInterrupt:
         console.print("\n[dim]Dashboard closed.[/dim]")
 
@@ -652,7 +693,7 @@ def gui() -> None:
         from llama_orchestrator.gui import launch_gui
     except Exception as e:
         console.print(f"[red]Failed to load GUI:[/red] {e}")
-        raise typer.Exit(1)
+        _raise_exit(ExitCode.GENERAL_ERROR)
 
     launch_gui()
 
@@ -694,14 +735,14 @@ def init(
     if config_path.exists() and not force:
         console.print(f"[red]Instance '{name}' already exists.[/red]")
         console.print(f"Use --force to overwrite, or choose a different name.")
-        raise typer.Exit(1)
+        _raise_exit(ExitCode.INSTANCE_ALREADY_EXISTS)
     
     # Validate backend
     valid_backends = ("cpu", "vulkan", "cuda", "metal", "hip")
     if backend not in valid_backends:
         console.print(f"[red]Invalid backend '{backend}'.[/red]")
         console.print(f"Valid options: {', '.join(valid_backends)}")
-        raise typer.Exit(1)
+        _raise_exit(ExitCode.CONFIG_INVALID)
     
     # Create config
     try:
@@ -723,7 +764,7 @@ def init(
         )
     except Exception as e:
         console.print(f"[red]Invalid configuration: {e}[/red]")
-        raise typer.Exit(1)
+        _raise_exit(ExitCode.CONFIG_INVALID)
     
     # Save config
     saved_path = save_config(config)
@@ -786,7 +827,7 @@ def config_validate(
                 title="❌ Validation Failed",
                 border_style="red"
             ))
-            raise typer.Exit(1)
+            _raise_exit(ExitCode.CONFIG_NOT_FOUND)
     else:
         console.print("[blue]Validating all instance configs...[/blue]")
         result = validate_all_instances(check_runtime=check_runtime)
@@ -802,7 +843,7 @@ def config_validate(
             console.print(f"[yellow]   ({result.warning_count} warnings)[/yellow]")
     else:
         console.print(f"\n[red]❌ Validation failed ({result.error_count} errors)[/red]")
-        raise typer.Exit(1)
+        _raise_exit(ExitCode.CONFIG_INVALID)
 
 
 @config_app.command("lint")
@@ -843,7 +884,7 @@ def config_lint(
             title="❌ Lint Failed",
             border_style="red"
         ))
-        raise typer.Exit(1)
+        _raise_exit(ExitCode.CONFIG_NOT_FOUND)
     
     if not configs:
         console.print("[yellow]No instances configured.[/yellow]")
@@ -900,7 +941,7 @@ def config_lint(
                 console.print(f"[yellow]   {result.warning_count} warnings[/yellow]")
         else:
             console.print(f"[red]❌ Lint failed ({result.error_count} errors, {result.warning_count} warnings)[/red]")
-            raise typer.Exit(1)
+            _raise_exit(ExitCode.CONFIG_INVALID)
 
 
 # =============================================================================
@@ -928,7 +969,7 @@ def daemon_start(
     if is_daemon_running():
         console.print("[yellow]Daemon is already running.[/yellow]")
         console.print("Use 'llama-orch daemon status' to check status.")
-        raise typer.Exit(1)
+        _raise_exit(ExitCode.DAEMON_ALREADY_RUNNING)
     
     mode = "foreground" if foreground else "background"
     console.print(f"[green]Starting daemon ({mode})...[/green]")
@@ -964,7 +1005,7 @@ def daemon_stop() -> None:
     
     if not is_daemon_running():
         console.print("[yellow]Daemon is not running.[/yellow]")
-        raise typer.Exit(1)
+        _raise_exit(ExitCode.DAEMON_NOT_RUNNING)
     
     console.print("[red]Stopping daemon...[/red]")
     
@@ -976,7 +1017,7 @@ def daemon_stop() -> None:
         ))
     else:
         console.print("[red]Failed to stop daemon.[/red]")
-        raise typer.Exit(1)
+        _raise_exit(ExitCode.DAEMON_STOP_FAILED)
 
 
 @daemon_app.command("status")
@@ -1007,6 +1048,59 @@ def daemon_status() -> None:
             title="Daemon Status",
             border_style="dim"
         ))
+
+
+@daemon_app.command("install")
+def daemon_install(
+    service_name: Annotated[str, typer.Option("--service-name", help="Windows service name")] = "llama-orchestrator",
+) -> None:
+    """Install the orchestrator daemon as a Windows service."""
+    from rich.panel import Panel
+
+    from llama_orchestrator.daemon.win_service import install_windows_service
+
+    try:
+        install_windows_service(service_name=service_name)
+    except FileNotFoundError as e:
+        console.print(f"[red]{e}[/red]")
+        _raise_exit(ExitCode.BINARY_NOT_FOUND)
+    except RuntimeError as e:
+        console.print(f"[red]{e}[/red]")
+        _raise_exit(ExitCode.PERMISSION_DENIED)
+    except Exception as e:
+        console.print(f"[red]Failed to install service:[/red] {e}")
+        _raise_exit(ExitCode.DAEMON_START_FAILED)
+
+    console.print(Panel(
+        f"[green]Windows service '{service_name}' installed successfully.[/green]",
+        title="✅ Service Installed",
+        border_style="green",
+    ))
+
+
+@daemon_app.command("uninstall")
+def daemon_uninstall(
+    service_name: Annotated[str, typer.Option("--service-name", help="Windows service name")] = "llama-orchestrator",
+) -> None:
+    """Uninstall the orchestrator Windows service."""
+    from rich.panel import Panel
+
+    from llama_orchestrator.daemon.win_service import uninstall_windows_service
+
+    try:
+        uninstall_windows_service(service_name=service_name)
+    except FileNotFoundError as e:
+        console.print(f"[red]{e}[/red]")
+        _raise_exit(ExitCode.BINARY_NOT_FOUND)
+    except Exception as e:
+        console.print(f"[red]Failed to uninstall service:[/red] {e}")
+        _raise_exit(ExitCode.DAEMON_STOP_FAILED)
+
+    console.print(Panel(
+        f"[green]Windows service '{service_name}' uninstalled successfully.[/green]",
+        title="✅ Service Removed",
+        border_style="green",
+    ))
 
 
 # =============================================================================
@@ -1086,7 +1180,7 @@ def binary_install(
             title="❌ Install Failed",
             border_style="red"
         ))
-        raise typer.Exit(1)
+        _raise_exit(ExitCode.BINARY_INSTALL_FAILED)
 
 
 @binary_app.command("list")
@@ -1165,14 +1259,14 @@ def binary_info(
     
     if not matches:
         console.print(f"[red]No binary found matching '{binary_id}'[/red]")
-        raise typer.Exit(1)
+        _raise_exit(ExitCode.BINARY_NOT_FOUND)
     
     if len(matches) > 1:
         console.print(f"[yellow]Multiple binaries match '{binary_id}':[/yellow]")
         for m in matches:
             console.print(f"  - {m.id}")
         console.print("\nPlease provide a more specific UUID.")
-        raise typer.Exit(1)
+        _raise_exit(ExitCode.USAGE_ERROR)
     
     binary = matches[0]
     
@@ -1229,14 +1323,14 @@ def binary_remove(
     
     if not matches:
         console.print(f"[red]No binary found matching '{binary_id}'[/red]")
-        raise typer.Exit(1)
+        _raise_exit(ExitCode.BINARY_NOT_FOUND)
     
     if len(matches) > 1:
         console.print(f"[yellow]Multiple binaries match '{binary_id}':[/yellow]")
         for m in matches:
             console.print(f"  - {m.id} ({m.version}-{m.variant})")
         console.print("\nPlease provide a more specific UUID.")
-        raise typer.Exit(1)
+        _raise_exit(ExitCode.USAGE_ERROR)
     
     binary = matches[0]
     
@@ -1309,7 +1403,7 @@ def binary_latest(
         ))
     except Exception as e:
         console.print(f"[red]Failed to fetch latest release:[/red] {e}")
-        raise typer.Exit(1)
+        _raise_exit(ExitCode.BINARY_DOWNLOAD_FAILED)
 
 
 if __name__ == "__main__":

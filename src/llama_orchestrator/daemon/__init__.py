@@ -12,6 +12,7 @@ from llama_orchestrator.daemon.service import (
     start_daemon,
     stop_daemon,
 )
+from llama_orchestrator.daemon.win_service import install_windows_service, uninstall_windows_service
 
 __all__ = [
     "DaemonService",
@@ -19,4 +20,6 @@ __all__ = [
     "is_daemon_running",
     "start_daemon",
     "stop_daemon",
+    "install_windows_service",
+    "uninstall_windows_service",
 ]

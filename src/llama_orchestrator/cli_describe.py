@@ -16,11 +16,59 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from llama_orchestrator.config import get_state_dir
+
 if TYPE_CHECKING:
     from llama_orchestrator.config import InstanceConfig
     from llama_orchestrator.engine.state import RuntimeState
 
 logger = logging.getLogger(__name__)
+
+
+def _timestamp_to_datetime(timestamp: float | None) -> datetime | None:
+    """Convert a POSIX timestamp to datetime when present."""
+    if timestamp is None:
+        return None
+    return datetime.fromtimestamp(timestamp)
+
+
+def _coerce_datetime(value: object) -> datetime | None:
+    """Normalize timestamps or datetime values to datetime."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, int | float):
+        return datetime.fromtimestamp(value)
+    return None
+
+
+def _enum_or_value(value: object) -> str:
+    """Return enum value when present, otherwise a string representation."""
+    if value is None:
+        return "unknown"
+    return str(getattr(value, "value", value))
+
+
+def _resolve_process_valid(validation: object) -> bool:
+    """Support both method-based and attribute-based validation results."""
+    is_valid = getattr(validation, "is_valid", None)
+    if callable(is_valid):
+        return bool(is_valid())
+    if is_valid is not None:
+        return bool(is_valid)
+    return False
+
+
+def _get_numeric_attr(obj: object, *names: str, default: int = 0) -> int:
+    """Return the first real numeric attribute from a list of candidate names."""
+    for name in names:
+        value = getattr(obj, name, None)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int | float):
+            return int(value)
+    return default
 
 
 @dataclass
@@ -41,6 +89,7 @@ class InstanceDescription:
     gpu_backend: str = ""
     gpu_device: int = 0
     gpu_layers: int = 0
+    effective_command: str | None = None
     
     # Runtime state (V2)
     pid: int | None = None
@@ -49,6 +98,8 @@ class InstanceDescription:
     started_at: datetime | None = None
     uptime_seconds: float = 0
     restart_count: int = 0
+    memory_percent: float | None = None
+    memory_rss_mb: float | None = None
     
     # V2 specific
     config_hash: str | None = None
@@ -63,6 +114,7 @@ class InstanceDescription:
     
     # Events (recent)
     recent_events: list[dict] = field(default_factory=list)
+    health_history: list[dict] = field(default_factory=list)
     
     # Paths
     stdout_log: str = ""
@@ -87,6 +139,7 @@ class InstanceDescription:
                     "device": self.gpu_device,
                     "layers": self.gpu_layers,
                 },
+                "effective_command": self.effective_command,
             },
             "runtime": {
                 "pid": self.pid,
@@ -95,6 +148,8 @@ class InstanceDescription:
                 "started_at": self.started_at.isoformat() if self.started_at else None,
                 "uptime_seconds": self.uptime_seconds,
                 "restart_count": self.restart_count,
+                "memory_percent": self.memory_percent,
+                "memory_rss_mb": self.memory_rss_mb,
                 "config_hash": self.config_hash,
                 "binary_version": self.binary_version,
                 "last_health_check": self.last_health_check.isoformat() if self.last_health_check else None,
@@ -106,6 +161,7 @@ class InstanceDescription:
                 "cmdline": self.process_cmdline,
             },
             "events": self.recent_events,
+            "health_history": self.health_history,
             "paths": {
                 "stdout_log": self.stdout_log,
                 "stderr_log": self.stderr_log,
@@ -182,7 +238,9 @@ def build_description(
     Returns:
         InstanceDescription with all available information
     """
-    from llama_orchestrator.engine.state import get_recent_events, load_runtime
+    from llama_orchestrator.engine.command import build_command
+    from llama_orchestrator.engine.process import get_process_info
+    from llama_orchestrator.engine.state import get_health_history, get_recent_events, load_runtime
     from llama_orchestrator.engine.validator import validate_process
     
     desc = InstanceDescription(name=name)
@@ -199,6 +257,10 @@ def build_description(
         desc.gpu_backend = config.gpu.backend
         desc.gpu_device = config.gpu.device_id
         desc.gpu_layers = config.gpu.layers
+        try:
+            desc.effective_command = " ".join(build_command(config))
+        except Exception as e:
+            logger.debug(f"Could not build effective command for {name}: {e}")
         desc.stdout_log = config.logs.stdout.format(name=name)
         desc.stderr_log = config.logs.stderr.format(name=name)
     
@@ -211,28 +273,48 @@ def build_description(
     
     if runtime:
         desc.pid = runtime.pid
-        desc.status = runtime.status
-        desc.health = runtime.health
-        desc.started_at = runtime.started_at
-        desc.restart_count = runtime.restart_count
-        desc.config_hash = runtime.config_hash
-        desc.binary_version = runtime.binary_version
-        desc.last_health_check = runtime.last_health_check
-        desc.last_health_latency_ms = runtime.last_health_latency_ms
+        desc.status = _enum_or_value(getattr(runtime, "status", None))
+        desc.health = _enum_or_value(getattr(runtime, "health", None))
+        desc.started_at = _coerce_datetime(getattr(runtime, "started_at", None))
+        desc.restart_count = _get_numeric_attr(runtime, "restart_attempts", "restart_count")
+        desc.config_hash = getattr(runtime, "config_hash", None)
+        desc.binary_version = getattr(runtime, "binary_version", None)
+        desc.last_health_check = _coerce_datetime(
+            getattr(runtime, "last_seen_at", getattr(runtime, "last_health_check", None))
+        )
+        desc.last_health_latency_ms = getattr(runtime, "last_health_latency_ms", None)
         
         # Calculate uptime
-        if runtime.started_at:
-            desc.uptime_seconds = (datetime.now() - runtime.started_at).total_seconds()
+        if desc.started_at:
+            desc.uptime_seconds = (datetime.now() - desc.started_at).total_seconds()
         
         # Validate process
         if runtime.pid:
             try:
-                validation = validate_process(runtime.pid, name)
-                desc.process_valid = validation.is_valid
-                desc.process_exists = validation.exists
-                desc.process_cmdline = validation.cmdline
+                validation = validate_process(name, expected_pid=runtime.pid)
+                desc.process_valid = _resolve_process_valid(validation)
+                desc.process_exists = bool(
+                    getattr(validation, "process_running", getattr(validation, "exists", False))
+                )
+                desc.process_cmdline = getattr(
+                    validation,
+                    "actual_cmdline",
+                    getattr(validation, "cmdline", None),
+                )
             except Exception as e:
                 logger.debug(f"Could not validate process: {e}")
+
+            try:
+                process_info = get_process_info(runtime.pid)
+                if process_info:
+                    memory_percent = process_info.get("memory_percent")
+                    memory_rss = process_info.get("memory_rss")
+                    if isinstance(memory_percent, int | float):
+                        desc.memory_percent = float(memory_percent)
+                    if isinstance(memory_rss, int | float):
+                        desc.memory_rss_mb = float(memory_rss) / (1024 * 1024)
+            except Exception as e:
+                logger.debug(f"Could not gather process memory info: {e}")
     
     # Get recent events
     if include_events:
@@ -248,9 +330,25 @@ def build_description(
             ]
         except Exception as e:
             logger.debug(f"Could not get events: {e}")
+
+        try:
+            health_history = get_health_history(name, limit=5)
+            desc.health_history = [
+                {
+                    "health": entry.get("health"),
+                    "response_time_ms": entry.get("response_time_ms"),
+                    "error_message": entry.get("error_message"),
+                    "checked_at": _coerce_datetime(entry.get("checked_at")).isoformat()
+                    if _coerce_datetime(entry.get("checked_at"))
+                    else None,
+                }
+                for entry in health_history
+            ]
+        except Exception as e:
+            logger.debug(f"Could not get health history: {e}")
     
     # Set paths
-    desc.state_db_path = f"state/{name}.db"
+    desc.state_db_path = str(get_state_dir() / "state.sqlite")
     desc.lock_file_path = f"state/{name}.lock"
     
     return desc
@@ -281,6 +379,8 @@ def format_description_rich(desc: InstanceDescription) -> str:
     lines.append(f"  GPU Backend:  {desc.gpu_backend}")
     lines.append(f"  GPU Device:   {desc.gpu_device}")
     lines.append(f"  GPU Layers:   {desc.gpu_layers}")
+    if desc.effective_command:
+        lines.append(f"  Command:      {desc.effective_command}")
     lines.append("")
     
     # Runtime section
@@ -290,6 +390,11 @@ def format_description_rich(desc: InstanceDescription) -> str:
     lines.append(f"  PID:          {desc.pid or '-'}")
     lines.append(f"  Uptime:       {desc.uptime_str}")
     lines.append(f"  Restarts:     {desc.restart_count}")
+    if desc.memory_rss_mb is not None:
+        memory_details = f"{desc.memory_rss_mb:.1f} MiB"
+        if desc.memory_percent is not None:
+            memory_details += f" ({desc.memory_percent:.1f}%)"
+        lines.append(f"  Memory:       {memory_details}")
     lines.append("")
     
     # V2 Runtime Details
@@ -325,6 +430,15 @@ def format_description_rich(desc: InstanceDescription) -> str:
             evt_type = event.get("type", "")
             msg = event.get("message", "")[:40]
             lines.append(f"  [{ts}] {evt_type}: {msg}")
+        lines.append("")
+
+    if desc.health_history:
+        lines.append("[bold cyan]Health History[/bold cyan]")
+        for entry in desc.health_history[:5]:
+            checked_at = (entry.get("checked_at") or "")[:19]
+            response_time = entry.get("response_time_ms")
+            latency = f" ({response_time:.1f}ms)" if isinstance(response_time, int | float) else ""
+            lines.append(f"  [{checked_at}] {entry.get('health', 'unknown')}{latency}")
         lines.append("")
     
     # Paths section
