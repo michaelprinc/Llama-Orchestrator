@@ -2,6 +2,8 @@
 
 from llama_orchestrator.gui import (
     DEFAULT_RUNTIME_ARGS,
+    INSTALL_LLAMA_SERVER_LABEL,
+    VULKAN_BINARY_MISSING_MESSAGE,
     apply_managed_runtime_args,
     parse_tag_string,
 )
@@ -41,3 +43,10 @@ def test_parse_tag_string_normalizes_unique_tags() -> None:
         "qwen35-family",
         "rx480-test",
     ]
+
+
+def test_install_binary_gui_copy_uses_llama_server_label() -> None:
+    """GUI install copy names the installed runtime, not one backend."""
+    assert INSTALL_LLAMA_SERVER_LABEL == "Install llama-server"
+    assert "Install Vulkan" not in VULKAN_BINARY_MISSING_MESSAGE
+    assert "llama-server variant" in VULKAN_BINARY_MISSING_MESSAGE

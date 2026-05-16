@@ -54,6 +54,11 @@ DEFAULT_RUNTIME_ARGS = ["--no-mmproj", "--reasoning", "off", "--flash-attn", "au
 MANAGED_VALUE_ARGS = {"--reasoning", "--flash-attn"}
 MANAGED_FLAG_ARGS = {"--no-mmproj"}
 VULKAN_VARIANT = "win-vulkan-x64"
+INSTALL_LLAMA_SERVER_LABEL = "Install llama-server"
+VULKAN_BINARY_MISSING_MESSAGE = (
+    "No win-vulkan-x64 llama-server binary is installed. Use Install llama-server "
+    "to download the default variant, or choose another llama-server variant."
+)
 
 ALL_COLUMNS = (
     "name",
@@ -206,7 +211,7 @@ class LlamaOrchestratorGui(tk.Tk):
         ttk.Button(toolbar, text="Refresh", command=self.refresh).grid(row=0, column=0, padx=(0, 6))
         ttk.Button(toolbar, text="Add model", command=self._open_add_dialog).grid(row=0, column=1, padx=6)
         ttk.Button(toolbar, text="Apply args", command=self._apply_default_args).grid(row=0, column=2, padx=6)
-        ttk.Button(toolbar, text="Install Vulkan", command=self._open_binary_dialog).grid(row=0, column=3, padx=6)
+        ttk.Button(toolbar, text=INSTALL_LLAMA_SERVER_LABEL, command=self._open_binary_dialog).grid(row=0, column=3, padx=6)
         ttk.Button(toolbar, text="Start", command=lambda: self._run_selected("start")).grid(row=0, column=4, padx=6)
         ttk.Button(toolbar, text="Stop", command=lambda: self._run_selected("stop")).grid(row=0, column=5, padx=6)
         ttk.Button(toolbar, text="Restart", command=lambda: self._run_selected("restart")).grid(row=0, column=6, padx=6)
@@ -818,10 +823,7 @@ class LlamaOrchestratorGui(tk.Tk):
             return
 
         if not installed:
-            self._post_message(
-                "No Vulkan llama-server binary is installed. Use Install Vulkan "
-                "to download win-vulkan-x64."
-            )
+            self._post_message(VULKAN_BINARY_MISSING_MESSAGE)
 
     def _install_binary(self, version: str, variant: str, set_default: bool) -> None:
         def action() -> str:
