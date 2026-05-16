@@ -47,6 +47,15 @@ from llama_orchestrator.engine import (
     start_instance,
     stop_instance,
 )
+from llama_orchestrator.engine.state import (
+    HealthStatus,
+    InstanceState,
+    RuntimeState,
+    load_runtime,
+    record_health_check,
+    save_runtime,
+    save_state,
+)
 from llama_orchestrator.health import check_instance_health
 from llama_orchestrator.health.ports import suggest_port_for_instance
 
@@ -55,6 +64,7 @@ MANAGED_VALUE_ARGS = {"--reasoning", "--flash-attn"}
 MANAGED_FLAG_ARGS = {"--no-mmproj"}
 VULKAN_VARIANT = "win-vulkan-x64"
 INSTALL_LLAMA_SERVER_LABEL = "Install llama-server"
+EDIT_BENCHMARK_PROMPT_LABEL = "Edit Benchmark Prompt"
 VULKAN_BINARY_MISSING_MESSAGE = (
     "No win-vulkan-x64 llama-server binary is installed. Use Install llama-server "
     "to download the default variant, or choose another llama-server variant."
@@ -176,6 +186,61 @@ def format_benchmark_message(result: BenchmarkResult) -> str:
     )
 
 
+def derive_display_status_and_health(state: InstanceState | None) -> tuple[str, str]:
+    """Present ready vs loading distinctly while preserving engine runtime semantics."""
+    if state is None:
+        return InstanceStatus.STOPPED.value, HealthStatus.UNKNOWN.value
+
+    if state.status == InstanceStatus.RUNNING:
+        if state.health == HealthStatus.HEALTHY:
+            return "ready", state.health.value
+        if state.health == HealthStatus.LOADING:
+            return "loading", state.health.value
+
+    return state.status.value, state.health.value
+
+
+def persist_instance_health(
+    name: str,
+    state: InstanceState | None,
+    *,
+    port: int,
+    health: HealthStatus,
+    error_message: str = "",
+    response_time_ms: float | None = None,
+) -> None:
+    """Persist a GUI-observed health state so refresh shows current readiness."""
+    checked_at = time.time()
+    current_state = state or InstanceState(name=name, status=InstanceStatus.STOPPED)
+    current_state.health = health
+    current_state.last_health_check = checked_at
+    if health in {HealthStatus.UNHEALTHY, HealthStatus.ERROR}:
+        current_state.error_message = error_message
+    elif error_message == "":
+        current_state.error_message = ""
+    save_state(current_state)
+
+    runtime = load_runtime(name) or RuntimeState(name=name)
+    runtime.pid = current_state.pid
+    runtime.port = port
+    runtime.status = current_state.status
+    runtime.health = health
+    runtime.started_at = runtime.started_at or current_state.start_time
+    runtime.last_seen_at = checked_at
+    if health == HealthStatus.HEALTHY:
+        runtime.last_health_ok_at = checked_at
+        runtime.last_error = ""
+    elif error_message:
+        runtime.last_error = error_message
+    save_runtime(runtime)
+    record_health_check(
+        name,
+        health,
+        response_time_ms=response_time_ms,
+        error_message=error_message,
+    )
+
+
 class LlamaOrchestratorGui(tk.Tk):
     """Desktop GUI for managing llama.cpp model instances."""
 
@@ -250,7 +315,7 @@ class LlamaOrchestratorGui(tk.Tk):
         self.tag_filter.grid(row=0, column=11, sticky="w", padx=(0, 6))
         self.tag_filter.bind("<<ComboboxSelected>>", lambda _event: self.refresh())
 
-        ttk.Button(toolbar, text="Prompt", command=self._select_prompt_file).grid(row=0, column=12, padx=6)
+        ttk.Button(toolbar, text=EDIT_BENCHMARK_PROMPT_LABEL, command=self._select_prompt_file).grid(row=0, column=12, padx=6)
         ttk.Label(toolbar, textvariable=self.prompt_var).grid(row=0, column=13, sticky="w", padx=(0, 6))
 
         self.daemon_var = tk.StringVar(value="Daemon: unknown")
@@ -377,8 +442,7 @@ class LlamaOrchestratorGui(tk.Tk):
                 continue
             visible_names.add(name)
 
-            status = state.status.value if state else InstanceStatus.STOPPED.value
-            health = state.health.value if state else "unknown"
+            status, health = derive_display_status_and_health(state)
             pid = str(state.pid) if state and state.pid else "-"
             uptime = state.uptime_str if state else "-"
             benchmark = latest_results.get(name)
@@ -511,7 +575,17 @@ class LlamaOrchestratorGui(tk.Tk):
                 state = restart_instance(name)
                 return f"Restarted {name} (PID {state.pid})."
             if action_name == "health":
+                config = get_instance_config(name)
+                state = list_instances().get(name)
                 result = check_instance_health(name)
+                persist_instance_health(
+                    name,
+                    state,
+                    port=config.server.port,
+                    health=result.to_health_status,
+                    error_message=result.error_message or "",
+                    response_time_ms=result.response_time_ms,
+                )
                 detail = result.error_message or f"{result.response_time_ms or 0:.1f} ms"
                 return f"Health {name}: {result.status.value} ({detail})."
             raise ValueError(f"Unknown action: {action_name}")
@@ -549,6 +623,24 @@ class LlamaOrchestratorGui(tk.Tk):
         def action() -> str:
             config = get_instance_config(name)
             result = quick_benchmark_instance(config, self.benchmark_settings)
+            if result.status == "ok":
+                persist_instance_health(
+                    name,
+                    list_instances().get(name),
+                    port=config.server.port,
+                    health=HealthStatus.HEALTHY,
+                    response_time_ms=result.latency_ms,
+                )
+            else:
+                health_result = check_instance_health(name)
+                persist_instance_health(
+                    name,
+                    list_instances().get(name),
+                    port=config.server.port,
+                    health=health_result.to_health_status,
+                    error_message=health_result.error_message or result.error or "",
+                    response_time_ms=health_result.response_time_ms,
+                )
             return format_benchmark_message(result)
 
         self._run_background(f"benchmark {name}", action)

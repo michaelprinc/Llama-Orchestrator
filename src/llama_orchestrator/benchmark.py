@@ -20,6 +20,7 @@ from typing import Any
 import httpx
 
 from llama_orchestrator.config import InstanceConfig, get_project_root, get_state_dir
+from llama_orchestrator.engine.process import get_log_files
 
 DEFAULT_PROMPT_TEXT = (
     "You are benchmarking a local llama.cpp server. Summarize the practical "
@@ -251,13 +252,88 @@ def _parse_vram_from_text(text: str) -> float | None:
     if not numbers:
         return None
     value, unit = numbers[0]
-    amount = float(value)
+    return _normalize_vram_value(float(value), unit)
+
+
+def _normalize_vram_value(value: float, unit: str | None) -> float:
     if unit and unit.lower() in {"gib", "gb"}:
-        return amount * 1024
-    return amount
+        return value * 1024
+    return value
 
 
-def sample_vram_mb(device_id: int = 0) -> float | None:
+def _device_log_label(backend: str, device_id: int) -> str | None:
+    prefixes = {
+        "vulkan": "Vulkan",
+        "cuda": "CUDA",
+        "hip": "HIP",
+        "metal": "Metal",
+    }
+    prefix = prefixes.get(backend.lower())
+    if prefix is None:
+        return None
+    return f"{prefix}{device_id}"
+
+
+def sample_vram_mb_from_log(
+    stderr_log: Path,
+    *,
+    backend: str,
+    device_id: int,
+) -> float | None:
+    """Best-effort VRAM estimate from llama.cpp stderr when vendor CLIs are unavailable."""
+    if not stderr_log.exists():
+        return None
+
+    device_label = _device_log_label(backend, device_id)
+    if device_label is None:
+        return None
+
+    try:
+        lines = stderr_log.read_text(encoding="utf-8", errors="ignore").splitlines()
+    except OSError:
+        return None
+
+    buffer_pattern = re.compile(
+        rf"{re.escape(device_label)}\s+model buffer size\s*=\s*(\d+(?:\.\d+)?)\s*(MiB|MB|GiB|GB)",
+        re.IGNORECASE,
+    )
+    current_free_pattern = re.compile(
+        rf"{re.escape(device_label)}.*-\s*(\d+(?:\.\d+)?)\s*(MiB|MB|GiB|GB)\s+free",
+        re.IGNORECASE,
+    )
+    inventory_pattern = re.compile(
+        rf"{re.escape(device_label)}\s*:.*\((\d+(?:\.\d+)?)\s*(MiB|MB|GiB|GB),\s*(\d+(?:\.\d+)?)\s*(MiB|MB|GiB|GB)\s+free\)",
+        re.IGNORECASE,
+    )
+
+    for line in reversed(lines):
+        match = buffer_pattern.search(line)
+        if match:
+            return _normalize_vram_value(float(match.group(1)), match.group(2))
+
+    latest_free_mb: float | None = None
+    total_mb: float | None = None
+    for line in reversed(lines):
+        if latest_free_mb is None:
+            match = current_free_pattern.search(line)
+            if match:
+                latest_free_mb = _normalize_vram_value(float(match.group(1)), match.group(2))
+        if total_mb is None:
+            match = inventory_pattern.search(line)
+            if match:
+                total_mb = _normalize_vram_value(float(match.group(1)), match.group(2))
+        if latest_free_mb is not None and total_mb is not None:
+            return max(0.0, total_mb - latest_free_mb)
+
+    return None
+
+
+def sample_vram_mb(
+    device_id: int = 0,
+    *,
+    backend: str | None = None,
+    stderr_log: Path | None = None,
+) -> float | None:
     """Best-effort current GPU memory sampling for common Windows GPU tools."""
     commands = [
         [
@@ -286,6 +362,9 @@ def sample_vram_mb(device_id: int = 0) -> float | None:
         parsed = _parse_vram_from_text(proc.stdout)
         if parsed is not None:
             return parsed
+
+    if backend and stderr_log is not None:
+        return sample_vram_mb_from_log(stderr_log, backend=backend, device_id=device_id)
 
     return None
 
@@ -321,6 +400,7 @@ def quick_benchmark_instance(
     timestamp = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     cfg_hash = config_hash(config)
     prompt_file = active_settings.prompt_file.name
+    stderr_log = get_log_files(config.name)[1]
 
     try:
         prompt, prompt_digest = read_prompt(active_settings)
@@ -368,7 +448,11 @@ def quick_benchmark_instance(
         latency_ms = ((first_token_at or ended) - started) * 1000
         generation_seconds = max(0.001, (ended - (first_token_at or started)))
         tokens_per_second = output_tokens / generation_seconds
-        vram_mb = sample_vram_mb(config.gpu.device_id)
+        vram_mb = sample_vram_mb(
+            config.gpu.device_id,
+            backend=config.gpu.backend,
+            stderr_log=stderr_log,
+        )
 
         result = BenchmarkResult(
             instance_name=config.name,
@@ -400,7 +484,11 @@ def quick_benchmark_instance(
             tokens_per_second=None,
             latency_ms=None,
             elapsed_ms=None,
-            vram_mb=sample_vram_mb(config.gpu.device_id),
+            vram_mb=sample_vram_mb(
+                config.gpu.device_id,
+                backend=config.gpu.backend,
+                stderr_log=stderr_log,
+            ),
             status="failed",
             error=str(exc),
         )

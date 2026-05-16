@@ -5,11 +5,13 @@ from pathlib import Path
 from llama_orchestrator.benchmark import (
     BenchmarkResult,
     BenchmarkSettings,
+    _parse_vram_from_text,
     config_hash,
     get_default_prompt_file,
     latest_benchmark_results,
     load_benchmark_settings,
     record_benchmark_result,
+    sample_vram_mb_from_log,
     save_benchmark_settings,
 )
 from llama_orchestrator.config import InstanceConfig, ModelConfig
@@ -91,3 +93,42 @@ def test_benchmark_history_latest_per_instance(tmp_path: Path) -> None:
     assert latest["bench"].config_hash == "b"
     assert latest["bench"].prompt_file == "renamed.txt"
     assert latest["bench"].tokens_per_second == 10.0
+
+
+def test_parse_vram_from_text_supports_gib_units() -> None:
+    """VRAM parser should normalize GiB values to MB for storage/display."""
+    assert _parse_vram_from_text("GPU memory used: 15.5 GiB") == 15872.0
+
+
+def test_sample_vram_mb_from_log_uses_matching_vulkan_buffer_size(tmp_path: Path) -> None:
+    """When vendor tools are unavailable, benchmarking can fall back to stderr logs."""
+    stderr_log = tmp_path / "stderr.log"
+    stderr_log.write_text(
+        "\n".join(
+            [
+                "0.00 I   - Vulkan0 : AMD Radeon(TM) Graphics (49047 MiB, 46594 MiB free)",
+                "0.00 I   - Vulkan1 : AMD Radeon RX 6800 (16368 MiB, 15569 MiB free)",
+                "load_tensors:      Vulkan1 model buffer size =  4861.28 MiB",
+                "llama_model_load_from_file_impl: using device Vulkan1 (AMD Radeon RX 6800) (unknown id) - 10698 MiB free",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert sample_vram_mb_from_log(stderr_log, backend="vulkan", device_id=1) == 4861.28
+
+
+def test_sample_vram_mb_from_log_falls_back_to_total_minus_free(tmp_path: Path) -> None:
+    """If no model buffer line is present, use the latest device free memory delta."""
+    stderr_log = tmp_path / "stderr.log"
+    stderr_log.write_text(
+        "\n".join(
+            [
+                "0.00 I   - Vulkan1 : AMD Radeon RX 6800 (16368 MiB, 15569 MiB free)",
+                "llama_model_load_from_file_impl: using device Vulkan1 (AMD Radeon RX 6800) (unknown id) - 10698 MiB free",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    assert sample_vram_mb_from_log(stderr_log, backend="vulkan", device_id=1) == 5670.0
