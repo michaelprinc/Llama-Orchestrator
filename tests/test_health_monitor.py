@@ -66,3 +66,29 @@ def test_check_instance_updates_runtime_and_history() -> None:
     assert saved_runtime.last_seen_at is not None
     assert saved_runtime.last_health_ok_at is not None
     mock_record_health_check.assert_called_once()
+
+
+def test_trigger_restart_uses_non_blocking_restart_path() -> None:
+    """Monitor-triggered restarts must opt out of synchronous readiness waiting."""
+    config = InstanceConfig(
+        name="monitor-test",
+        model=ModelConfig(path=Path("models/test.gguf")),
+        healthcheck=HealthcheckConfig(retries=2, start_period=0),
+        restart_policy=RestartPolicy(enabled=True, max_retries=3),
+    )
+    health_state = InstanceHealthState(
+        name="monitor-test",
+        consecutive_failures=2,
+        restart_attempts=0,
+        in_start_period=False,
+    )
+    monitor = HealthMonitor()
+
+    with patch("llama_orchestrator.health.monitor.restart_instance") as mock_restart:
+        monitor._trigger_restart("monitor-test", config, health_state)
+
+    mock_restart.assert_called_once_with("monitor-test", wait_for_ready=False)
+    assert health_state.restart_attempts == 1
+    assert health_state.consecutive_failures == 0
+    assert health_state.in_start_period is True
+    assert health_state.last_restart_time is not None

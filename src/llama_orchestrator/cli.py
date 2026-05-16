@@ -148,11 +148,16 @@ def up(
     
     try:
         state = start_instance(name, detach=detach)
+        health_detail = f"Health: {state.health.value}"
+        if state.health.value == "healthy":
+            health_detail += " (ready)"
+        elif state.health.value == "loading":
+            health_detail += " (still loading)"
         console.print(Panel(
             f"[green]Instance '{name}' started successfully![/green]\n\n"
             f"PID: {state.pid}\n"
             f"Status: {state.status.value}\n"
-            f"Health: {state.health.value} (loading...)",
+            f"{health_detail}",
             title="✅ Instance Started",
             border_style="green"
         ))
@@ -219,10 +224,16 @@ def restart(
     
     try:
         state = restart_instance(name, force=force)
+        health_detail = f"Health: {state.health.value}"
+        if state.health.value == "healthy":
+            health_detail += " (ready)"
+        elif state.health.value == "loading":
+            health_detail += " (still loading)"
         console.print(Panel(
             f"[green]Instance '{name}' restarted successfully![/green]\n\n"
             f"PID: {state.pid}\n"
-            f"Restart count: {state.restart_count}",
+            f"Restart count: {state.restart_count}\n"
+            f"{health_detail}",
             title="✅ Instance Restarted",
             border_style="green"
         ))

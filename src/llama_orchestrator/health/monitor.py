@@ -262,7 +262,7 @@ class HealthMonitor:
         )
         
         try:
-            restart_instance(name)
+            restart_instance(name, wait_for_ready=False)
             health_state.restart_attempts += 1
             health_state.last_restart_time = time.time()
             health_state.consecutive_failures = 0

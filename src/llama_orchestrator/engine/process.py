@@ -28,6 +28,7 @@ from llama_orchestrator.engine.state import (
     HealthStatus,
     InstanceState,
     InstanceStatus,
+    record_health_check,
     RuntimeState,
     load_all_states,
     load_all_runtime,
@@ -92,6 +93,122 @@ def _sync_runtime_from_state(
         runtime.last_error = ""
     save_runtime(runtime)
     return runtime
+
+
+def _persist_health_update(
+    state: InstanceState,
+    config: "InstanceConfig",
+    cmdline: str,
+    health: HealthStatus,
+    response_time_ms: float | None = None,
+    error_message: str = "",
+    checked_at: float | None = None,
+) -> None:
+    """Persist health consistently to legacy state, runtime, and history."""
+    checked_at = time.time() if checked_at is None else checked_at
+    state.health = health
+    state.last_health_check = checked_at
+    save_state(state)
+
+    runtime = load_runtime(state.name) or RuntimeState(name=state.name)
+    runtime.pid = state.pid
+    runtime.port = config.server.port
+    runtime.cmdline = cmdline or runtime.cmdline
+    runtime.status = state.status
+    runtime.health = health
+    runtime.started_at = runtime.started_at or state.start_time
+    runtime.last_seen_at = checked_at
+    runtime.restart_attempts = state.restart_count
+    if health == HealthStatus.HEALTHY:
+        runtime.last_health_ok_at = checked_at
+        runtime.last_error = ""
+    elif error_message:
+        runtime.last_error = error_message
+    save_runtime(runtime)
+    record_health_check(
+        state.name,
+        health,
+        response_time_ms=response_time_ms,
+        error_message=error_message,
+    )
+
+
+def _wait_for_instance_ready(
+    proc: subprocess.Popen,
+    state: InstanceState,
+    config: "InstanceConfig",
+    cmdline: str,
+) -> InstanceState:
+    """Wait for a started instance to become healthy within the startup budget."""
+    from llama_orchestrator.health.checker import check_instance_health
+
+    total_budget = float(max(config.healthcheck.start_period, config.healthcheck.timeout))
+    deadline = time.monotonic() + total_budget
+
+    while True:
+        if proc.poll() is not None:
+            state.status = InstanceStatus.ERROR
+            state.health = HealthStatus.ERROR
+            state.error_message = f"Process exited with code {proc.returncode}"
+            save_state(state)
+            _sync_runtime_from_state(state, config=config, cmdline=cmdline, last_error=state.error_message)
+            log_event(
+                event_type="start_failed",
+                message=state.error_message,
+                instance_name=state.name,
+                level="error",
+                meta={"exit_code": proc.returncode},
+            )
+            raise ProcessError(state.name, state.error_message)
+
+        remaining_budget = max(0.0, deadline - time.monotonic())
+        if remaining_budget <= 0:
+            break
+
+        result = check_instance_health(
+            state.name,
+            timeout=min(float(config.healthcheck.timeout), remaining_budget),
+        )
+
+        if proc.poll() is not None:
+            state.status = InstanceStatus.ERROR
+            state.health = HealthStatus.ERROR
+            state.error_message = f"Process exited with code {proc.returncode}"
+            save_state(state)
+            _sync_runtime_from_state(state, config=config, cmdline=cmdline, last_error=state.error_message)
+            log_event(
+                event_type="start_failed",
+                message=state.error_message,
+                instance_name=state.name,
+                level="error",
+                meta={"exit_code": proc.returncode},
+            )
+            raise ProcessError(state.name, state.error_message)
+
+        persisted_health = HealthStatus.HEALTHY if result.is_healthy else HealthStatus.LOADING
+        _persist_health_update(
+            state,
+            config,
+            cmdline,
+            health=persisted_health,
+            response_time_ms=result.response_time_ms,
+            error_message="" if result.is_healthy else (result.error_message or ""),
+        )
+
+        if result.is_healthy:
+            return state
+
+        remaining_budget = max(0.0, deadline - time.monotonic())
+        if remaining_budget <= 0:
+            break
+
+        time.sleep(min(float(config.healthcheck.retry_delay), remaining_budget))
+
+    state.status = InstanceStatus.RUNNING
+    state.health = HealthStatus.LOADING
+    save_state(state)
+    _sync_runtime_from_state(state, config=config, cmdline=cmdline)
+    return state
 
 
 def get_log_files(name: str) -> tuple[Path, Path]:
@@ -361,6 +478,9 @@ def start_instance(name: str, wait_for_ready: bool = True, detach: bool = False)
                 )
                 raise ProcessError(name, state.error_message)
 
+            if wait_for_ready:
+                return _wait_for_instance_ready(proc, state, config, cmdline)
+
             return state
 
         except Exception as e:
@@ -463,13 +583,14 @@ def stop_instance(name: str, force: bool = False, timeout: float = 10.0) -> Inst
         return state
 
 
-def restart_instance(name: str, force: bool = False) -> InstanceState:
+def restart_instance(name: str, force: bool = False, wait_for_ready: bool = True) -> InstanceState:
     """
     Restart a llama-server instance.
     
     Args:
         name: Instance name to restart
         force: Force kill without graceful shutdown
+        wait_for_ready: Wait for readiness after restart completes
         
     Returns:
         Updated instance state
@@ -495,7 +616,7 @@ def restart_instance(name: str, force: bool = False) -> InstanceState:
     time.sleep(0.5)
     
     # Start
-    state = start_instance(name)
+    state = start_instance(name, wait_for_ready=wait_for_ready)
     state.restart_count = restart_count
     save_state(state)
     _sync_runtime_from_state(state)
