@@ -15,6 +15,19 @@
 - 📊 **TUI Dashboard** — Live terminal dashboard showing all instances
 - 🪟 **Windows native** — Task Scheduler / NSSM service integration
 
+## Local Version Status
+
+**Primary supported tool version:** `llama-orchestrator` `2.0.0`
+
+Use this local checkout at `infra-local/llama-orchestrator/` as the main
+version of the tool for this workspace. It is the preferred implementation for
+local llama.cpp orchestration, Windows autostart, GUI usage, daemon operation,
+health checks, and versioned llama.cpp binary management.
+
+When this workspace also contains older planning notes or upstream package
+copies, treat this directory and its `pyproject.toml` version as authoritative
+unless a newer migration document explicitly supersedes it.
+
 ## Quick Start
 
 ```powershell
