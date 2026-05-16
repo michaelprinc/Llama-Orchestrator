@@ -28,6 +28,36 @@ When this workspace also contains older planning notes or upstream package
 copies, treat this directory and its `pyproject.toml` version as authoritative
 unless a newer migration document explicitly supersedes it.
 
+## Current V2 Status
+
+The V2 proposal has been implemented in this local checkout for the core
+orchestration surface:
+
+- Process and state reliability: SQLite V2 schema, runtime state, event log,
+  process validation, per-instance locking, stale-state reconciliation, and
+  port collision checks.
+- Daemon and logging reliability: file-based rotating logs, `logs -f`, an
+  interruptible daemon loop, cooperative daemon stop, and NSSM-backed Windows
+  service install/uninstall commands.
+- Health and restart behavior: configurable HTTP/TCP/custom probes, custom
+  health paths, retry/backoff settings, and jittered restart delays.
+- CLI and dashboard UX: standard exit codes, richer `describe` output, recent
+  events in the dashboard, and explicit detached/attached start behavior.
+- Desktop GUI and benchmark workflows: model table management, tag filtering,
+  batch actions, inline runtime args editing, quick benchmark history, prompt
+  selection, `loading` versus `ready` display semantics, and best-effort VRAM
+  reporting.
+- Binary management: versioned `llama-server` packages under `bins/`, a UUID
+  registry in `bins/registry.json`, per-instance binary pinning, and GUI/CLI
+  install/list/info/remove/latest workflows.
+
+Known remaining gaps are operational or follow-up items, not blockers for the
+local V2 command surface: manual Windows Services UI smoke testing still needs
+to be run on a target host with `nssm.exe` in `PATH`; several binary-management
+convenience commands remain listed as future work in `docs/BINARY_MANAGEMENT.md`;
+and GUI column visibility, tag filter, and window geometry are intentionally
+session-local today.
+
 ## Quick Start
 
 ```powershell
@@ -282,7 +312,7 @@ The GUI supports:
 - Managing these llama-server args for new or selected instances:
   `--no-mmproj --reasoning off --flash-attn auto`.
 - Installing a `llama-server.exe` binary from GitHub releases with
-- `win-vulkan-x64` selected by default. The toolbar action is named
+  `win-vulkan-x64` selected by default. The toolbar action is named
   `Install llama-server` because the installer supports CPU, Vulkan, CUDA,
   HIP/Radeon, and SYCL variants.
 - Opening instance config files, log folders, and the project folder.
@@ -359,6 +389,9 @@ benchmark changes were validated with Ruff scoped to touched files.
 
 ### Recent Implementation Reports
 
+- [V2 implementation report](../../reports/20260516_llama-orchestrator-v2-implementation-report.md)
+- [V2 README current-state audit](../../reports/implementation/infra-local/llama-orchestrator/2026/20260516-llama-orchestrator-v2-readme-current-state-audit.md)
+- [Documentation refresh](../../reports/implementation/infra-local/llama-orchestrator/2026/20260516-llama-orchestrator-documentation-refresh.md)
 - [Benchmark GUI improvements](../../reports/implementation/infra-local/llama-orchestrator/2026/20260516-llama-orchestrator-benchmark-gui-improvements.md)
 - [GUI state and VRAM corrections](../../reports/implementation/infra-local/llama-orchestrator/2026/20260516-llama-orchestrator-gui-state-vram-corrections.md)
 - [GUI install label update](../../reports/implementation/infra-local/llama-orchestrator/2026/20260516-llama-orchestrator-gui-install-label.md)
