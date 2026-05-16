@@ -1,6 +1,10 @@
 """Tests for GUI helper behavior."""
 
-from llama_orchestrator.gui import DEFAULT_RUNTIME_ARGS, apply_managed_runtime_args
+from llama_orchestrator.gui import (
+    DEFAULT_RUNTIME_ARGS,
+    apply_managed_runtime_args,
+    parse_tag_string,
+)
 
 
 def test_apply_managed_runtime_args_defaults() -> None:
@@ -28,4 +32,12 @@ def test_apply_managed_runtime_args_replaces_existing_values() -> None:
         "off",
         "--flash-attn",
         "auto",
+    ]
+
+
+def test_parse_tag_string_normalizes_unique_tags() -> None:
+    """Tags can be typed as comma or space separated values."""
+    assert parse_tag_string("Qwen35-family, rx480-test qwen35-family") == [
+        "qwen35-family",
+        "rx480-test",
     ]

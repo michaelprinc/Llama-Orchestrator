@@ -225,6 +225,7 @@ class InstanceConfig(BaseModel):
     gpu: GpuConfig = Field(default_factory=GpuConfig)
     env: dict[str, str] = Field(default_factory=dict, description="Environment variables")
     args: list[str] = Field(default_factory=list, description="Additional CLI arguments")
+    tags: list[str] = Field(default_factory=list, description="User labels for filtering and batch operations")
     healthcheck: HealthcheckConfig = Field(default_factory=HealthcheckConfig)
     restart_policy: RestartPolicy = Field(default_factory=RestartPolicy)
     logs: LogsConfig = Field(default_factory=LogsConfig)
@@ -240,6 +241,26 @@ class InstanceConfig(BaseModel):
                 f"numbers, hyphens, and underscores. Got: {v}"
             )
         return v
+
+    @field_validator("tags")
+    @classmethod
+    def normalize_tags(cls, v: list[str]) -> list[str]:
+        """Normalize tags for stable filtering and serialization."""
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for tag in v:
+            clean = tag.strip().lower()
+            if not clean:
+                continue
+            if not re.match(r"^[a-z0-9][a-z0-9_-]*[a-z0-9]$|^[a-z0-9]$", clean):
+                raise ValueError(
+                    "Tags must start/end with alphanumeric and contain only "
+                    "lowercase letters, numbers, hyphens, and underscores"
+                )
+            if clean not in seen:
+                normalized.append(clean)
+                seen.add(clean)
+        return normalized
     
     def get_env_vars(self) -> dict[str, str]:
         """Get environment variables including GPU settings."""

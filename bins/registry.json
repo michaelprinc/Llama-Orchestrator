@@ -7,7 +7,7 @@
       "variant": "win-vulkan-x64",
       "download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b7572/llama-b7572-bin-win-vulkan-x64.zip",
       "sha256": "077980d5e966a8c43db3c33bdd94adc566ccda3e08ffacdd896f4f39c3e2c19f",
-      "installed_at": "2025-12-29T21:31:36.014485+00:00",
+      "installed_at": "2025-12-29T22:31:36.014485+01:00",
       "path": "a9576b8e-4d9a-4f76-a392-8748632b35ed",
       "size_bytes": 118509327,
       "executables": [
@@ -66,7 +66,7 @@
       "variant": "win-vulkan-x64",
       "download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b9009/llama-b9009-bin-win-vulkan-x64.zip",
       "sha256": "aa502be0e6910726f88de6b2d2d7a61cb2163194c0b6cd1766d22d29b044662a",
-      "installed_at": "2026-05-02T20:30:15.179928+00:00",
+      "installed_at": "2026-05-02T22:30:15.179928+02:00",
       "path": "546a6052-b49e-4940-8ebc-18084fe8aa33",
       "size_bytes": 108628024,
       "executables": [
@@ -127,7 +127,7 @@
       "variant": "win-vulkan-x64",
       "download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b9071/llama-b9071-bin-win-vulkan-x64.zip",
       "sha256": "3747b7984e963a302517a3dd46ed9e33e9d38e3f2052c965cbcb015568ce219a",
-      "installed_at": "2026-05-08T09:34:29.945534+00:00",
+      "installed_at": "2026-05-08T11:34:29.945534+02:00",
       "path": "67b04bdb-8759-4fd6-872c-6311bfade8ce",
       "size_bytes": 108765752,
       "executables": [
@@ -188,7 +188,7 @@
       "variant": "win-vulkan-x64",
       "download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b9085/llama-b9085-bin-win-vulkan-x64.zip",
       "sha256": "10e0ea89163120861d22d53f1980aa4432db8d0e207ce6fefd24fcf283d2d852",
-      "installed_at": "2026-05-09T09:46:07.233683+00:00",
+      "installed_at": "2026-05-09T11:46:07.233683+02:00",
       "path": "bb431363-ee18-4b63-aca5-fbaa34859c63",
       "size_bytes": 108866616,
       "executables": [
@@ -242,7 +242,93 @@
         "commit_sha": "046e2844370208007c116fab448ed4033d77653f",
         "html_url": "https://github.com/ggml-org/llama.cpp/releases/tag/b9085"
       }
+    },
+    {
+      "id": "95a5876a-415e-4749-b103-7d27d1fc2387",
+      "version": "b9174",
+      "variant": "win-vulkan-x64",
+      "download_url": "https://github.com/ggml-org/llama.cpp/releases/download/b9174/llama-b9174-bin-win-vulkan-x64.zip",
+      "sha256": "120b9c822f1c55e7e6f05d77743ebfb53a8c622fa8d34fc57847fdb9f628cb7a",
+      "installed_at": "2026-05-16T09:59:25.95403+02:00",
+      "path": "95a5876a-415e-4749-b103-7d27d1fc2387",
+      "size_bytes": 104699960,
+      "executables": [
+        "ggml-base.dll",
+        "ggml-cpu-alderlake.dll",
+        "ggml-cpu-cannonlake.dll",
+        "ggml-cpu-cascadelake.dll",
+        "ggml-cpu-cooperlake.dll",
+        "ggml-cpu-haswell.dll",
+        "ggml-cpu-icelake.dll",
+        "ggml-cpu-ivybridge.dll",
+        "ggml-cpu-piledriver.dll",
+        "ggml-cpu-sandybridge.dll",
+        "ggml-cpu-sapphirerapids.dll",
+        "ggml-cpu-skylakex.dll",
+        "ggml-cpu-sse42.dll",
+        "ggml-cpu-x64.dll",
+        "ggml-cpu-zen4.dll",
+        "ggml-rpc.dll",
+        "ggml-vulkan.dll",
+        "ggml.dll",
+        "libomp140.x86_64.dll",
+        "llama-batched-bench.exe",
+        "llama-bench.exe",
+        "llama-cli.exe",
+        "llama-common.dll",
+        "llama-completion.exe",
+        "llama-fit-params.exe",
+        "llama-gemma3-cli.exe",
+        "llama-gguf-split.exe",
+        "llama-imatrix.exe",
+        "llama-llava-cli.exe",
+        "llama-minicpmv-cli.exe",
+        "llama-mtmd-cli.exe",
+        "llama-mtmd-debug.exe",
+        "llama-perplexity.exe",
+        "llama-quantize.exe",
+        "llama-qwen2vl-cli.exe",
+        "llama-results.exe",
+        "llama-server.exe",
+        "llama-template-analysis.exe",
+        "llama-tokenize.exe",
+        "llama-tts.exe",
+        "llama.dll",
+        "mtmd.dll",
+        "rpc-server.exe"
+      ],
+      "github_release_info": {
+        "tag_name": "b9174",
+        "published_at": "2026-05-16T02:21:24Z",
+        "commit_sha": "59778f0196a82db32580bb649d5d839355d6d7bf",
+        "html_url": "https://github.com/ggml-org/llama.cpp/releases/tag/b9174"
+      }
+    },
+    {
+      "id": "7f44ef67-3933-4c9a-8c07-d0f3e164df1a",
+      "version": "dflash-029f4f6",
+      "variant": "win-vulkan-x64",
+      "download_url": "https://github.com/destroyor/llama-vulkan-dflash",
+      "sha256": "451c1ec0ae18f5f358cec60b5f1340025ba548750d4bee796cff174f2f157e02",
+      "installed_at": "2026-05-16T14:10:25.2051671Z",
+      "path": "7f44ef67-3933-4c9a-8c07-d0f3e164df1a",
+      "size_bytes": 74412032,
+      "executables": [
+        "ggml-base.dll",
+        "ggml-cpu.dll",
+        "ggml-vulkan.dll",
+        "ggml.dll",
+        "llama-server.exe",
+        "llama.dll",
+        "mtmd.dll"
+      ],
+      "github_release_info": {
+        "tag_name": "source-build",
+        "published_at": null,
+        "commit_sha": "029f4f63847362e87a9bf8873d8ca77481841c39",
+        "html_url": "https://github.com/destroyor/llama-vulkan-dflash"
+      }
     }
   ],
-  "default_binary_id": "bb431363-ee18-4b63-aca5-fbaa34859c63"
+  "default_binary_id": "95a5876a-415e-4749-b103-7d27d1fc2387"
 }

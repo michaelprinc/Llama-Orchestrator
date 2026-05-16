@@ -1,0 +1,72 @@
+{
+  "name": "qwen35_9b_q4km_igpu",
+  "binary": {
+    "binary_id": "7f44ef67-3933-4c9a-8c07-d0f3e164df1a",
+    "version": "dflash-029f4f6",
+    "variant": "win-vulkan-x64",
+    "source_url": "https://github.com/destroyor/llama-vulkan-dflash",
+    "sha256": "451c1ec0ae18f5f358cec60b5f1340025ba548750d4bee796cff174f2f157e02"
+  },
+  "model": {
+    "path": "models/Qwen3.5-9B-Q4_K_M.gguf",
+    "context_size": 8192,
+    "batch_size": 512,
+    "threads": 16
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8044,
+    "timeout": 600,
+    "parallel": 1
+  },
+  "gpu": {
+    "backend": "vulkan",
+    "device_id": 0,
+    "layers": 999
+  },
+  "env": {
+    "GGML_VULKAN_DEVICE": "0"
+  },
+  "args": [
+    "--parallel",
+    "1",
+    "--device",
+    "Vulkan0",
+    "--main-gpu",
+    "0",
+    "--no-mmproj",
+    "--flash-attn",
+    "on"
+  ],
+  "healthcheck": {
+    "type": "http",
+    "path": "/health",
+    "expected_status": [
+      200
+    ],
+    "expected_body": null,
+    "custom_script": null,
+    "interval": 10,
+    "timeout": 5,
+    "retries": 3,
+    "retry_delay": 1.0,
+    "start_period": 120,
+    "backoff_enabled": true,
+    "backoff_base": 1.0,
+    "backoff_max": 60.0,
+    "backoff_jitter": 0.1
+  },
+  "restart_policy": {
+    "enabled": true,
+    "max_retries": 5,
+    "backoff_multiplier": 2.0,
+    "initial_delay": 1.0,
+    "max_delay": 300.0
+  },
+  "logs": {
+    "stdout": "logs/{name}/stdout.log",
+    "stderr": "logs/{name}/stderr.log",
+    "max_size_mb": 100,
+    "rotation": 5
+  }
+}

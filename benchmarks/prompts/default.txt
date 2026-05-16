@@ -1,0 +1,1 @@
+You are benchmarking a local llama.cpp server. Summarize the practical tradeoffs of GPU inference in exactly five concise bullet points.

@@ -7,15 +7,25 @@ management surface works on Windows without adding runtime dependencies.
 
 from __future__ import annotations
 
+import difflib
 import os
 import queue
+import shlex
 import threading
 import time
 import tkinter as tk
 from collections.abc import Callable
 from pathlib import Path
-from tkinter import filedialog, messagebox, scrolledtext, ttk
+from tkinter import filedialog, messagebox, scrolledtext, simpledialog, ttk
 
+from llama_orchestrator.benchmark import (
+    BenchmarkResult,
+    BenchmarkSettings,
+    latest_benchmark_results,
+    load_benchmark_settings,
+    quick_benchmark_instance,
+    save_benchmark_settings,
+)
 from llama_orchestrator.config import (
     BinaryConfig,
     GpuConfig,
@@ -30,17 +40,69 @@ from llama_orchestrator.config import (
 from llama_orchestrator.daemon import get_daemon_status, start_daemon, stop_daemon
 from llama_orchestrator.engine import (
     InstanceStatus,
+    build_command,
+    format_command,
     list_instances,
     restart_instance,
     start_instance,
     stop_instance,
 )
 from llama_orchestrator.health import check_instance_health
+from llama_orchestrator.health.ports import suggest_port_for_instance
 
 DEFAULT_RUNTIME_ARGS = ["--no-mmproj", "--reasoning", "off", "--flash-attn", "auto"]
 MANAGED_VALUE_ARGS = {"--reasoning", "--flash-attn"}
 MANAGED_FLAG_ARGS = {"--no-mmproj"}
 VULKAN_VARIANT = "win-vulkan-x64"
+
+ALL_COLUMNS = (
+    "name",
+    "status",
+    "health",
+    "pid",
+    "port",
+    "backend",
+    "tags",
+    "tps",
+    "latency",
+    "vram",
+    "prompt",
+    "model",
+    "args",
+    "uptime",
+)
+COLUMN_HEADINGS = {
+    "name": "Name",
+    "status": "Status",
+    "health": "Health",
+    "pid": "PID",
+    "port": "Port",
+    "backend": "Backend",
+    "tags": "Tags",
+    "tps": "TPS",
+    "latency": "Latency ms",
+    "vram": "VRAM MB",
+    "prompt": "Prompt file",
+    "model": "Model",
+    "args": "Runtime args",
+    "uptime": "Uptime",
+}
+COLUMN_WIDTHS = {
+    "name": 150,
+    "status": 90,
+    "health": 110,
+    "pid": 70,
+    "port": 70,
+    "backend": 90,
+    "tags": 150,
+    "tps": 80,
+    "latency": 90,
+    "vram": 90,
+    "prompt": 140,
+    "model": 280,
+    "args": 260,
+    "uptime": 90,
+}
 
 
 def apply_managed_runtime_args(
@@ -75,6 +137,40 @@ def apply_managed_runtime_args(
     return cleaned
 
 
+def parse_tag_string(value: str) -> list[str]:
+    """Parse a comma/space separated tag string for config storage."""
+    tags: list[str] = []
+    seen: set[str] = set()
+    for tag in value.replace(",", " ").split():
+        clean = tag.strip().lower()
+        if clean and clean not in seen:
+            tags.append(clean)
+            seen.add(clean)
+    return tags
+
+
+def format_metric(value: float | None, digits: int = 1) -> str:
+    """Format optional numeric benchmark values for the table."""
+    if value is None:
+        return "-"
+    return f"{value:.{digits}f}"
+
+
+def format_benchmark_message(result: BenchmarkResult) -> str:
+    """Format a benchmark result for the activity log."""
+    if result.status != "ok":
+        return (
+            f"Benchmark {result.instance_name} failed using {result.prompt_file}: "
+            f"{result.error or 'unknown error'}"
+        )
+    return (
+        f"Benchmark {result.instance_name} using {result.prompt_file}: "
+        f"{format_metric(result.tokens_per_second)} TPS, "
+        f"{format_metric(result.latency_ms, 0)} ms latency, "
+        f"{format_metric(result.vram_mb, 0)} MB VRAM."
+    )
+
+
 class LlamaOrchestratorGui(tk.Tk):
     """Desktop GUI for managing llama.cpp model instances."""
 
@@ -89,6 +185,9 @@ class LlamaOrchestratorGui(tk.Tk):
         self.project_root = get_project_root()
         self._messages: queue.Queue[str] = queue.Queue()
         self._selected_name: str | None = None
+        self.benchmark_settings = load_benchmark_settings(self.project_root)
+        self.tag_filter_var = tk.StringVar(value="All tags")
+        self.prompt_var = tk.StringVar(value=self.benchmark_settings.prompt_file.name)
 
         self._build_widgets()
         self._schedule_message_pump()
@@ -102,7 +201,7 @@ class LlamaOrchestratorGui(tk.Tk):
 
         toolbar = ttk.Frame(self, padding=(10, 10, 10, 4))
         toolbar.grid(row=0, column=0, sticky="ew")
-        toolbar.columnconfigure(6, weight=1)
+        toolbar.columnconfigure(16, weight=1)
 
         ttk.Button(toolbar, text="Refresh", command=self.refresh).grid(row=0, column=0, padx=(0, 6))
         ttk.Button(toolbar, text="Add model", command=self._open_add_dialog).grid(row=0, column=1, padx=6)
@@ -113,10 +212,46 @@ class LlamaOrchestratorGui(tk.Tk):
         ttk.Button(toolbar, text="Restart", command=lambda: self._run_selected("restart")).grid(row=0, column=6, padx=6)
         ttk.Button(toolbar, text="Health", command=lambda: self._run_selected("health")).grid(row=0, column=7, padx=6)
 
+        columns_button = ttk.Menubutton(toolbar, text="Columns")
+        columns_menu = tk.Menu(columns_button, tearoff=False)
+        columns_button["menu"] = columns_menu
+        self._column_vars: dict[str, tk.BooleanVar] = {}
+        for column in ALL_COLUMNS:
+            var = tk.BooleanVar(value=True)
+            self._column_vars[column] = var
+            columns_menu.add_checkbutton(
+                label=COLUMN_HEADINGS[column],
+                variable=var,
+                command=self._apply_visible_columns,
+            )
+        columns_button.grid(row=0, column=8, padx=6)
+
+        batch_button = ttk.Menubutton(toolbar, text="Batch")
+        batch_menu = tk.Menu(batch_button, tearoff=False)
+        batch_button["menu"] = batch_menu
+        batch_menu.add_command(label="Start visible", command=lambda: self._run_batch("start"))
+        batch_menu.add_command(label="Stop visible", command=lambda: self._run_batch("stop"))
+        batch_menu.add_command(label="Restart visible", command=lambda: self._run_batch("restart"))
+        batch_button.grid(row=0, column=9, padx=6)
+
+        ttk.Label(toolbar, text="Tag").grid(row=0, column=10, sticky="e", padx=(12, 4))
+        self.tag_filter = ttk.Combobox(
+            toolbar,
+            textvariable=self.tag_filter_var,
+            values=("All tags",),
+            state="readonly",
+            width=16,
+        )
+        self.tag_filter.grid(row=0, column=11, sticky="w", padx=(0, 6))
+        self.tag_filter.bind("<<ComboboxSelected>>", lambda _event: self.refresh())
+
+        ttk.Button(toolbar, text="Prompt", command=self._select_prompt_file).grid(row=0, column=12, padx=6)
+        ttk.Label(toolbar, textvariable=self.prompt_var).grid(row=0, column=13, sticky="w", padx=(0, 6))
+
         self.daemon_var = tk.StringVar(value="Daemon: unknown")
-        ttk.Label(toolbar, textvariable=self.daemon_var).grid(row=0, column=8, sticky="e", padx=(10, 6))
-        ttk.Button(toolbar, text="Start daemon", command=self._start_daemon).grid(row=0, column=9, padx=6)
-        ttk.Button(toolbar, text="Stop daemon", command=self._stop_daemon).grid(row=0, column=10, padx=(6, 0))
+        ttk.Label(toolbar, textvariable=self.daemon_var).grid(row=0, column=16, sticky="e", padx=(10, 6))
+        ttk.Button(toolbar, text="Start daemon", command=self._start_daemon).grid(row=0, column=17, padx=6)
+        ttk.Button(toolbar, text="Stop daemon", command=self._stop_daemon).grid(row=0, column=18, padx=(6, 0))
 
         main = ttk.PanedWindow(self, orient=tk.VERTICAL)
         main.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
@@ -126,46 +261,37 @@ class LlamaOrchestratorGui(tk.Tk):
         table_frame.rowconfigure(0, weight=1)
         main.add(table_frame, weight=4)
 
-        columns = ("name", "status", "health", "pid", "port", "backend", "model", "args", "uptime")
-        self.tree = ttk.Treeview(table_frame, columns=columns, show="headings", selectmode="browse")
-        headings = {
-            "name": "Name",
-            "status": "Status",
-            "health": "Health",
-            "pid": "PID",
-            "port": "Port",
-            "backend": "Backend",
-            "model": "Model",
-            "args": "Runtime args",
-            "uptime": "Uptime",
-        }
-        widths = {
-            "name": 150,
-            "status": 100,
-            "health": 120,
-            "pid": 80,
-            "port": 80,
-            "backend": 100,
-            "model": 300,
-            "args": 260,
-            "uptime": 100,
-        }
-        for column in columns:
-            self.tree.heading(column, text=headings[column])
-            self.tree.column(column, width=widths[column], anchor=tk.W)
+        self.tree = ttk.Treeview(table_frame, columns=ALL_COLUMNS, show="headings", selectmode="extended")
+        for column in ALL_COLUMNS:
+            self.tree.heading(column, text=COLUMN_HEADINGS[column])
+            self.tree.column(column, width=COLUMN_WIDTHS[column], anchor=tk.W)
 
         y_scroll = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=y_scroll.set)
         self.tree.grid(row=0, column=0, sticky="nsew")
         y_scroll.grid(row=0, column=1, sticky="ns")
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
-        self.tree.bind("<Double-1>", lambda _event: self._open_config())
+        self.tree.bind("<Double-1>", self._on_tree_double_click)
+        self.tree.bind("<Button-3>", self._show_context_menu)
+        self._apply_visible_columns()
+
+        self.context_menu = tk.Menu(self, tearoff=False)
+        self.context_menu.add_command(label="Quick benchmark", command=self._run_benchmark_selected)
+        self.context_menu.add_command(label="Clone row", command=self._clone_selected)
+        self.context_menu.add_command(label="Copy as CLI command", command=self._copy_cli_command)
+        self.context_menu.add_separator()
+        self.context_menu.add_command(label="Open config", command=self._open_config)
 
         detail_bar = ttk.Frame(table_frame, padding=(0, 8, 0, 0))
         detail_bar.grid(row=1, column=0, sticky="ew")
+        ttk.Button(detail_bar, text="Quick benchmark", command=self._run_benchmark_selected).pack(side=tk.LEFT)
+        ttk.Button(detail_bar, text="Clone row", command=self._clone_selected).pack(side=tk.LEFT, padx=6)
+        ttk.Button(detail_bar, text="Diff selected", command=self._diff_selected).pack(side=tk.LEFT)
+        ttk.Button(detail_bar, text="Copy CLI", command=self._copy_cli_command).pack(side=tk.LEFT, padx=6)
         ttk.Button(detail_bar, text="Open config", command=self._open_config).pack(side=tk.LEFT)
         ttk.Button(detail_bar, text="Open logs", command=self._open_logs).pack(side=tk.LEFT, padx=6)
         ttk.Button(detail_bar, text="Open project", command=self._open_project).pack(side=tk.LEFT, padx=6)
+        ttk.Button(detail_bar, text="Open prompt", command=self._open_prompt_file).pack(side=tk.LEFT)
 
         log_frame = ttk.Frame(main)
         log_frame.columnconfigure(0, weight=1)
@@ -179,6 +305,13 @@ class LlamaOrchestratorGui(tk.Tk):
     def _auto_refresh(self) -> None:
         self.refresh()
         self.after(self.refresh_interval_ms, self._auto_refresh)
+
+    def _apply_visible_columns(self) -> None:
+        visible = [column for column in ALL_COLUMNS if self._column_vars[column].get()]
+        if not visible:
+            self._column_vars["name"].set(True)
+            visible = ["name"]
+        self.tree["displaycolumns"] = visible
 
     def _schedule_message_pump(self) -> None:
         self._pump_messages()
@@ -213,6 +346,10 @@ class LlamaOrchestratorGui(tk.Tk):
         states = list_instances()
         config_names = {name for name, _ in discover_instances()}
         all_names = sorted(set(states) | config_names)
+        active_tag = self.tag_filter_var.get()
+        all_tags: set[str] = set()
+        visible_names: set[str] = set()
+        latest_results = latest_benchmark_results()
 
         for name in all_names:
             state = states.get(name)
@@ -220,27 +357,71 @@ class LlamaOrchestratorGui(tk.Tk):
                 config = get_instance_config(name)
                 port = str(config.server.port)
                 backend = config.gpu.backend
+                tags = ", ".join(config.tags) if config.tags else "-"
+                all_tags.update(config.tags)
                 model = str(config.model.path)
                 runtime_args = " ".join(config.args) if config.args else "-"
             except Exception:
                 port = "-"
                 backend = "-"
+                tags = "-"
                 model = "-"
                 runtime_args = "-"
+
+            if active_tag != "All tags" and active_tag not in {tag.strip() for tag in tags.split(",")}:
+                continue
+            visible_names.add(name)
 
             status = state.status.value if state else InstanceStatus.STOPPED.value
             health = state.health.value if state else "unknown"
             pid = str(state.pid) if state and state.pid else "-"
             uptime = state.uptime_str if state else "-"
+            benchmark = latest_results.get(name)
+            if benchmark and benchmark.status == "ok":
+                tps = format_metric(benchmark.tokens_per_second)
+                latency = format_metric(benchmark.latency_ms, 0)
+                vram = format_metric(benchmark.vram_mb, 0)
+                prompt = benchmark.prompt_file
+            elif benchmark:
+                tps = "failed"
+                latency = "-"
+                vram = format_metric(benchmark.vram_mb, 0)
+                prompt = benchmark.prompt_file
+            else:
+                tps = "-"
+                latency = "-"
+                vram = "-"
+                prompt = "-"
 
             self.tree.insert(
                 "",
                 tk.END,
                 iid=name,
-                values=(name, status, health, pid, port, backend, model, runtime_args, uptime),
+                values=(
+                    name,
+                    status,
+                    health,
+                    pid,
+                    port,
+                    backend,
+                    tags,
+                    tps,
+                    latency,
+                    vram,
+                    prompt,
+                    model,
+                    runtime_args,
+                    uptime,
+                ),
             )
 
-        if selected and selected in all_names:
+        filter_values = ("All tags", *sorted(all_tags))
+        self.tag_filter.configure(values=filter_values)
+        if self.tag_filter_var.get() not in filter_values:
+            self.tag_filter_var.set("All tags")
+        self.prompt_var.set(self.benchmark_settings.prompt_file.name)
+
+        if selected and selected in visible_names:
             self.tree.selection_set(selected)
             self.tree.focus(selected)
 
@@ -254,12 +435,47 @@ class LlamaOrchestratorGui(tk.Tk):
         selection = self.tree.selection()
         self._selected_name = selection[0] if selection else None
 
+    def _tree_column_from_event(self, event: tk.Event) -> str | None:
+        column_id = self.tree.identify_column(event.x)
+        if not column_id.startswith("#"):
+            return None
+        try:
+            display_index = int(column_id[1:]) - 1
+        except ValueError:
+            return None
+        display_columns = self.tree["displaycolumns"]
+        columns = list(ALL_COLUMNS) if display_columns == "#all" else list(display_columns)
+        if display_index < 0 or display_index >= len(columns):
+            return None
+        return columns[display_index]
+
+    def _on_tree_double_click(self, event: tk.Event) -> None:
+        item = self.tree.identify_row(event.y)
+        if not item:
+            return
+        self.tree.selection_set(item)
+        self._selected_name = item
+        if self._tree_column_from_event(event) == "args":
+            self._edit_args_inline(item, event)
+            return
+        self._open_config()
+
+    def _show_context_menu(self, event: tk.Event) -> None:
+        item = self.tree.identify_row(event.y)
+        if item and item not in self.tree.selection():
+            self.tree.selection_set(item)
+            self._selected_name = item
+        self.context_menu.tk_popup(event.x_root, event.y_root)
+
     def _selected_instance(self) -> str | None:
         selection = self.tree.selection()
         if not selection:
             messagebox.showinfo("No model selected", "Select a model instance first.")
             return None
         return selection[0]
+
+    def _selected_instances(self) -> tuple[str, ...]:
+        return tuple(str(item) for item in self.tree.selection())
 
     def _run_background(self, label: str, action: Callable[[], str | None]) -> None:
         def worker() -> None:
@@ -296,6 +512,241 @@ class LlamaOrchestratorGui(tk.Tk):
             raise ValueError(f"Unknown action: {action_name}")
 
         self._run_background(f"{action_name} {name}", action)
+
+    def _run_batch(self, action_name: str) -> None:
+        names = tuple(str(item) for item in self.tree.get_children())
+        if not names:
+            messagebox.showinfo("No visible models", "No visible model instances match the current filter.")
+            return
+
+        def action() -> str:
+            completed: list[str] = []
+            for name in names:
+                if action_name == "start":
+                    start_instance(name)
+                elif action_name == "stop":
+                    stop_instance(name)
+                elif action_name == "restart":
+                    restart_instance(name)
+                else:
+                    raise ValueError(f"Unknown batch action: {action_name}")
+                completed.append(name)
+            return f"{action_name.capitalize()}ed {len(completed)} visible instance(s)."
+
+        label = f"{action_name} {len(names)} visible instance(s)"
+        self._run_background(label, action)
+
+    def _run_benchmark_selected(self) -> None:
+        name = self._selected_instance()
+        if not name:
+            return
+
+        def action() -> str:
+            config = get_instance_config(name)
+            result = quick_benchmark_instance(config, self.benchmark_settings)
+            return format_benchmark_message(result)
+
+        self._run_background(f"benchmark {name}", action)
+
+    def _select_prompt_file(self) -> None:
+        path = filedialog.askopenfilename(
+            title="Select benchmark prompt",
+            initialdir=str(self.benchmark_settings.prompt_file.parent),
+            filetypes=(("Text and Markdown", "*.txt *.md"), ("All files", "*.*")),
+        )
+        if not path:
+            return
+        self.benchmark_settings = BenchmarkSettings(
+            prompt_file=Path(path),
+            max_tokens=self.benchmark_settings.max_tokens,
+        )
+        save_benchmark_settings(self.benchmark_settings, self.project_root)
+        self.prompt_var.set(self.benchmark_settings.prompt_file.name)
+        self._post_message(f"Benchmark prompt set to {self.benchmark_settings.prompt_file.name}.")
+
+    def _open_prompt_file(self) -> None:
+        self._open_path(self.benchmark_settings.prompt_file)
+
+    def _edit_args_inline(self, name: str, event: tk.Event) -> None:
+        column = "args"
+        display_columns = self.tree["displaycolumns"]
+        columns = list(ALL_COLUMNS) if display_columns == "#all" else list(display_columns)
+        if column not in columns:
+            return
+        column_id = f"#{columns.index(column) + 1}"
+        bbox = self.tree.bbox(name, column_id)
+        if not bbox:
+            return
+        x, y, width, height = bbox
+        current = self.tree.set(name, column)
+        if current == "-":
+            current = ""
+
+        editor = ttk.Entry(self.tree)
+        editor.insert(0, current)
+        editor.select_range(0, tk.END)
+        editor.place(x=x, y=y, width=width, height=height)
+        editor.focus_set()
+        closed = {"value": False}
+
+        def close(save: bool) -> None:
+            if closed["value"]:
+                return
+            closed["value"] = True
+            value = editor.get()
+            editor.destroy()
+            if save:
+                self._save_runtime_args(name, value)
+
+        editor.bind("<Return>", lambda _event: close(True))
+        editor.bind("<Escape>", lambda _event: close(False))
+        editor.bind("<FocusOut>", lambda _event: close(True))
+
+    def _save_runtime_args(self, name: str, value: str) -> None:
+        try:
+            config = get_instance_config(name)
+            config.args = shlex.split(value) if value.strip() else []
+            save_config(config)
+            state = list_instances().get(name)
+        except Exception as exc:
+            messagebox.showerror("Save runtime args failed", str(exc))
+            self.refresh()
+            return
+
+        if state and state.status == InstanceStatus.RUNNING:
+            self._run_background(
+                f"restart {name}",
+                lambda: f"Restarted {name} after runtime args edit (PID {restart_instance(name).pid}).",
+            )
+        else:
+            self._post_message(f"Saved runtime args for {name}.")
+            self.refresh()
+
+    def _clone_selected(self) -> None:
+        source = self._selected_instance()
+        if not source:
+            return
+        try:
+            config = get_instance_config(source)
+            new_name = self._next_clone_name(source)
+        except Exception as exc:
+            messagebox.showerror("Clone failed", str(exc))
+            return
+
+        requested = simpledialog.askstring(
+            "Clone row",
+            "New instance name:",
+            initialvalue=new_name,
+            parent=self,
+        )
+        if not requested:
+            return
+        new_name = requested.strip().lower()
+        target = self.project_root / "instances" / new_name / "config.json"
+        if target.exists():
+            messagebox.showerror("Clone failed", f"Instance '{new_name}' already exists.")
+            return
+
+        try:
+            preferred_port = min(config.server.port + 1, 65535)
+            suggested_port = suggest_port_for_instance(
+                new_name,
+                preferred_port=preferred_port,
+                port_range=(preferred_port, 65535),
+                host=config.server.host,
+            )
+            clone = config.model_copy(deep=True, update={"name": new_name})
+            clone.server.port = suggested_port or preferred_port
+            save_config(clone)
+        except Exception as exc:
+            messagebox.showerror("Clone failed", str(exc))
+            return
+
+        self._post_message(f"Cloned {source} to {new_name} on port {clone.server.port}.")
+        self.refresh()
+
+    def _next_clone_name(self, source: str) -> str:
+        existing = {name for name, _ in discover_instances()}
+        base = f"{source}_clone"
+        if base not in existing:
+            return base
+        index = 2
+        while f"{base}{index}" in existing:
+            index += 1
+        return f"{base}{index}"
+
+    def _diff_selected(self) -> None:
+        selected = self._selected_instances()
+        if len(selected) != 2:
+            messagebox.showinfo("Select two rows", "Select exactly two model rows for config diff.")
+            return
+        try:
+            left = get_instance_config(selected[0])
+            right = get_instance_config(selected[1])
+        except Exception as exc:
+            messagebox.showerror("Diff failed", str(exc))
+            return
+
+        left_args = [*left.args]
+        right_args = [*right.args]
+        diff = "\n".join(
+            difflib.unified_diff(
+                [arg + "\n" for arg in left_args],
+                [arg + "\n" for arg in right_args],
+                fromfile=left.name,
+                tofile=right.name,
+                lineterm="",
+            )
+        )
+        self._open_diff_window(left.name, right.name, left_args, right_args, diff or "Runtime args are identical.")
+
+    def _open_diff_window(
+        self,
+        left_name: str,
+        right_name: str,
+        left_args: list[str],
+        right_args: list[str],
+        diff: str,
+    ) -> None:
+        window = tk.Toplevel(self)
+        window.title(f"Runtime args diff: {left_name} vs {right_name}")
+        window.geometry("900x520")
+        window.columnconfigure(0, weight=1)
+        window.rowconfigure(0, weight=1)
+
+        panes = ttk.PanedWindow(window, orient=tk.VERTICAL)
+        panes.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
+
+        side_by_side = ttk.PanedWindow(panes, orient=tk.HORIZONTAL)
+        panes.add(side_by_side, weight=2)
+        for label, args in ((left_name, left_args), (right_name, right_args)):
+            frame = ttk.Frame(side_by_side)
+            frame.columnconfigure(0, weight=1)
+            frame.rowconfigure(1, weight=1)
+            ttk.Label(frame, text=label).grid(row=0, column=0, sticky="w")
+            text = scrolledtext.ScrolledText(frame, height=10, wrap=tk.NONE)
+            text.grid(row=1, column=0, sticky="nsew")
+            text.insert(tk.END, "\n".join(args) or "(no runtime args)")
+            text.configure(state=tk.DISABLED)
+            side_by_side.add(frame, weight=1)
+
+        diff_text = scrolledtext.ScrolledText(panes, height=10, wrap=tk.NONE)
+        diff_text.insert(tk.END, diff)
+        diff_text.configure(state=tk.DISABLED)
+        panes.add(diff_text, weight=1)
+
+    def _copy_cli_command(self) -> None:
+        name = self._selected_instance()
+        if not name:
+            return
+        try:
+            command = format_command(build_command(get_instance_config(name)))
+        except Exception as exc:
+            messagebox.showerror("Copy CLI failed", str(exc))
+            return
+        self.clipboard_clear()
+        self.clipboard_append(command)
+        self._post_message(f"Copied llama.cpp CLI command for {name}.")
 
     def _start_daemon(self) -> None:
         def action() -> str:
@@ -441,6 +892,7 @@ class AddModelDialog(tk.Toplevel):
         self.layers_var = tk.StringVar(value="0")
         self.context_var = tk.StringVar(value="4096")
         self.threads_var = tk.StringVar(value="8")
+        self.tags_var = tk.StringVar()
         self.no_mmproj_var = tk.BooleanVar(value=True)
         self.reasoning_var = tk.StringVar(value="off")
         self.flash_attn_var = tk.StringVar(value="auto")
@@ -472,12 +924,13 @@ class AddModelDialog(tk.Toplevel):
         self._entry(frame, "GPU layers", self.layers_var, 5)
         self._entry(frame, "Context", self.context_var, 6)
         self._entry(frame, "Threads", self.threads_var, 7)
+        self._entry(frame, "Tags", self.tags_var, 8)
 
         ttk.Checkbutton(
             frame,
             text="--no-mmproj",
             variable=self.no_mmproj_var,
-        ).grid(row=8, column=1, sticky="w", pady=4)
+        ).grid(row=9, column=1, sticky="w", pady=4)
 
         reasoning = ttk.Combobox(
             frame,
@@ -485,8 +938,8 @@ class AddModelDialog(tk.Toplevel):
             values=("off", "auto"),
             width=18,
         )
-        ttk.Label(frame, text="--reasoning").grid(row=9, column=0, sticky="w", pady=4)
-        reasoning.grid(row=9, column=1, sticky="w", pady=4)
+        ttk.Label(frame, text="--reasoning").grid(row=10, column=0, sticky="w", pady=4)
+        reasoning.grid(row=10, column=1, sticky="w", pady=4)
 
         flash_attn = ttk.Combobox(
             frame,
@@ -494,11 +947,11 @@ class AddModelDialog(tk.Toplevel):
             values=("auto", "on", "off"),
             width=18,
         )
-        ttk.Label(frame, text="--flash-attn").grid(row=10, column=0, sticky="w", pady=4)
-        flash_attn.grid(row=10, column=1, sticky="w", pady=4)
+        ttk.Label(frame, text="--flash-attn").grid(row=11, column=0, sticky="w", pady=4)
+        flash_attn.grid(row=11, column=1, sticky="w", pady=4)
 
         buttons = ttk.Frame(frame)
-        buttons.grid(row=11, column=0, columnspan=3, sticky="e", pady=(12, 0))
+        buttons.grid(row=12, column=0, columnspan=3, sticky="e", pady=(12, 0))
         ttk.Button(buttons, text="Cancel", command=self.destroy).pack(side=tk.RIGHT)
         ttk.Button(buttons, text="Save", command=self._save).pack(side=tk.RIGHT, padx=(0, 8))
 
@@ -547,6 +1000,7 @@ class AddModelDialog(tk.Toplevel):
                     reasoning=self.reasoning_var.get().strip(),
                     flash_attn=self.flash_attn_var.get().strip(),
                 ),
+                tags=parse_tag_string(self.tags_var.get()),
             )
             target = get_project_root() / "instances" / config.name / "config.json"
             if target.exists():

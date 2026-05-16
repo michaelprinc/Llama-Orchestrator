@@ -183,6 +183,20 @@ def start_instance(name: str, wait_for_ready: bool = True) -> InstanceState:
         state = InstanceState(name=name)
     
     # Build command and environment
+    from llama_orchestrator.health.ports import validate_port_for_instance
+
+    port_valid, port_message = validate_port_for_instance(
+        config.server.port,
+        name,
+        config.server.host,
+    )
+    if not port_valid:
+        state.status = InstanceStatus.ERROR
+        state.health = HealthStatus.ERROR
+        state.error_message = port_message
+        save_state(state)
+        raise ProcessError(name, port_message)
+
     cmd = build_command(config)
     env = build_env(config)
     

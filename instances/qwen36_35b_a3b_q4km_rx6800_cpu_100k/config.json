@@ -1,0 +1,80 @@
+{
+  "name": "qwen36_35b_a3b_q4km_rx6800_cpu_100k",
+  "binary": {
+    "binary_id": "95a5876a-415e-4749-b103-7d27d1fc2387",
+    "version": "b9174",
+    "variant": "win-vulkan-x64",
+    "source_url": "https://github.com/ggml-org/llama.cpp/releases/download/b9174/llama-b9174-bin-win-vulkan-x64.zip",
+    "sha256": "120b9c822f1c55e7e6f05d77743ebfb53a8c622fa8d34fc57847fdb9f628cb7a"
+  },
+  "model": {
+    "path": "models/Qwen3.6-35B-A3B-Q4_K_M.gguf",
+    "context_size": 100000,
+    "batch_size": 512,
+    "threads": 16
+  },
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8030,
+    "timeout": 600,
+    "parallel": 1
+  },
+  "gpu": {
+    "backend": "vulkan",
+    "device_id": 1,
+    "layers": 32
+  },
+  "env": {
+    "GGML_VULKAN_DEVICE": "1"
+  },
+  "args": [
+    "--parallel",
+    "1",
+    "--device",
+    "Vulkan1",
+    "--split-mode",
+    "none",
+    "--no-mmap",
+    "--cache-type-k",
+    "q4_0",
+    "--cache-type-v",
+    "q4_0",
+    "--no-mmproj",
+    "--jinja",
+    "--reasoning",
+    "on",
+    "--flash-attn",
+    "on"
+  ],
+  "healthcheck": {
+    "type": "http",
+    "path": "/health",
+    "expected_status": [
+      200
+    ],
+    "expected_body": null,
+    "custom_script": null,
+    "interval": 10,
+    "timeout": 5,
+    "retries": 3,
+    "retry_delay": 1.0,
+    "start_period": 420,
+    "backoff_enabled": true,
+    "backoff_base": 1.0,
+    "backoff_max": 60.0,
+    "backoff_jitter": 0.1
+  },
+  "restart_policy": {
+    "enabled": false,
+    "max_retries": 0,
+    "backoff_multiplier": 2.0,
+    "initial_delay": 1.0,
+    "max_delay": 300.0
+  },
+  "logs": {
+    "stdout": "logs/{name}/stdout.log",
+    "stderr": "logs/{name}/stderr.log",
+    "max_size_mb": 100,
+    "rotation": 5
+  }
+}

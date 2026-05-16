@@ -9,7 +9,7 @@
   },
   "model": {
     "path": "models/Qwen3.5-2B.q4_k_m.gguf",
-    "context_size": 8192,
+    "context_size": 65536,
     "batch_size": 128,
     "threads": 16
   },
