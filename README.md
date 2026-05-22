@@ -341,16 +341,26 @@ window geometry reset on GUI launch.
 The default benchmark prompt lives at `benchmarks/prompts/default.txt`.
 Benchmark settings persist to `state/benchmark_settings.json`; benchmark
 attempts append to `state/benchmark_history.sqlite` with prompt file, prompt
-SHA256, output token count, TPS, latency, VRAM MB, config hash, status, and
-error text.
+SHA256, output token count, TPS, latency, dedicated VRAM MB, shared RAM MB,
+total sampled GPU memory MB, config hash, status, and error text.
 
 `Quick benchmark` requires the selected instance to expose a live llama.cpp
-`/completion` endpoint. VRAM is best-effort: vendor CLI tools
-(`nvidia-smi`, `amd-smi`, `rocm-smi`) are sampled first, then the benchmark
+`/completion` endpoint. GPU memory reporting is best-effort and prefers
+process-scoped Windows GPU counters when available so the GUI can show total
+sampled GPU memory plus any shared RAM used by the benchmarked process. If
+shared RAM is non-zero, the GUI warns that inference may be slower.
+
+If process-scoped counters are unavailable, vendor CLI tools (`nvidia-smi`,
+`amd-smi`, `rocm-smi`) are sampled for dedicated VRAM only, then the benchmark
 falls back to parsing the instance `stderr.log`. The fallback prioritizes
 logged Vulkan model buffer size and can estimate `total - free` for the
-configured device. This depends on llama.cpp log format stability, so missing
-VRAM data is reported as `-`.
+configured device. Shared RAM is left unknown in these fallback paths rather
+than guessed, so missing split memory data is reported neutrally.
+
+Historical benchmark rows that only stored `vram_mb` remain readable. The GUI
+derives total memory from the legacy value and omits the shared RAM warning
+unless shared usage was positively observed.
+
 
 ## Development
 

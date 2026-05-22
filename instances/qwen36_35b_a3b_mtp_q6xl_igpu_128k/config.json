@@ -1,0 +1,102 @@
+{
+    "name": "qwen36_35b_a3b_mtp_q6xl_igpu_128k",
+    "binary": {
+        "binary_id": "84d1f8f0-4d6b-49c1-91b5-123a3ab094bd",
+        "version": "b9222",
+        "variant": "win-vulkan-x64",
+        "source_url": "https://github.com/ggml-org/llama.cpp/releases/download/b9222/llama-b9222-bin-win-vulkan-x64.zip",
+        "sha256": "71d896955c0ae3576f6fd147f4ca197aa6a839ed7693651c14fe74014cef954e"
+    },
+    "model": {
+        "path": "models/Qwen3.6-35B-A3B-MTP-UD-Q6_K_XL.gguf",
+        "context_size": 128000,
+        "batch_size": 512,
+        "threads": 4
+    },
+    "server": {
+        "host": "127.0.0.1",
+        "port": 8053,
+        "timeout": 900,
+        "parallel": 1
+    },
+    "gpu": {
+        "backend": "vulkan",
+        "device_id": 0,
+        "layers": 999
+    },
+    "env": {
+        "GGML_VULKAN_DEVICE": "0"
+    },
+    "args": [
+        "--parallel",
+        "4",
+        "--device",
+        "Vulkan0",
+        "--main-gpu",
+        "0",
+        "--split-mode",
+        "none",
+        "--no-mmap",
+        "--cache-type-k",
+        "q8_0",
+        "--cache-type-v",
+        "q8_0",
+        "--no-mmproj",
+        "--jinja",
+        "--reasoning",
+        "on",
+        "--flash-attn",
+        "on",
+        "--ubatch-size",
+        "256",
+        "--spec-type",
+        "draft-mtp",
+        "--spec-draft-n-max",
+        "2",
+        "--spec-draft-n-min",
+        "1"
+    ],
+    "tags": [
+        "qwen36",
+        "35b",
+        "a3b",
+        "mtp",
+        "q6xl",
+        "igpu",
+        "vega11",
+        "vulkan",
+        "128k",
+        "b9222"
+    ],
+    "healthcheck": {
+        "type": "http",
+        "path": "/health",
+        "expected_status": [
+            200
+        ],
+        "expected_body": null,
+        "custom_script": null,
+        "interval": 10,
+        "timeout": 5,
+        "retries": 3,
+        "retry_delay": 1.0,
+        "start_period": 600,
+        "backoff_enabled": true,
+        "backoff_base": 1.0,
+        "backoff_max": 60.0,
+        "backoff_jitter": 0.1
+    },
+    "restart_policy": {
+        "enabled": false,
+        "max_retries": 0,
+        "backoff_multiplier": 2.0,
+        "initial_delay": 1.0,
+        "max_delay": 300.0
+    },
+    "logs": {
+        "stdout": "logs/{name}/stdout.log",
+        "stderr": "logs/{name}/stderr.log",
+        "max_size_mb": 100,
+        "rotation": 5
+    }
+}

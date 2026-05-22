@@ -2,14 +2,19 @@
 
 from unittest.mock import patch
 
+from llama_orchestrator.benchmark import BenchmarkResult
 from llama_orchestrator.engine.state import HealthStatus, InstanceState, InstanceStatus
 from llama_orchestrator.gui import (
+    COLUMN_WIDTHS,
     DEFAULT_RUNTIME_ARGS,
     EDIT_BENCHMARK_PROMPT_LABEL,
     INSTALL_LLAMA_SERVER_LABEL,
     VULKAN_BINARY_MISSING_MESSAGE,
     apply_managed_runtime_args,
+    benchmark_shared_ram_warning,
     derive_display_status_and_health,
+    format_benchmark_memory,
+    format_benchmark_message,
     parse_tag_string,
     persist_instance_health,
 )
@@ -109,3 +114,56 @@ def test_install_binary_gui_copy_uses_llama_server_label() -> None:
 def test_gui_uses_explicit_benchmark_prompt_edit_label() -> None:
     """The benchmark prompt control should describe the edit action clearly."""
     assert EDIT_BENCHMARK_PROMPT_LABEL == "Edit Benchmark Prompt"
+
+
+def test_format_benchmark_memory_includes_total_and_shared_ram_warning() -> None:
+    """GUI memory display should surface total usage and shared RAM slowdown context."""
+    result = BenchmarkResult(
+        instance_name="demo",
+        timestamp="2026-05-19T12:00:00+0000",
+        config_hash="cfg",
+        prompt_file="default.txt",
+        prompt_sha256="sha",
+        prompt_chars=10,
+        output_tokens=20,
+        tokens_per_second=12.0,
+        latency_ms=80.0,
+        elapsed_ms=1400.0,
+        vram_mb=16261.3,
+        status="ok",
+        dedicated_vram_mb=16261.3,
+        shared_ram_mb=175.2,
+        total_gpu_memory_mb=16436.5,
+    )
+
+    assert format_benchmark_memory(result) == "16436 total (VRAM 16261, RAM 175) slow"
+    assert benchmark_shared_ram_warning(result) == "Shared RAM in use; inference may be slower."
+    assert "Shared RAM in use; inference may be slower." in format_benchmark_message(result)
+
+
+def test_format_benchmark_memory_keeps_legacy_vram_rows_readable() -> None:
+    """Historical rows with only vram_mb should still render without split values."""
+    result = BenchmarkResult(
+        instance_name="legacy",
+        timestamp="2026-05-19T12:00:00+0000",
+        config_hash="cfg",
+        prompt_file="default.txt",
+        prompt_sha256="sha",
+        prompt_chars=10,
+        output_tokens=None,
+        tokens_per_second=None,
+        latency_ms=None,
+        elapsed_ms=None,
+        vram_mb=4861.28,
+        status="failed",
+        error="benchmark failed",
+    )
+
+    assert format_benchmark_memory(result) == "4861 total (VRAM 4861)"
+    assert benchmark_shared_ram_warning(result) == ""
+    assert "Memory: 4861 total (VRAM 4861)." in format_benchmark_message(result)
+
+
+def test_memory_column_width_matches_expanded_display_text() -> None:
+    """The memory column should be wide enough for total/shared benchmark strings."""
+    assert COLUMN_WIDTHS["vram"] >= 220

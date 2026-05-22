@@ -21,6 +21,7 @@ import httpx
 
 from llama_orchestrator.config import InstanceConfig, get_project_root, get_state_dir
 from llama_orchestrator.engine.process import get_log_files
+from llama_orchestrator.engine.validator import validate_process
 
 DEFAULT_PROMPT_TEXT = (
     "You are benchmarking a local llama.cpp server. Summarize the practical "
@@ -53,7 +54,43 @@ class BenchmarkResult:
     elapsed_ms: float | None
     vram_mb: float | None
     status: str
+    dedicated_vram_mb: float | None = None
+    shared_ram_mb: float | None = None
+    total_gpu_memory_mb: float | None = None
     error: str | None = None
+
+
+@dataclass(frozen=True)
+class GpuMemorySample:
+    """Best-effort GPU memory split for one benchmarked instance."""
+
+    dedicated_vram_mb: float | None
+    shared_ram_mb: float | None
+    total_gpu_memory_mb: float | None
+
+
+def get_validated_benchmark_pid(instance_name: str) -> int | None:
+    """Return a validated llama-server PID for process-scoped memory sampling."""
+    validation = validate_process(instance_name)
+    if not validation.is_valid():
+        return None
+    return validation.actual_pid or validation.expected_pid
+
+
+def _normalize_gpu_memory_sample(
+    dedicated_vram_mb: float | None,
+    shared_ram_mb: float | None,
+) -> GpuMemorySample:
+    total_gpu_memory_mb: float | None = None
+    if dedicated_vram_mb is not None:
+        total_gpu_memory_mb = dedicated_vram_mb + (shared_ram_mb or 0.0)
+    elif shared_ram_mb is not None:
+        total_gpu_memory_mb = shared_ram_mb
+    return GpuMemorySample(
+        dedicated_vram_mb=dedicated_vram_mb,
+        shared_ram_mb=shared_ram_mb,
+        total_gpu_memory_mb=total_gpu_memory_mb,
+    )
 
 
 def get_default_prompt_file(project_root: Path | None = None) -> Path:
@@ -165,11 +202,20 @@ def init_benchmark_db(db_path: Path | None = None) -> Path:
                 latency_ms REAL,
                 elapsed_ms REAL,
                 vram_mb REAL,
+                dedicated_vram_mb REAL,
+                shared_ram_mb REAL,
+                total_gpu_memory_mb REAL,
                 status TEXT NOT NULL,
                 error TEXT
             )
             """
         )
+        existing_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(benchmarks)").fetchall()
+        }
+        for column_name in ("dedicated_vram_mb", "shared_ram_mb", "total_gpu_memory_mb"):
+            if column_name not in existing_columns:
+                conn.execute(f"ALTER TABLE benchmarks ADD COLUMN {column_name} REAL")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_benchmarks_instance_time "
             "ON benchmarks(instance_name, timestamp)"
@@ -189,8 +235,9 @@ def record_benchmark_result(
             INSERT INTO benchmarks (
                 timestamp, instance_name, config_hash, prompt_file, prompt_sha256,
                 prompt_chars, output_tokens, tokens_per_second, latency_ms,
-                elapsed_ms, vram_mb, status, error
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                elapsed_ms, vram_mb, dedicated_vram_mb, shared_ram_mb,
+                total_gpu_memory_mb, status, error
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 result.timestamp,
@@ -204,6 +251,9 @@ def record_benchmark_result(
                 result.latency_ms,
                 result.elapsed_ms,
                 result.vram_mb,
+                result.dedicated_vram_mb,
+                result.shared_ram_mb,
+                result.total_gpu_memory_mb,
                 result.status,
                 result.error,
             ),
@@ -227,24 +277,87 @@ def latest_benchmark_results(db_path: Path | None = None) -> dict[str, Benchmark
             """
         ).fetchall()
 
-    return {
-        row["instance_name"]: BenchmarkResult(
-            instance_name=row["instance_name"],
-            timestamp=row["timestamp"],
-            config_hash=row["config_hash"],
-            prompt_file=row["prompt_file"],
-            prompt_sha256=row["prompt_sha256"],
-            prompt_chars=row["prompt_chars"],
-            output_tokens=row["output_tokens"],
-            tokens_per_second=row["tokens_per_second"],
-            latency_ms=row["latency_ms"],
-            elapsed_ms=row["elapsed_ms"],
-            vram_mb=row["vram_mb"],
-            status=row["status"],
-            error=row["error"],
+    results: dict[str, BenchmarkResult] = {}
+    for row in rows:
+        row_data = dict(row)
+        dedicated_vram_mb = row_data.get("dedicated_vram_mb")
+        if dedicated_vram_mb is None:
+            dedicated_vram_mb = row_data.get("vram_mb")
+        shared_ram_mb = row_data.get("shared_ram_mb")
+        total_gpu_memory_mb = row_data.get("total_gpu_memory_mb")
+        if total_gpu_memory_mb is None and dedicated_vram_mb is not None:
+            total_gpu_memory_mb = dedicated_vram_mb + (shared_ram_mb or 0.0)
+
+        results[row_data["instance_name"]] = BenchmarkResult(
+            instance_name=row_data["instance_name"],
+            timestamp=row_data["timestamp"],
+            config_hash=row_data["config_hash"],
+            prompt_file=row_data["prompt_file"],
+            prompt_sha256=row_data["prompt_sha256"],
+            prompt_chars=row_data["prompt_chars"],
+            output_tokens=row_data["output_tokens"],
+            tokens_per_second=row_data["tokens_per_second"],
+            latency_ms=row_data["latency_ms"],
+            elapsed_ms=row_data["elapsed_ms"],
+            vram_mb=row_data.get("vram_mb"),
+            status=row_data["status"],
+            dedicated_vram_mb=dedicated_vram_mb,
+            shared_ram_mb=shared_ram_mb,
+            total_gpu_memory_mb=total_gpu_memory_mb,
+            error=row_data["error"],
         )
-        for row in rows
-    }
+
+    return results
+
+
+def _sample_windows_gpu_process_memory(pid: int) -> GpuMemorySample | None:
+    script = "\n".join(
+        [
+            f"$PidValue = {pid}",
+            "$samples = Get-Counter -Counter '\\GPU Process Memory(*)\\Dedicated Usage','\\GPU Process Memory(*)\\Shared Usage' -ErrorAction Stop",
+            "$dedicated = 0.0",
+            "$shared = 0.0",
+            "$matched = $false",
+            "foreach ($sample in $samples.CounterSamples) {",
+            "    if ($sample.Path -notlike \"*pid_$PidValue_*\") { continue }",
+            "    $matched = $true",
+            "    $valueMb = [math]::Round(($sample.CookedValue / 1MB), 3)",
+            "    if ($sample.Path -like '*\\Dedicated Usage') { $dedicated += $valueMb }",
+            "    elseif ($sample.Path -like '*\\Shared Usage') { $shared += $valueMb }",
+            "}",
+            "if ($matched) {",
+            "    [pscustomobject]@{",
+            "        dedicated_vram_mb = [math]::Round($dedicated, 3)",
+            "        shared_ram_mb = [math]::Round($shared, 3)",
+            "    } | ConvertTo-Json -Compress",
+            "}",
+        ]
+    )
+
+    for shell in ("pwsh", "powershell"):
+        try:
+            proc = subprocess.run(
+                [shell, "-NoProfile", "-Command", script],
+                capture_output=True,
+                text=True,
+                timeout=4,
+                check=False,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if proc.returncode != 0 or not proc.stdout.strip():
+            continue
+        try:
+            payload = json.loads(proc.stdout)
+        except json.JSONDecodeError:
+            continue
+        dedicated_vram_mb = payload.get("dedicated_vram_mb")
+        shared_ram_mb = payload.get("shared_ram_mb")
+        if not isinstance(dedicated_vram_mb, (int, float)) or not isinstance(shared_ram_mb, (int, float)):
+            continue
+        return _normalize_gpu_memory_sample(float(dedicated_vram_mb), float(shared_ram_mb))
+
+    return None
 
 
 def _parse_vram_from_text(text: str) -> float | None:
@@ -369,6 +482,27 @@ def sample_vram_mb(
     return None
 
 
+def sample_gpu_memory(
+    *,
+    pid: int | None,
+    device_id: int = 0,
+    backend: str | None = None,
+    stderr_log: Path | None = None,
+) -> GpuMemorySample:
+    """Best-effort GPU memory split, preferring process-scoped Windows counters."""
+    if pid is not None:
+        windows_sample = _sample_windows_gpu_process_memory(pid)
+        if windows_sample is not None:
+            return windows_sample
+
+    dedicated_vram_mb = sample_vram_mb(
+        device_id,
+        backend=backend,
+        stderr_log=stderr_log,
+    )
+    return _normalize_gpu_memory_sample(dedicated_vram_mb, None)
+
+
 def _extract_token_count(payload: dict[str, Any], fallback_text: str) -> int:
     timings = payload.get("timings")
     if isinstance(timings, dict):
@@ -401,6 +535,7 @@ def quick_benchmark_instance(
     cfg_hash = config_hash(config)
     prompt_file = active_settings.prompt_file.name
     stderr_log = get_log_files(config.name)[1]
+    pid = get_validated_benchmark_pid(config.name)
 
     try:
         prompt, prompt_digest = read_prompt(active_settings)
@@ -448,8 +583,9 @@ def quick_benchmark_instance(
         latency_ms = ((first_token_at or ended) - started) * 1000
         generation_seconds = max(0.001, (ended - (first_token_at or started)))
         tokens_per_second = output_tokens / generation_seconds
-        vram_mb = sample_vram_mb(
-            config.gpu.device_id,
+        memory_sample = sample_gpu_memory(
+            pid=pid,
+            device_id=config.gpu.device_id,
             backend=config.gpu.backend,
             stderr_log=stderr_log,
         )
@@ -465,8 +601,11 @@ def quick_benchmark_instance(
             tokens_per_second=tokens_per_second,
             latency_ms=latency_ms,
             elapsed_ms=elapsed_ms,
-            vram_mb=vram_mb,
+            vram_mb=memory_sample.dedicated_vram_mb,
             status="ok",
+            dedicated_vram_mb=memory_sample.dedicated_vram_mb,
+            shared_ram_mb=memory_sample.shared_ram_mb,
+            total_gpu_memory_mb=memory_sample.total_gpu_memory_mb,
         )
     except Exception as exc:
         prompt = ""
@@ -484,13 +623,27 @@ def quick_benchmark_instance(
             tokens_per_second=None,
             latency_ms=None,
             elapsed_ms=None,
-            vram_mb=sample_vram_mb(
-                config.gpu.device_id,
+            vram_mb=None,
+            status="failed",
+            dedicated_vram_mb=None,
+            shared_ram_mb=None,
+            total_gpu_memory_mb=None,
+            error=str(exc),
+        )
+        memory_sample = sample_gpu_memory(
+            pid=pid,
+            device_id=config.gpu.device_id,
                 backend=config.gpu.backend,
                 stderr_log=stderr_log,
-            ),
-            status="failed",
-            error=str(exc),
+        )
+        result = BenchmarkResult(
+            **{
+                **result.__dict__,
+                "vram_mb": memory_sample.dedicated_vram_mb,
+                "dedicated_vram_mb": memory_sample.dedicated_vram_mb,
+                "shared_ram_mb": memory_sample.shared_ram_mb,
+                "total_gpu_memory_mb": memory_sample.total_gpu_memory_mb,
+            }
         )
 
     record_benchmark_result(result)

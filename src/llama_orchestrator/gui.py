@@ -96,7 +96,7 @@ COLUMN_HEADINGS = {
     "tags": "Tags",
     "tps": "TPS",
     "latency": "Latency ms",
-    "vram": "VRAM MB",
+    "vram": "Memory MB",
     "prompt": "Prompt file",
     "model": "Model",
     "args": "Runtime args",
@@ -112,7 +112,7 @@ COLUMN_WIDTHS = {
     "tags": 150,
     "tps": 80,
     "latency": 90,
-    "vram": 90,
+    "vram": 260,
     "prompt": 140,
     "model": 280,
     "args": 260,
@@ -174,15 +174,58 @@ def format_metric(value: float | None, digits: int = 1) -> str:
 def format_benchmark_message(result: BenchmarkResult) -> str:
     """Format a benchmark result for the activity log."""
     if result.status != "ok":
-        return (
+        memory_text = format_benchmark_memory(result)
+        warning = benchmark_shared_ram_warning(result)
+        message = (
             f"Benchmark {result.instance_name} failed using {result.prompt_file}: "
             f"{result.error or 'unknown error'}"
         )
-    return (
+        if memory_text != "-":
+            message = f"{message} Memory: {memory_text}."
+        if warning:
+            message = f"{message} {warning}"
+        return message
+    warning = benchmark_shared_ram_warning(result)
+    message = (
         f"Benchmark {result.instance_name} using {result.prompt_file}: "
         f"{format_metric(result.tokens_per_second)} TPS, "
         f"{format_metric(result.latency_ms, 0)} ms latency, "
-        f"{format_metric(result.vram_mb, 0)} MB VRAM."
+        f"{format_benchmark_memory(result)}."
+    )
+    if warning:
+        return f"{message} {warning}"
+    return message
+
+
+def benchmark_shared_ram_warning(result: BenchmarkResult) -> str:
+    """Return a user-facing warning when benchmarked inference uses shared RAM."""
+    if result.shared_ram_mb is None or result.shared_ram_mb <= 0:
+        return ""
+    return "Shared RAM in use; inference may be slower."
+
+
+def format_benchmark_memory(result: BenchmarkResult) -> str:
+    """Format benchmark memory for both the table and activity log."""
+    dedicated_vram_mb = result.dedicated_vram_mb if result.dedicated_vram_mb is not None else result.vram_mb
+    total_gpu_memory_mb = result.total_gpu_memory_mb
+    shared_ram_mb = result.shared_ram_mb
+
+    if dedicated_vram_mb is None and total_gpu_memory_mb is None:
+        return "-"
+    if total_gpu_memory_mb is None:
+        total_gpu_memory_mb = dedicated_vram_mb
+    if shared_ram_mb is None:
+        if dedicated_vram_mb is None:
+            return f"{format_metric(total_gpu_memory_mb, 0)} total"
+        return (
+            f"{format_metric(total_gpu_memory_mb, 0)} total "
+            f"(VRAM {format_metric(dedicated_vram_mb, 0)})"
+        )
+    suffix = " slow" if shared_ram_mb > 0 else ""
+    return (
+        f"{format_metric(total_gpu_memory_mb, 0)} total "
+        f"(VRAM {format_metric(dedicated_vram_mb, 0)}, "
+        f"RAM {format_metric(shared_ram_mb, 0)}){suffix}"
     )
 
 
@@ -449,12 +492,12 @@ class LlamaOrchestratorGui(tk.Tk):
             if benchmark and benchmark.status == "ok":
                 tps = format_metric(benchmark.tokens_per_second)
                 latency = format_metric(benchmark.latency_ms, 0)
-                vram = format_metric(benchmark.vram_mb, 0)
+                vram = format_benchmark_memory(benchmark)
                 prompt = benchmark.prompt_file
             elif benchmark:
                 tps = "failed"
                 latency = "-"
-                vram = format_metric(benchmark.vram_mb, 0)
+                vram = format_benchmark_memory(benchmark)
                 prompt = benchmark.prompt_file
             else:
                 tps = "-"

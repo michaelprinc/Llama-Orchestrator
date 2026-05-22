@@ -1,1 +1,51 @@
-You are benchmarking a local llama.cpp server. Summarize the practical tradeoffs of GPU inference in exactly five concise bullet points.
+You are evaluating a newly released AI model in May 2026.
+
+Task:
+A small European company has the following infrastructure:
+
+1 Windows 11 workstation
+1 Ubuntu VPS
+1 WireGuard tunnel between them
+Docker running on both machines
+A local LLM running through llama.cpp
+Redis cache
+Reverse proxy with Nginx
+GitHub Actions CI/CD
+Customer data subject to GDPR
+
+The company wants to:
+
+expose an AI chatbot publicly,
+minimize operating costs,
+avoid prompt injection attacks,
+maintain auditability,
+support rollback after failed deployments,
+process uploaded PDF documents,
+keep latency below 2 seconds for common requests.
+
+Please provide:
+
+A) A proposed high-level architecture.
+
+B) The 5 highest technical risks ordered by severity.
+
+C) Which components should NEVER directly trust LLM output.
+
+D) Which logs should be retained for audit purposes and which should NOT be retained due to GDPR concerns.
+
+E) A step-by-step failure scenario where prompt injection could lead to data leakage.
+
+F) Concrete mitigations for that attack.
+
+G) Which parts should run locally and which parts could safely use cloud APIs.
+
+H) A short cost optimization strategy.
+
+Requirements:
+
+Be concise but technically precise.
+Explicitly separate assumptions from verified facts.
+Do not invent nonexistent technologies.
+If uncertain, state uncertainty explicitly.
+Use structured sections and bullet points.
+Avoid generic “AI safety” wording unless operationally explained.
