@@ -20,6 +20,7 @@ from llama_orchestrator.config.validator import (
     lint_config,
     resolve_model_path,
     validate_gpu_config,
+    validate_host_exposure,
     validate_instance,
     validate_log_directory,
     validate_model_exists,
@@ -33,12 +34,13 @@ def make_config(
     model_path: str = "test.gguf",
     port: int = 8001,
     backend: str = "cpu",
+    host: str = "127.0.0.1",
 ) -> InstanceConfig:
     """Helper to create a test config."""
     return InstanceConfig(
         name=name,
         model=ModelConfig(path=Path(model_path)),
-        server=ServerConfig(port=port),
+        server=ServerConfig(host=host, port=port),
         gpu=GpuConfig(backend=backend),  # type: ignore
     )
 
@@ -224,6 +226,27 @@ class TestValidateInstance:
         
         assert not result.is_valid
         assert result.error_count >= 1
+
+
+class TestValidateHostExposure:
+    """Tests for host exposure warning behavior."""
+
+    def test_wide_bind_warning(self) -> None:
+        """Test warning is emitted when binding to all interfaces."""
+        config = make_config(host="0.0.0.0")
+
+        result = validate_host_exposure(config)
+
+        assert result.warning_count == 1
+        assert "all network interfaces" in result.issues[0].message.lower()
+
+    def test_localhost_has_no_warning(self) -> None:
+        """Test localhost binding stays warning-free."""
+        config = make_config(host="127.0.0.1")
+
+        result = validate_host_exposure(config)
+
+        assert result.warning_count == 0
 
 
 class TestLintConfig:

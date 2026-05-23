@@ -14,6 +14,157 @@ from uuid import UUID
 from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
 
+KNOWN_PARAMETER_PATHS: tuple[str, ...] = (
+    "name",
+    "binary.binary_id",
+    "binary.version",
+    "binary.variant",
+    "binary.source_url",
+    "binary.sha256",
+    "model.path",
+    "model.context_size",
+    "model.batch_size",
+    "model.threads",
+    "server.host",
+    "server.port",
+    "server.timeout",
+    "server.parallel",
+    "gpu.backend",
+    "gpu.device_id",
+    "gpu.layers",
+    "env",
+    "args",
+    "tags",
+    "healthcheck.type",
+    "healthcheck.path",
+    "healthcheck.expected_status",
+    "healthcheck.expected_body",
+    "healthcheck.custom_script",
+    "healthcheck.interval",
+    "healthcheck.timeout",
+    "healthcheck.retries",
+    "healthcheck.retry_delay",
+    "healthcheck.start_period",
+    "healthcheck.backoff_enabled",
+    "healthcheck.backoff_base",
+    "healthcheck.backoff_max",
+    "healthcheck.backoff_jitter",
+    "restart_policy.enabled",
+    "restart_policy.max_retries",
+    "restart_policy.backoff_multiplier",
+    "restart_policy.initial_delay",
+    "restart_policy.max_delay",
+    "logs.stdout",
+    "logs.stderr",
+    "logs.max_size_mb",
+    "logs.rotation",
+)
+
+DEFAULT_STATIC_PARAMETER_PATHS: tuple[str, ...] = (
+    "name",
+    "binary.binary_id",
+    "binary.version",
+    "binary.variant",
+    "binary.source_url",
+    "binary.sha256",
+    "model.path",
+    "model.context_size",
+    "model.batch_size",
+    "model.threads",
+    "server.host",
+    "server.port",
+    "server.timeout",
+    "server.parallel",
+    "gpu.backend",
+    "gpu.device_id",
+    "gpu.layers",
+    "env",
+    "args",
+    "logs.stdout",
+    "logs.stderr",
+    "logs.max_size_mb",
+    "logs.rotation",
+)
+
+DEFAULT_DYNAMIC_PARAMETER_PATHS: tuple[str, ...] = (
+    "tags",
+    "healthcheck.type",
+    "healthcheck.path",
+    "healthcheck.expected_status",
+    "healthcheck.expected_body",
+    "healthcheck.custom_script",
+    "healthcheck.interval",
+    "healthcheck.timeout",
+    "healthcheck.retries",
+    "healthcheck.retry_delay",
+    "healthcheck.start_period",
+    "healthcheck.backoff_enabled",
+    "healthcheck.backoff_base",
+    "healthcheck.backoff_max",
+    "healthcheck.backoff_jitter",
+    "restart_policy.enabled",
+    "restart_policy.max_retries",
+    "restart_policy.backoff_multiplier",
+    "restart_policy.initial_delay",
+    "restart_policy.max_delay",
+)
+
+
+class ParameterMutabilityConfig(BaseModel):
+    """Explicit split of persisted parameters by restart semantics."""
+
+    static: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_STATIC_PARAMETER_PATHS),
+        description="Parameters that require a llama.cpp process restart when changed",
+    )
+    dynamic: list[str] = Field(
+        default_factory=lambda: list(DEFAULT_DYNAMIC_PARAMETER_PATHS),
+        description="Parameters that the control plane may apply without replacing the llama.cpp process",
+    )
+
+    @field_validator("static", "dynamic")
+    @classmethod
+    def normalize_paths(cls, values: list[str]) -> list[str]:
+        """Normalize path lists for deterministic serialization."""
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            path = value.strip()
+            if not path or path in seen:
+                continue
+            normalized.append(path)
+            seen.add(path)
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_coverage(self) -> "ParameterMutabilityConfig":
+        """Ensure every known parameter path is classified exactly once."""
+        static_set = set(self.static)
+        dynamic_set = set(self.dynamic)
+        known_set = set(KNOWN_PARAMETER_PATHS)
+
+        overlap = static_set & dynamic_set
+        if overlap:
+            ordered = ", ".join(sorted(overlap))
+            raise ValueError(f"Parameter paths cannot be both static and dynamic: {ordered}")
+
+        unknown = (static_set | dynamic_set) - known_set
+        if unknown:
+            ordered = ", ".join(sorted(unknown))
+            raise ValueError(f"Unknown parameter paths in parameter_mutability: {ordered}")
+
+        missing = known_set - (static_set | dynamic_set)
+        if missing:
+            ordered = ", ".join(sorted(missing))
+            raise ValueError(f"Missing parameter classifications in parameter_mutability: {ordered}")
+
+        return self
+
+    def requires_restart(self, parameter_path: str) -> bool:
+        """Return True when a parameter path is classified as static."""
+        return parameter_path in set(self.static)
+
+
 class BinaryConfig(BaseModel):
     """
     Binary configuration for llama.cpp server executable.
@@ -72,7 +223,7 @@ class ModelConfig(BaseModel):
     """Configuration for the LLM model."""
     
     path: Path = Field(..., description="Path to the GGUF model file")
-    context_size: int = Field(default=4096, ge=512, le=131072, description="Context window size")
+    context_size: int = Field(default=4096, ge=512, le=262144, description="Context window size")
     batch_size: int = Field(default=512, ge=1, le=8192, description="Batch size for processing")
     threads: int = Field(default=8, ge=1, le=256, description="Number of CPU threads")
     
@@ -225,6 +376,10 @@ class InstanceConfig(BaseModel):
     gpu: GpuConfig = Field(default_factory=GpuConfig)
     env: dict[str, str] = Field(default_factory=dict, description="Environment variables")
     args: list[str] = Field(default_factory=list, description="Additional CLI arguments")
+    parameter_mutability: ParameterMutabilityConfig = Field(
+        default_factory=ParameterMutabilityConfig,
+        description="Explicit split of persisted parameters into restart-required and runtime-tunable groups",
+    )
     tags: list[str] = Field(default_factory=list, description="User labels for filtering and batch operations")
     healthcheck: HealthcheckConfig = Field(default_factory=HealthcheckConfig)
     restart_policy: RestartPolicy = Field(default_factory=RestartPolicy)

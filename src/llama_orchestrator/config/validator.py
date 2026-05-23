@@ -251,6 +251,22 @@ def validate_gpu_config(config: InstanceConfig) -> ValidationResult:
     return result
 
 
+def validate_host_exposure(config: InstanceConfig) -> ValidationResult:
+    """Warn when the model server binds to all interfaces."""
+    result = ValidationResult()
+
+    if config.server.host == "0.0.0.0":
+        result.add(ValidationIssue(
+            instance=config.name,
+            field="server.host",
+            severity="warning",
+            message="Binding to 0.0.0.0 exposes the llama.cpp HTTP API on all network interfaces",
+            suggestion="Prefer 127.0.0.1 unless remote clients or a reverse proxy require external access"
+        ))
+
+    return result
+
+
 def validate_instance(config: InstanceConfig, check_runtime: bool = True) -> ValidationResult:
     """
     Validate a single instance configuration.
@@ -272,6 +288,9 @@ def validate_instance(config: InstanceConfig, check_runtime: bool = True) -> Val
     
     # Check GPU config
     result.merge(validate_gpu_config(config))
+
+    # Warn about wide network exposure
+    result.merge(validate_host_exposure(config))
     
     # Runtime checks
     if check_runtime:

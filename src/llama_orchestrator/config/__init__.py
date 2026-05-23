@@ -18,6 +18,8 @@ from llama_orchestrator.config.loader import (
     save_config,
 )
 from llama_orchestrator.config.schema import (
+    DEFAULT_DYNAMIC_PARAMETER_PATHS,
+    DEFAULT_STATIC_PARAMETER_PATHS,
     EXAMPLE_CONFIG,
     BinaryConfig,
     GpuConfig,
@@ -25,6 +27,7 @@ from llama_orchestrator.config.schema import (
     InstanceConfig,
     LogsConfig,
     ModelConfig,
+    ParameterMutabilityConfig,
     RestartPolicy,
     ServerConfig,
 )
@@ -43,9 +46,12 @@ __all__ = [
     "ModelConfig",
     "ServerConfig",
     "GpuConfig",
+    "ParameterMutabilityConfig",
     "HealthcheckConfig",
     "RestartPolicy",
     "LogsConfig",
+    "DEFAULT_STATIC_PARAMETER_PATHS",
+    "DEFAULT_DYNAMIC_PARAMETER_PATHS",
     "EXAMPLE_CONFIG",
     # Loader
     "ConfigLoadError",

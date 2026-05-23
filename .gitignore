@@ -31,6 +31,10 @@ build/
 bin/*.exe
 bin/*.dll
 
+# LLM inference benchmark outputs
+# Keep prompts and benchmark scripts trackable.
+benchmarks/results/
+
 # Binary installations (UUID-based directories with llama.cpp binaries)
 # Keep only registry.json in version control
 bins/*/

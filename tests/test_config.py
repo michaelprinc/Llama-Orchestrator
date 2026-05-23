@@ -8,11 +8,14 @@ import pytest
 from pydantic import ValidationError
 
 from llama_orchestrator.config import (
+    DEFAULT_DYNAMIC_PARAMETER_PATHS,
+    DEFAULT_STATIC_PARAMETER_PATHS,
     EXAMPLE_CONFIG,
     GpuConfig,
     HealthcheckConfig,
     InstanceConfig,
     ModelConfig,
+    ParameterMutabilityConfig,
     RestartPolicy,
     ServerConfig,
 )
@@ -49,6 +52,11 @@ class TestModelConfig:
         """Test context size validation."""
         with pytest.raises(ValidationError):
             ModelConfig(path=Path("test.gguf"), context_size=100)  # Too small
+
+    def test_qwen36_max_context_size(self) -> None:
+        """Test the maximum context size used by Qwen3.6 MTP configs."""
+        config = ModelConfig(path=Path("test.gguf"), context_size=262144)
+        assert config.context_size == 262144
 
 
 class TestServerConfig:
@@ -175,6 +183,8 @@ class TestInstanceConfig:
             model=ModelConfig(path=Path("test.gguf")),
         )
         assert config.name == "test-instance"
+        assert config.parameter_mutability.static == list(DEFAULT_STATIC_PARAMETER_PATHS)
+        assert config.parameter_mutability.dynamic == list(DEFAULT_DYNAMIC_PARAMETER_PATHS)
     
     def test_example_config_valid(self) -> None:
         """Test that EXAMPLE_CONFIG is valid."""
@@ -236,3 +246,23 @@ class TestInstanceConfig:
         stdout, stderr = config.get_log_paths()
         assert "mymodel" in str(stdout)
         assert "mymodel" in str(stderr)
+
+
+class TestParameterMutabilityConfig:
+    """Tests for explicit static versus dynamic parameter classification."""
+
+    def test_default_classification_is_disjoint_and_complete(self) -> None:
+        """Test the built-in classification covers all supported config paths exactly once."""
+        config = ParameterMutabilityConfig()
+
+        assert set(config.static).isdisjoint(config.dynamic)
+        assert "server.host" in config.static
+        assert "healthcheck.interval" in config.dynamic
+
+    def test_overlap_is_rejected(self) -> None:
+        """Test that a path cannot be classified as both static and dynamic."""
+        with pytest.raises(ValidationError):
+            ParameterMutabilityConfig(
+                static=list(DEFAULT_STATIC_PARAMETER_PATHS),
+                dynamic=[*DEFAULT_DYNAMIC_PARAMETER_PATHS, "server.host"],
+            )

@@ -102,6 +102,8 @@ class TestLoadConfig:
         assert config.server.host == "127.0.0.1"
         assert config.gpu.backend == "cpu"
         assert config.healthcheck.interval == 10
+        assert "server.host" in config.parameter_mutability.static
+        assert "healthcheck.interval" in config.parameter_mutability.dynamic
 
 
 class TestLoadConfigFromDict:
@@ -143,6 +145,8 @@ class TestSaveConfig:
         
         assert data["name"] == "test"
         assert data["model"]["path"] == "test.gguf"
+        assert "parameter_mutability" in data
+        assert "server.host" in data["parameter_mutability"]["static"]
 
 
 class TestDiscoverInstances:
