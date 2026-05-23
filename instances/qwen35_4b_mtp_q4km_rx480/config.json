@@ -9,7 +9,7 @@
   },
   "model": {
     "path": "models/unsloth_Qwen3.5-4B-MTP-GGUF/Qwen3.5-4B-Q4_K_M.gguf",
-    "context_size": 8192,
+    "context_size": 32768,
     "batch_size": 256,
     "threads": 16
   },
@@ -29,7 +29,7 @@
   },
   "args": [
     "--parallel",
-    "1",
+    "2",
     "--device",
     "Vulkan2",
     "--main-gpu",
@@ -40,6 +40,10 @@
     "--jinja",
     "--reasoning",
     "off",
+    "--cache-type-k",
+    "q8_0",
+    "--cache-type-v",
+    "q8_0",
     "--flash-attn",
     "on",
     "--ubatch-size",
@@ -47,9 +51,7 @@
     "--spec-type",
     "draft-mtp",
     "--spec-draft-n-max",
-    "2",
-    "--spec-draft-n-min",
-    "1"
+    "2"
   ],
   "tags": [
     "qwen35",

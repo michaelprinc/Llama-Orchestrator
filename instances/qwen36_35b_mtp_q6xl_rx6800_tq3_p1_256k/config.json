@@ -28,6 +28,8 @@
     "GGML_VULKAN_DEVICE": "1"
   },
   "args": [
+    "--parallel",
+    "1",
     "--device",
     "Vulkan1",
     "--main-gpu",
@@ -35,7 +37,7 @@
     "--split-mode",
     "none",
     "--n-cpu-moe",
-    "36",
+    "32",
     "--no-mmap",
     "--cache-type-k",
     "tq3_0",
@@ -56,9 +58,7 @@
     "--spec-type",
     "mtp",
     "--spec-draft-n-max",
-    "3",
-    "--spec-draft-p-min",
-    "0.75"
+    "3"
   ],
   "tags": [
     "qwen36",
@@ -71,6 +71,7 @@
     "tq3",
     "parallel-1",
     "256k",
+    "n-cpu-moe-32",
     "destroyor",
     "stable-candidate"
   ],

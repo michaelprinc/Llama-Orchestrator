@@ -35,7 +35,7 @@
     "--split-mode",
     "layer",
     "--tensor-split",
-    "16,3",
+    "13,6",
     "--main-gpu",
     "1",
     "--no-mmap",

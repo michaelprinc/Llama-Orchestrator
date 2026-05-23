@@ -17,7 +17,7 @@
 
 ## Local Version Status
 
-**Primary supported tool version:** `llama-orchestrator` `2.0.0`
+**Primary supported tool version:** `llama-orchestrator` `2.1.0`
 
 Use this local checkout at `infra-local/llama-orchestrator/` as the main
 version of the tool for this workspace. It is the preferred implementation for
@@ -57,6 +57,22 @@ to be run on a target host with `nssm.exe` in `PATH`; several binary-management
 convenience commands remain listed as future work in `docs/BINARY_MANAGEMENT.md`;
 and GUI column visibility, tag filter, and window geometry are intentionally
 session-local today.
+
+## 2.1.0 Scope Clarifications
+
+- Runtime state is stored in `state/state.sqlite`; `instances/<name>/config.json`
+  remains the persisted desired-state input, not a live runtime database.
+- The desktop GUI is a Windows management panel for start/stop/health/benchmark
+  workflows. It does not watch JSON files reactively and it does not assume any
+  autonomous agent is mutating configs in the background.
+- "Docker-like" describes the operator workflow (`init`, `up`, `down`, `ps`,
+  `logs`, detached execution, restart policy). The shipped runtime remains
+  Windows-native with Task Scheduler and NSSM integration, not a Docker
+  deployment target.
+- Telemetry shipped today is partial: benchmark TPS, latency, prompt history,
+  and best-effort memory or VRAM reporting are available. TTFT dashboards,
+  cache-hit dashboards, MCP gateway integration, and llama-swap export are not
+  part of `2.1.0`.
 
 ## Quick Start
 
@@ -182,6 +198,55 @@ Instance configs are stored in `instances/<name>/config.json`:
     "--reasoning", "off",
     "--flash-attn", "auto"
   ],
+  "parameter_mutability": {
+    "static": [
+      "name",
+      "binary.binary_id",
+      "binary.version",
+      "binary.variant",
+      "binary.source_url",
+      "binary.sha256",
+      "model.path",
+      "model.context_size",
+      "model.batch_size",
+      "model.threads",
+      "server.host",
+      "server.port",
+      "server.timeout",
+      "server.parallel",
+      "gpu.backend",
+      "gpu.device_id",
+      "gpu.layers",
+      "env",
+      "args",
+      "logs.stdout",
+      "logs.stderr",
+      "logs.max_size_mb",
+      "logs.rotation"
+    ],
+    "dynamic": [
+      "tags",
+      "healthcheck.type",
+      "healthcheck.path",
+      "healthcheck.expected_status",
+      "healthcheck.expected_body",
+      "healthcheck.custom_script",
+      "healthcheck.interval",
+      "healthcheck.timeout",
+      "healthcheck.retries",
+      "healthcheck.retry_delay",
+      "healthcheck.start_period",
+      "healthcheck.backoff_enabled",
+      "healthcheck.backoff_base",
+      "healthcheck.backoff_max",
+      "healthcheck.backoff_jitter",
+      "restart_policy.enabled",
+      "restart_policy.max_retries",
+      "restart_policy.backoff_multiplier",
+      "restart_policy.initial_delay",
+      "restart_policy.max_delay"
+    ]
+  },
   "tags": ["router", "vulkan"],
   "healthcheck": {
     "type": "http",
@@ -217,6 +282,16 @@ The `binary.binary_id` UUID is the primary join into `bins/registry.json`.
 If it is missing, the resolver can fall back to `version` plus `variant`. If
 the whole `binary` section is absent, legacy `bin/llama-server.exe` resolution
 is still supported for older configs.
+
+The persisted `parameter_mutability` section makes restart semantics explicit:
+`static` paths require a llama.cpp process restart when changed, while
+`dynamic` paths describe control-plane tunables such as health checks and
+restart policy. In `2.1.0` this is a configuration contract only; GUI behavior
+and live-reload semantics are unchanged.
+
+`llama-orch config validate` emits a warning when `server.host` is `0.0.0.0`
+so remote-access configurations remain possible without making broad exposure
+look risk-free.
 
 ## Directory Structure
 

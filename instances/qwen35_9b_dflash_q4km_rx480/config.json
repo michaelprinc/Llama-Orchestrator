@@ -9,7 +9,7 @@
   },
   "model": {
     "path": "models/Qwen3.5-9B-Q4_K_M.gguf",
-    "context_size": 8192,
+    "context_size": 65536,
     "batch_size": 512,
     "threads": 16
   },
@@ -36,6 +36,10 @@
     "2",
     "--spec-type",
     "dflash",
+    "--cache-type-k",
+    "q4_0",
+    "--cache-type-v",
+    "q4_0",
     "--model-draft",
     "models/Qwen3.5-9B-DFlash-Q4_K_M.with-merges.gguf",
     "--device-draft",

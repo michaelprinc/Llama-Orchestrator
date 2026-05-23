@@ -3,7 +3,7 @@
 **Date:** 2026-05-23  
 **Methodology:** Spec Kit  
 **Type:** release clarification + safety update  
-**Status:** Draft
+**Status:** Complete
 
 ---
 
@@ -12,7 +12,7 @@
 Ship a narrow `2.1.0` update for `infra-local/llama-orchestrator` that:
 
 - aligns authoritative version metadata and release-facing docs to `2.1.0`;
-- documents the static versus dynamic config split without changing GUI behavior;
+- documents the static versus dynamic config split through a persisted, backward-compatible `parameter_mutability` config section without changing GUI behavior;
 - adds a non-blocking validation warning for `server.host = 0.0.0.0`;
 - preserves current config serialization and operator workflows;
 - records the work in a short implementation report.
@@ -51,7 +51,7 @@ Ship a narrow `2.1.0` update for `infra-local/llama-orchestrator` that:
 
 ### Reuse opportunities
 
-- Reuse existing Pydantic schema descriptions instead of introducing new persisted keys.
+- Reuse the existing Pydantic schema layer to persist an additive `parameter_mutability` section with defaults for older configs.
 - Reuse `save_config()` as the canonical serialization path.
 - Reuse existing validator warning pattern (`ValidationIssue` with `severity="warning"`).
 - Reuse the current report convention from `reports/implementation/infra-local/llama-orchestrator/2026/`.
@@ -66,13 +66,9 @@ Ship a narrow `2.1.0` update for `infra-local/llama-orchestrator` that:
 
 ### Assumptions
 
-- The static/dynamic distinction can remain additive and descriptive, primarily through schema descriptions, helper text, and serialization tests.
+- The static/dynamic distinction is implemented through a persisted `parameter_mutability` section with schema defaults for legacy configs.
 - Historical planning artifacts in `infra-local/llama-orchestrator/docs/` stay historical unless the implementation explicitly chooses to refresh them.
 - A focused README refresh is sufficient for release-facing documentation unless a second authoritative doc is identified during implementation.
-
-### Open point
-
-- Decide during implementation whether the static/dynamic split is documented only in field descriptions and README tables, or also exposed through a small schema helper/constant for testable categorization.
 
 ## 5. Flow Notes
 
@@ -84,7 +80,7 @@ config.json
   -> README and report describe shipped 2.1.0 behavior and exclusions
 ```
 
-Key planning constraint: the config contract may become clearer, but persisted JSON should remain compatible with existing `instances/*/config.json` files.
+Key planning constraint: the config contract becomes clearer through an additive persisted key, while existing `instances/*/config.json` files remain compatible through schema defaults.
 
 ## 6. Proposed Implementation Approach
 
@@ -101,8 +97,8 @@ Likely files to touch:
 
 ### P2 Clarify config schema and preserve serialization
 
-- Define the static versus dynamic parameter split in `config/schema.py` descriptions or a small helper surface.
-- Keep `save_config()` output stable; avoid breaking or renaming keys in persisted JSON.
+- Define the static versus dynamic parameter split through a persisted `parameter_mutability` section in `config/schema.py`.
+- Keep `save_config()` backward-compatible for existing configs; avoid breaking or renaming existing persisted keys.
 - Add or update loader/schema tests to prove serialization still round-trips cleanly.
 
 Likely files to touch:
@@ -139,7 +135,7 @@ Likely files to touch:
 | ID | Phase | Task | Type | Dependencies | Parallel | Done when |
 |----|------|------|------|--------------|----------|-----------|
 | P1 | Version | Bump authoritative `2.1.0` version surfaces | code/docs | - | no | Package metadata and runtime version match `2.1.0` |
-| P2 | Config | Document static vs dynamic parameters without breaking JSON shape | code/docs | P1 | no | Schema/docs express the split and `save_config()` remains compatible |
+| P2 | Config | Persist `parameter_mutability` without breaking existing config compatibility | code/docs | P1 | no | Schema/docs express the split and `save_config()` remains backward-compatible |
 | P3 | Safety | Add `0.0.0.0` warning to non-GUI validation flow | code/test | P2 | no | Validator emits a warning, not an error, for wide bind |
 | P4 | Verify+Docs | Update README/release notes and write implementation report | docs/report | P1,P2,P3 | [P] | Docs match shipped `2.1.0` scope and report captures evidence |
 
@@ -152,7 +148,7 @@ Likely files to touch:
 ## 9. Acceptance Criteria
 
 - [ ] `pyproject.toml` and `src/llama_orchestrator/__init__.py` report `2.1.0`.
-- [ ] The config contract distinguishes static versus dynamic parameters in schema/documentation surfaces without breaking saved `config.json` shape.
+- [ ] The config contract persists `parameter_mutability` in `config.json` while remaining backward-compatible for existing instance files.
 - [ ] `save_config()` serialization remains compatible with existing instance configs, covered by loader/schema tests.
 - [ ] Validation emits a warning-level issue for `server.host = 0.0.0.0` and still allows the config.
 - [ ] Focused tests cover the schema/serialization and validator warning changes.
@@ -164,7 +160,7 @@ Likely files to touch:
 ### Focused checks
 
 - `uv run pytest tests/test_config.py tests/test_loader.py tests/test_validator.py -v --no-cov`
-- `uv run ruff check src/llama_orchestrator/__init__.py src/llama_orchestrator/config/schema.py src/llama_orchestrator/config/loader.py src/llama_orchestrator/config/validator.py tests/test_config.py tests/test_loader.py tests/test_validator.py`
+- `uv run ruff check src/llama_orchestrator/__init__.py src/llama_orchestrator/config/schema.py src/llama_orchestrator/config/loader.py src/llama_orchestrator/config/validator.py tests/test_config.py tests/test_loader.py tests/test_validator.py` when `ruff` is installed in the active environment; otherwise use editor diagnostics on the touched slice
 - Optional version smoke check: `uv run python -c "import llama_orchestrator; print(llama_orchestrator.__version__)"`
 
 ### Artifacts
@@ -177,7 +173,7 @@ Likely files to touch:
 
 | Risk | Impact | Mitigation | Rollback |
 |------|--------|------------|----------|
-| Static/dynamic split drifts into a breaking config redesign | medium | Keep the change descriptive and additive; verify `save_config()` output | Revert schema/loader edits and keep current JSON contract |
+| Static/dynamic split drifts into a breaking config redesign | medium | Keep the change additive via `parameter_mutability`; verify `save_config()` output and legacy loads | Revert schema/loader edits and keep current JSON contract |
 | `0.0.0.0` warning becomes an error or blocks existing workflows | high | Implement only as `severity="warning"`; cover with tests | Revert validator change and restore prior warning set |
 | Docs still imply roadmap features are shipped | high | Consolidate shipped-vs-roadmap wording in README and report | Revert doc slice and re-apply narrower factual wording |
 | Version strings drift across files | medium | Limit authoritative bump to package/runtime surfaces and test the runtime version | Revert incomplete bump and reapply consistently |

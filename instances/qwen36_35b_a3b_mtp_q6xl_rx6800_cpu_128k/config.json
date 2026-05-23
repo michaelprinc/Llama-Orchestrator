@@ -22,31 +22,31 @@
     "gpu": {
         "backend": "vulkan",
         "device_id": 1,
-        "layers": 999
+        "layers": 32
     },
     "env": {
         "GGML_VULKAN_DEVICE": "1"
     },
     "args": [
         "--parallel",
-        "4",
+        "1",
         "--device",
         "Vulkan1",
         "--main-gpu",
         "0",
         "--split-mode",
         "none",
-        "--cpu-moe",
-        "--no-kv-offload",
         "--no-mmap",
+        "--n-cpu-moe",
+        "22",
         "--cache-type-k",
-        "q8_0",
+        "q4_0",
         "--cache-type-v",
-        "q8_0",
+        "q4_0",
         "--no-mmproj",
         "--jinja",
         "--reasoning",
-        "on",
+        "off",
         "--flash-attn",
         "on",
         "--ubatch-size",
