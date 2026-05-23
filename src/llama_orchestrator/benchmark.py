@@ -9,17 +9,18 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import shlex
 import sqlite3
 import subprocess
 import time
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
 import httpx
 
-from llama_orchestrator.config import InstanceConfig, get_project_root, get_state_dir
+from llama_orchestrator.config import InstanceConfig, get_logs_dir, get_project_root, get_state_dir
 from llama_orchestrator.engine.process import get_log_files
 from llama_orchestrator.engine.validator import validate_process
 
@@ -28,6 +29,9 @@ DEFAULT_PROMPT_TEXT = (
     "tradeoffs of GPU inference in exactly five concise bullet points."
 )
 DEFAULT_MAX_TOKENS = 200
+DEFAULT_TEMPERATURE = 0.0
+DEFAULT_ENDPOINT = "chat_completions"
+BENCHMARK_ENDPOINTS = {"chat_completions", "completion"}
 
 
 @dataclass(frozen=True)
@@ -36,6 +40,13 @@ class BenchmarkSettings:
 
     prompt_file: Path
     max_tokens: int = DEFAULT_MAX_TOKENS
+    temperature: float = DEFAULT_TEMPERATURE
+    top_p: float | None = None
+    top_k: int | None = None
+    repeat_penalty: float | None = None
+    seed: int | None = None
+    endpoint: str = DEFAULT_ENDPOINT
+    ignore_eos: bool = False
 
 
 @dataclass(frozen=True)
@@ -58,6 +69,7 @@ class BenchmarkResult:
     shared_ram_mb: float | None = None
     total_gpu_memory_mb: float | None = None
     error: str | None = None
+    artifact_file: str | None = None
 
 
 @dataclass(frozen=True)
@@ -114,6 +126,85 @@ def _normalize_prompt_file(path: Path, project_root: Path) -> Path:
     return project_root / path
 
 
+def _coerce_int(
+    value: Any,
+    default: int,
+    *,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int:
+    try:
+        result = int(value)
+    except (TypeError, ValueError):
+        result = default
+    if minimum is not None:
+        result = max(minimum, result)
+    if maximum is not None:
+        result = min(maximum, result)
+    return result
+
+
+def _coerce_float(
+    value: Any,
+    default: float,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float:
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        result = default
+    if minimum is not None:
+        result = max(minimum, result)
+    if maximum is not None:
+        result = min(maximum, result)
+    return result
+
+
+def _coerce_optional_int(
+    value: Any,
+    *,
+    minimum: int | None = None,
+    maximum: int | None = None,
+) -> int | None:
+    if value in (None, ""):
+        return None
+    return _coerce_int(value, 0, minimum=minimum, maximum=maximum)
+
+
+def _coerce_optional_float(
+    value: Any,
+    *,
+    minimum: float | None = None,
+    maximum: float | None = None,
+) -> float | None:
+    if value in (None, ""):
+        return None
+    return _coerce_float(value, 0.0, minimum=minimum, maximum=maximum)
+
+
+def _coerce_bool(value: Any, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"1", "true", "yes", "on"}:
+            return True
+        if normalized in {"0", "false", "no", "off"}:
+            return False
+    if isinstance(value, int):
+        return bool(value)
+    return default
+
+
+def _coerce_endpoint(value: Any) -> str:
+    endpoint = str(value or DEFAULT_ENDPOINT)
+    if endpoint in BENCHMARK_ENDPOINTS:
+        return endpoint
+    return DEFAULT_ENDPOINT
+
+
 def load_benchmark_settings(project_root: Path | None = None) -> BenchmarkSettings:
     """Load benchmark settings, falling back to a default prompt file."""
     root = project_root or get_project_root()
@@ -131,10 +222,16 @@ def load_benchmark_settings(project_root: Path | None = None) -> BenchmarkSettin
         return BenchmarkSettings(prompt_file=default_prompt)
 
     prompt_value = str(data.get("prompt_file") or default_prompt)
-    max_tokens = int(data.get("max_tokens") or DEFAULT_MAX_TOKENS)
     return BenchmarkSettings(
         prompt_file=_normalize_prompt_file(Path(prompt_value), root),
-        max_tokens=max(1, max_tokens),
+        max_tokens=_coerce_int(data.get("max_tokens"), DEFAULT_MAX_TOKENS, minimum=1),
+        temperature=_coerce_float(data.get("temperature"), DEFAULT_TEMPERATURE, minimum=0.0),
+        top_p=_coerce_optional_float(data.get("top_p"), minimum=0.0, maximum=1.0),
+        top_k=_coerce_optional_int(data.get("top_k"), minimum=0),
+        repeat_penalty=_coerce_optional_float(data.get("repeat_penalty"), minimum=0.0),
+        seed=_coerce_optional_int(data.get("seed"), minimum=-1),
+        endpoint=_coerce_endpoint(data.get("endpoint")),
+        ignore_eos=_coerce_bool(data.get("ignore_eos")),
     )
 
 
@@ -145,6 +242,7 @@ def save_benchmark_settings(
     """Persist benchmark settings with prompt paths relative to project root."""
     root = project_root or get_project_root()
     settings_path = get_settings_path()
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
     prompt_file = settings.prompt_file
     try:
         prompt_value = str(prompt_file.resolve().relative_to(root.resolve()))
@@ -156,6 +254,13 @@ def save_benchmark_settings(
             {
                 "prompt_file": prompt_value,
                 "max_tokens": settings.max_tokens,
+                "temperature": settings.temperature,
+                "top_p": settings.top_p,
+                "top_k": settings.top_k,
+                "repeat_penalty": settings.repeat_penalty,
+                "seed": settings.seed,
+                "endpoint": settings.endpoint,
+                "ignore_eos": settings.ignore_eos,
             },
             indent=2,
         ),
@@ -182,6 +287,11 @@ def get_benchmark_db_path() -> Path:
     return get_state_dir() / "benchmark_history.sqlite"
 
 
+def get_benchmark_runs_dir(instance_name: str) -> Path:
+    """Return the per-run benchmark artifact directory."""
+    return get_logs_dir() / instance_name / "benchmarks"
+
+
 def init_benchmark_db(db_path: Path | None = None) -> Path:
     """Initialize benchmark history storage."""
     path = db_path or get_benchmark_db_path()
@@ -206,16 +316,23 @@ def init_benchmark_db(db_path: Path | None = None) -> Path:
                 shared_ram_mb REAL,
                 total_gpu_memory_mb REAL,
                 status TEXT NOT NULL,
-                error TEXT
+                error TEXT,
+                artifact_file TEXT
             )
             """
         )
         existing_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(benchmarks)").fetchall()
         }
-        for column_name in ("dedicated_vram_mb", "shared_ram_mb", "total_gpu_memory_mb"):
+        for column_name in (
+            "dedicated_vram_mb",
+            "shared_ram_mb",
+            "total_gpu_memory_mb",
+            "artifact_file",
+        ):
             if column_name not in existing_columns:
-                conn.execute(f"ALTER TABLE benchmarks ADD COLUMN {column_name} REAL")
+                column_type = "TEXT" if column_name == "artifact_file" else "REAL"
+                conn.execute(f"ALTER TABLE benchmarks ADD COLUMN {column_name} {column_type}")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_benchmarks_instance_time "
             "ON benchmarks(instance_name, timestamp)"
@@ -236,8 +353,8 @@ def record_benchmark_result(
                 timestamp, instance_name, config_hash, prompt_file, prompt_sha256,
                 prompt_chars, output_tokens, tokens_per_second, latency_ms,
                 elapsed_ms, vram_mb, dedicated_vram_mb, shared_ram_mb,
-                total_gpu_memory_mb, status, error
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                total_gpu_memory_mb, status, error, artifact_file
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 result.timestamp,
@@ -256,6 +373,7 @@ def record_benchmark_result(
                 result.total_gpu_memory_mb,
                 result.status,
                 result.error,
+                result.artifact_file,
             ),
         )
 
@@ -305,6 +423,7 @@ def latest_benchmark_results(db_path: Path | None = None) -> dict[str, Benchmark
             shared_ram_mb=shared_ram_mb,
             total_gpu_memory_mb=total_gpu_memory_mb,
             error=row_data["error"],
+            artifact_file=row_data.get("artifact_file"),
         )
 
     return results
@@ -525,6 +644,209 @@ def _extract_token_count(payload: dict[str, Any], fallback_text: str) -> int:
     return max(1, len(fallback_text.split()))
 
 
+def get_benchmark_endpoint_path(settings: BenchmarkSettings) -> str:
+    """Return the llama.cpp HTTP endpoint for the configured benchmark mode."""
+    if settings.endpoint == "completion":
+        return "/completion"
+    return "/v1/chat/completions"
+
+
+def build_benchmark_request_body(settings: BenchmarkSettings, prompt: str) -> dict[str, Any]:
+    """Build the llama.cpp benchmark request body."""
+    if settings.endpoint == "completion":
+        request_body: dict[str, Any] = {
+            "prompt": prompt,
+            "n_predict": settings.max_tokens,
+            "temperature": settings.temperature,
+            "stream": True,
+            "cache_prompt": False,
+        }
+    else:
+        request_body = {
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": settings.max_tokens,
+            "temperature": settings.temperature,
+            "stream": True,
+        }
+    optional_values = {
+        "top_p": settings.top_p,
+        "top_k": settings.top_k,
+        "repeat_penalty": settings.repeat_penalty,
+        "seed": settings.seed,
+    }
+    request_body.update(
+        {key: value for key, value in optional_values.items() if value is not None}
+    )
+    if settings.ignore_eos:
+        request_body["ignore_eos"] = True
+    return request_body
+
+
+def _extract_stream_content(payload: dict[str, Any]) -> str:
+    content = payload.get("content")
+    if isinstance(content, str):
+        return content
+
+    choices = payload.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return ""
+    choice = choices[0]
+    if not isinstance(choice, dict):
+        return ""
+    delta = choice.get("delta")
+    if not isinstance(delta, dict):
+        return ""
+
+    parts: list[str] = []
+    reasoning_content = delta.get("reasoning_content")
+    if isinstance(reasoning_content, str):
+        parts.append(reasoning_content)
+    chat_content = delta.get("content")
+    if isinstance(chat_content, str):
+        parts.append(chat_content)
+    return "".join(parts)
+
+
+def _safe_filename_part(value: str) -> str:
+    safe = re.sub(r"[^A-Za-z0-9_.-]+", "-", value).strip("-._")
+    return safe or "benchmark"
+
+
+def _benchmark_artifact_path(result: BenchmarkResult) -> Path:
+    instance_dir = get_benchmark_runs_dir(result.instance_name)
+    filename = (
+        f"{_safe_filename_part(result.timestamp)}-"
+        f"{_safe_filename_part(result.config_hash)}-{result.status}.md"
+    )
+    return instance_dir / filename
+
+
+def _display_artifact_path(path: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(get_project_root().resolve()))
+    except ValueError:
+        return str(path)
+
+
+def _format_optional_metric(value: float | int | str | None) -> str:
+    if value is None:
+        return "-"
+    if isinstance(value, float):
+        return f"{value:.3f}"
+    return str(value)
+
+
+def _markdown_fence(text: str) -> str:
+    longest_run = max((len(match.group(0)) for match in re.finditer(r"`+", text)), default=0)
+    return "`" * max(3, longest_run + 1)
+
+
+def _settings_summary(settings: BenchmarkSettings) -> dict[str, int | float | str | bool | None]:
+    return {
+        "max_tokens": settings.max_tokens,
+        "temperature": settings.temperature,
+        "top_p": settings.top_p,
+        "top_k": settings.top_k,
+        "repeat_penalty": settings.repeat_penalty,
+        "seed": settings.seed,
+        "endpoint": settings.endpoint,
+        "ignore_eos": settings.ignore_eos,
+    }
+
+
+def write_benchmark_artifact(
+    result: BenchmarkResult,
+    *,
+    config: InstanceConfig,
+    settings: BenchmarkSettings,
+    prompt_text: str,
+    output_text: str,
+    request_body: dict[str, Any],
+    final_payload: dict[str, Any],
+) -> Path:
+    """Write a Markdown artifact with prompt, model output, and benchmark stats."""
+    artifact_path = _benchmark_artifact_path(result)
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    request_without_prompt = {
+        key: value
+        for key, value in request_body.items()
+        if key not in {"prompt", "messages"}
+    }
+    prompt_fence = _markdown_fence(prompt_text)
+    output_fence = _markdown_fence(output_text)
+    payload_text = json.dumps(final_payload, indent=2, ensure_ascii=False) if final_payload else "{}"
+    payload_fence = _markdown_fence(payload_text)
+    settings_text = json.dumps(_settings_summary(settings), indent=2, ensure_ascii=False)
+    request_text = json.dumps(request_without_prompt, indent=2, ensure_ascii=False)
+
+    artifact_path.write_text(
+        "\n".join(
+            [
+                f"# Quick Benchmark - {result.instance_name}",
+                "",
+                "## Summary",
+                "",
+                f"- Timestamp: `{result.timestamp}`",
+                f"- Status: `{result.status}`",
+                f"- Config hash: `{result.config_hash}`",
+                f"- Prompt file: `{result.prompt_file}`",
+                f"- Prompt SHA256: `{result.prompt_sha256 or '-'}`",
+                f"- Model path: `{config.model.path}`",
+                f"- Runtime args: `{shlex.join(config.args) if config.args else '-'}`",
+                f"- Backend: `{config.gpu.backend}`",
+                f"- Device ID: `{config.gpu.device_id}`",
+                f"- Server: `{config.server.host}:{config.server.port}`",
+                "",
+                "## Metrics",
+                "",
+                "| Metric | Value |",
+                "|--------|-------|",
+                f"| Output tokens | {_format_optional_metric(result.output_tokens)} |",
+                f"| Tokens/sec | {_format_optional_metric(result.tokens_per_second)} |",
+                f"| First-token latency ms | {_format_optional_metric(result.latency_ms)} |",
+                f"| Elapsed ms | {_format_optional_metric(result.elapsed_ms)} |",
+                f"| Dedicated VRAM MB | {_format_optional_metric(result.dedicated_vram_mb)} |",
+                f"| Shared RAM MB | {_format_optional_metric(result.shared_ram_mb)} |",
+                f"| Total sampled GPU memory MB | {_format_optional_metric(result.total_gpu_memory_mb)} |",
+                f"| Error | {result.error or '-'} |",
+                "",
+                "## Benchmark Settings",
+                "",
+                "```json",
+                settings_text,
+                "```",
+                "",
+                "## Request Parameters",
+                "",
+                "```json",
+                request_text,
+                "```",
+                "",
+                "## Prompt",
+                "",
+                prompt_fence,
+                prompt_text,
+                prompt_fence,
+                "",
+                "## Model Output",
+                "",
+                output_fence,
+                output_text,
+                output_fence,
+                "",
+                "## Final Stream Payload",
+                "",
+                payload_fence + "json",
+                payload_text,
+                payload_fence,
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    return artifact_path
+
+
 def quick_benchmark_instance(
     config: InstanceConfig,
     settings: BenchmarkSettings | None = None,
@@ -536,21 +858,20 @@ def quick_benchmark_instance(
     prompt_file = active_settings.prompt_file.name
     stderr_log = get_log_files(config.name)[1]
     pid = get_validated_benchmark_pid(config.name)
+    prompt = ""
+    prompt_digest = ""
+    output_text = ""
+    chunks: list[str] = []
+    final_payload: dict[str, Any] = {}
+    request_body: dict[str, Any] = {}
 
     try:
         prompt, prompt_digest = read_prompt(active_settings)
         started = time.perf_counter()
         first_token_at: float | None = None
-        chunks: list[str] = []
-        final_payload: dict[str, Any] = {}
-        url = f"http://{config.server.host}:{config.server.port}/completion"
-        request_body = {
-            "prompt": prompt,
-            "n_predict": active_settings.max_tokens,
-            "temperature": 0,
-            "stream": True,
-            "cache_prompt": False,
-        }
+        endpoint_path = get_benchmark_endpoint_path(active_settings)
+        url = f"http://{config.server.host}:{config.server.port}{endpoint_path}"
+        request_body = build_benchmark_request_body(active_settings, prompt)
 
         with httpx.Client(timeout=config.server.timeout or None) as client, client.stream(
             "POST",
@@ -570,8 +891,8 @@ def quick_benchmark_instance(
                 except json.JSONDecodeError:
                     continue
                 final_payload = payload
-                content = payload.get("content")
-                if isinstance(content, str) and content:
+                content = _extract_stream_content(payload)
+                if content:
                     if first_token_at is None:
                         first_token_at = time.perf_counter()
                     chunks.append(content)
@@ -608,8 +929,7 @@ def quick_benchmark_instance(
             total_gpu_memory_mb=memory_sample.total_gpu_memory_mb,
         )
     except Exception as exc:
-        prompt = ""
-        prompt_digest = ""
+        output_text = "".join(chunks)
         with suppress(Exception):
             prompt, prompt_digest = read_prompt(active_settings)
         result = BenchmarkResult(
@@ -633,8 +953,8 @@ def quick_benchmark_instance(
         memory_sample = sample_gpu_memory(
             pid=pid,
             device_id=config.gpu.device_id,
-                backend=config.gpu.backend,
-                stderr_log=stderr_log,
+            backend=config.gpu.backend,
+            stderr_log=stderr_log,
         )
         result = BenchmarkResult(
             **{
@@ -646,5 +966,15 @@ def quick_benchmark_instance(
             }
         )
 
+    artifact_path = write_benchmark_artifact(
+        result,
+        config=config,
+        settings=active_settings,
+        prompt_text=prompt,
+        output_text=output_text,
+        request_body=request_body,
+        final_payload=final_payload,
+    )
+    result = replace(result, artifact_file=_display_artifact_path(artifact_path))
     record_benchmark_result(result)
     return result

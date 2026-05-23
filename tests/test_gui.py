@@ -1,10 +1,12 @@
 """Tests for GUI helper behavior."""
 
+from pathlib import Path
 from unittest.mock import patch
 
-from llama_orchestrator.benchmark import BenchmarkResult
+from llama_orchestrator.benchmark import BenchmarkResult, BenchmarkSettings
 from llama_orchestrator.engine.state import HealthStatus, InstanceState, InstanceStatus
 from llama_orchestrator.gui import (
+    BENCHMARK_PARAMS_MENU_LABEL,
     COLUMN_WIDTHS,
     DEFAULT_RUNTIME_ARGS,
     EDIT_BENCHMARK_PROMPT_LABEL,
@@ -15,6 +17,7 @@ from llama_orchestrator.gui import (
     derive_display_status_and_health,
     format_benchmark_memory,
     format_benchmark_message,
+    format_benchmark_settings_summary,
     parse_tag_string,
     persist_instance_health,
 )
@@ -116,6 +119,30 @@ def test_gui_uses_explicit_benchmark_prompt_edit_label() -> None:
     assert EDIT_BENCHMARK_PROMPT_LABEL == "Edit Benchmark Prompt"
 
 
+def test_gui_has_compact_benchmark_params_menu_label() -> None:
+    """The benchmark params menu should stay compact next to Quick benchmark."""
+    assert BENCHMARK_PARAMS_MENU_LABEL == "Params"
+
+
+def test_format_benchmark_settings_summary_lists_custom_values() -> None:
+    """The activity log should summarize non-default benchmark parameters compactly."""
+    settings = BenchmarkSettings(
+        prompt_file=Path("default.txt"),
+        max_tokens=64,
+        temperature=0.2,
+        top_p=0.9,
+        top_k=40,
+        repeat_penalty=1.1,
+        seed=7,
+        endpoint="completion",
+        ignore_eos=True,
+    )
+
+    assert format_benchmark_settings_summary(settings) == (
+        "completion, 64 tok, temp 0.2, top-p 0.9, top-k 40, penalty 1.1, seed 7, ignore EOS"
+    )
+
+
 def test_format_benchmark_memory_includes_total_and_shared_ram_warning() -> None:
     """GUI memory display should surface total usage and shared RAM slowdown context."""
     result = BenchmarkResult(
@@ -134,11 +161,13 @@ def test_format_benchmark_memory_includes_total_and_shared_ram_warning() -> None
         dedicated_vram_mb=16261.3,
         shared_ram_mb=175.2,
         total_gpu_memory_mb=16436.5,
+        artifact_file="logs/demo/benchmarks/run.md",
     )
 
     assert format_benchmark_memory(result) == "16436 total (VRAM 16261, RAM 175) slow"
     assert benchmark_shared_ram_warning(result) == "Shared RAM in use; inference may be slower."
     assert "Shared RAM in use; inference may be slower." in format_benchmark_message(result)
+    assert "Artifact: logs/demo/benchmarks/run.md." in format_benchmark_message(result)
 
 
 def test_format_benchmark_memory_keeps_legacy_vram_rows_readable() -> None:

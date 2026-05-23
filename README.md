@@ -309,7 +309,8 @@ llama-orchestrator/
 ├── benchmarks/prompts/default.txt
 ├── logs/<name>/              # Instance logs
 │   ├── stdout.log
-│   └── stderr.log
+│   ├── stderr.log
+│   └── benchmarks/*.md
 └── src/llama_orchestrator/   # Python package
 ```
 
@@ -393,7 +394,9 @@ The GUI supports:
 - Opening instance config files, log folders, and the project folder.
 - Choosing visible table columns from the `Columns` menu.
 - Filtering by instance tags and applying batch actions to visible rows.
-- Running `Quick benchmark` from the detail bar or row context menu.
+- Running `Quick benchmark` from the detail bar or row context menu, with the
+  compact `Params` menu for endpoint, max tokens, temperature, top-p, top-k,
+  repeat penalty, seed, ignore-EOS, and opening the persisted settings file.
 - Selecting and opening the editable benchmark prompt with
   `Edit Benchmark Prompt` and `Open prompt`.
 - Cloning a row with an incremented/suggested port.
@@ -407,9 +410,9 @@ GUI status display intentionally separates engine state from readiness:
 as `ready`. The underlying runtime status remains `running`.
 
 Persisted GUI-observed state currently includes the selected benchmark prompt
-(`state/benchmark_settings.json`) and manual health/benchmark health updates in
-the runtime state and `health_history`. Column visibility, tag filter, and
-window geometry reset on GUI launch.
+and quick benchmark parameters (`state/benchmark_settings.json`) plus manual
+health/benchmark health updates in the runtime state and `health_history`.
+Column visibility, tag filter, and window geometry reset on GUI launch.
 
 ### Quick Benchmark and VRAM
 
@@ -417,10 +420,20 @@ The default benchmark prompt lives at `benchmarks/prompts/default.txt`.
 Benchmark settings persist to `state/benchmark_settings.json`; benchmark
 attempts append to `state/benchmark_history.sqlite` with prompt file, prompt
 SHA256, output token count, TPS, latency, dedicated VRAM MB, shared RAM MB,
-total sampled GPU memory MB, config hash, status, and error text.
+total sampled GPU memory MB, config hash, status, error text, and the
+corresponding artifact path.
+The `Params` menu next to `Quick benchmark` edits the persisted sampling
+controls without expanding the detail bar; blank optional values use the
+llama.cpp server defaults. The default endpoint is `/v1/chat/completions` so
+chat templates and generation prompts are applied for instruction-tuned models;
+the legacy `/completion` endpoint remains selectable.
+Every quick benchmark also writes a Markdown artifact under
+`logs/<instance>/benchmarks/` with the full prompt text, model output,
+request parameters, benchmark settings, final stream payload, and the same
+summary metrics stored in SQLite.
 
 `Quick benchmark` requires the selected instance to expose a live llama.cpp
-`/completion` endpoint. GPU memory reporting is best-effort and prefers
+HTTP endpoint. GPU memory reporting is best-effort and prefers
 process-scoped Windows GPU counters when available so the GUI can show total
 sampled GPU memory plus any shared RAM used by the benchmarked process. If
 shared RAM is non-zero, the GUI warns that inference may be slower.
@@ -474,6 +487,8 @@ benchmark changes were validated with Ruff scoped to touched files.
 
 ### Recent Implementation Reports
 
+- [Benchmark artifact history](../../reports/implementation/infra-local/llama-orchestrator/2026/20260523-llama-orchestrator-benchmark-artifact-history.md)
+- [Benchmark settings and artifact location](../../reports/implementation/infra-local/llama-orchestrator/2026/20260523-llama-orchestrator-benchmark-settings-artifact-location.md)
 - [V2 implementation report](../../reports/20260516_llama-orchestrator-v2-implementation-report.md)
 - [V2 README current-state audit](../../reports/implementation/infra-local/llama-orchestrator/2026/20260516-llama-orchestrator-v2-readme-current-state-audit.md)
 - [Documentation refresh](../../reports/implementation/infra-local/llama-orchestrator/2026/20260516-llama-orchestrator-documentation-refresh.md)

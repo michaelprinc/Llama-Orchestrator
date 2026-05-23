@@ -15,10 +15,14 @@ import threading
 import time
 import tkinter as tk
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, simpledialog, ttk
 
 from llama_orchestrator.benchmark import (
+    DEFAULT_ENDPOINT,
+    DEFAULT_MAX_TOKENS,
+    DEFAULT_TEMPERATURE,
     BenchmarkResult,
     BenchmarkSettings,
     latest_benchmark_results,
@@ -65,6 +69,7 @@ MANAGED_FLAG_ARGS = {"--no-mmproj"}
 VULKAN_VARIANT = "win-vulkan-x64"
 INSTALL_LLAMA_SERVER_LABEL = "Install llama-server"
 EDIT_BENCHMARK_PROMPT_LABEL = "Edit Benchmark Prompt"
+BENCHMARK_PARAMS_MENU_LABEL = "Params"
 VULKAN_BINARY_MISSING_MESSAGE = (
     "No win-vulkan-x64 llama-server binary is installed. Use Install llama-server "
     "to download the default variant, or choose another llama-server variant."
@@ -171,6 +176,29 @@ def format_metric(value: float | None, digits: int = 1) -> str:
     return f"{value:.{digits}f}"
 
 
+def format_benchmark_settings_summary(settings: BenchmarkSettings) -> str:
+    """Format quick benchmark settings for compact GUI labels and logs."""
+    optional = {
+        "top-p": settings.top_p,
+        "top-k": settings.top_k,
+        "penalty": settings.repeat_penalty,
+        "seed": settings.seed,
+    }
+    parts = [
+        "chat" if settings.endpoint == "chat_completions" else "completion",
+        f"{settings.max_tokens} tok",
+        f"temp {settings.temperature:g}",
+    ]
+    parts.extend(
+        f"{label} {value:g}" if isinstance(value, float) else f"{label} {value}"
+        for label, value in optional.items()
+        if value is not None
+    )
+    if settings.ignore_eos:
+        parts.append("ignore EOS")
+    return ", ".join(parts)
+
+
 def format_benchmark_message(result: BenchmarkResult) -> str:
     """Format a benchmark result for the activity log."""
     if result.status != "ok":
@@ -184,6 +212,8 @@ def format_benchmark_message(result: BenchmarkResult) -> str:
             message = f"{message} Memory: {memory_text}."
         if warning:
             message = f"{message} {warning}"
+        if result.artifact_file:
+            message = f"{message} Artifact: {result.artifact_file}."
         return message
     warning = benchmark_shared_ram_warning(result)
     message = (
@@ -193,7 +223,9 @@ def format_benchmark_message(result: BenchmarkResult) -> str:
         f"{format_benchmark_memory(result)}."
     )
     if warning:
-        return f"{message} {warning}"
+        message = f"{message} {warning}"
+    if result.artifact_file:
+        message = f"{message} Artifact: {result.artifact_file}."
     return message
 
 
@@ -299,6 +331,7 @@ class LlamaOrchestratorGui(tk.Tk):
         self._messages: queue.Queue[str] = queue.Queue()
         self._selected_name: str | None = None
         self.benchmark_settings = load_benchmark_settings(self.project_root)
+        self.benchmark_params_menu: tk.Menu | None = None
         self.tag_filter_var = tk.StringVar(value="All tags")
         self.prompt_var = tk.StringVar(value=self.benchmark_settings.prompt_file.name)
 
@@ -398,6 +431,11 @@ class LlamaOrchestratorGui(tk.Tk):
         detail_bar = ttk.Frame(table_frame, padding=(0, 8, 0, 0))
         detail_bar.grid(row=1, column=0, sticky="ew")
         ttk.Button(detail_bar, text="Quick benchmark", command=self._run_benchmark_selected).pack(side=tk.LEFT)
+        params_button = ttk.Menubutton(detail_bar, text=BENCHMARK_PARAMS_MENU_LABEL)
+        self.benchmark_params_menu = tk.Menu(params_button, tearoff=False)
+        params_button["menu"] = self.benchmark_params_menu
+        params_button.pack(side=tk.LEFT, padx=(4, 6))
+        self._refresh_benchmark_params_menu()
         ttk.Button(detail_bar, text="Clone row", command=self._clone_selected).pack(side=tk.LEFT, padx=6)
         ttk.Button(detail_bar, text="Diff selected", command=self._diff_selected).pack(side=tk.LEFT)
         ttk.Button(detail_bar, text="Copy CLI", command=self._copy_cli_command).pack(side=tk.LEFT, padx=6)
@@ -662,6 +700,7 @@ class LlamaOrchestratorGui(tk.Tk):
         name = self._selected_instance()
         if not name:
             return
+        self._reload_benchmark_settings()
 
         def action() -> str:
             config = get_instance_config(name)
@@ -688,6 +727,203 @@ class LlamaOrchestratorGui(tk.Tk):
 
         self._run_background(f"benchmark {name}", action)
 
+    def _set_benchmark_settings(self, **changes: int | float | str | bool | Path | None) -> None:
+        self.benchmark_settings = replace(self.benchmark_settings, **changes)
+        save_benchmark_settings(self.benchmark_settings, self.project_root)
+        self.prompt_var.set(self.benchmark_settings.prompt_file.name)
+        self._refresh_benchmark_params_menu()
+
+    def _reload_benchmark_settings(self) -> None:
+        self.benchmark_settings = load_benchmark_settings(self.project_root)
+        self.prompt_var.set(self.benchmark_settings.prompt_file.name)
+        self._refresh_benchmark_params_menu()
+
+    def _refresh_benchmark_params_menu(self) -> None:
+        if self.benchmark_params_menu is None:
+            return
+        menu = self.benchmark_params_menu
+        menu.delete(0, tk.END)
+        settings = self.benchmark_settings
+        menu.add_command(
+            label=f"Max tokens: {settings.max_tokens}",
+            command=self._edit_benchmark_max_tokens,
+        )
+        menu.add_command(
+            label=f"Endpoint: {'chat' if settings.endpoint == 'chat_completions' else 'completion'}",
+            command=self._toggle_benchmark_endpoint,
+        )
+        menu.add_command(
+            label=f"Temperature: {settings.temperature:g}",
+            command=self._edit_benchmark_temperature,
+        )
+        menu.add_command(
+            label=f"Top-p: {settings.top_p:g}" if settings.top_p is not None else "Top-p: default",
+            command=lambda: self._edit_optional_float_setting(
+                "Top-p",
+                "top_p",
+                minimum=0.0,
+                maximum=1.0,
+            ),
+        )
+        menu.add_command(
+            label=f"Top-k: {settings.top_k}" if settings.top_k is not None else "Top-k: default",
+            command=lambda: self._edit_optional_int_setting("Top-k", "top_k", minimum=0),
+        )
+        menu.add_command(
+            label=(
+                f"Repeat penalty: {settings.repeat_penalty:g}"
+                if settings.repeat_penalty is not None
+                else "Repeat penalty: default"
+            ),
+            command=lambda: self._edit_optional_float_setting(
+                "Repeat penalty",
+                "repeat_penalty",
+                minimum=0.0,
+            ),
+        )
+        menu.add_command(
+            label=f"Seed: {settings.seed}" if settings.seed is not None else "Seed: default",
+            command=lambda: self._edit_optional_int_setting("Seed", "seed", minimum=-1),
+        )
+        menu.add_command(
+            label=f"Ignore EOS: {'on' if settings.ignore_eos else 'off'}",
+            command=self._toggle_benchmark_ignore_eos,
+        )
+        menu.add_separator()
+        menu.add_command(label="Reset defaults", command=self._reset_benchmark_params)
+        menu.add_separator()
+        menu.add_command(label="Open settings file", command=self._open_benchmark_settings_file)
+
+    def _toggle_benchmark_endpoint(self) -> None:
+        endpoint = (
+            "completion"
+            if self.benchmark_settings.endpoint == "chat_completions"
+            else "chat_completions"
+        )
+        self._set_benchmark_settings(endpoint=endpoint)
+        self._post_message(
+            f"Benchmark parameters updated: {format_benchmark_settings_summary(self.benchmark_settings)}."
+        )
+
+    def _toggle_benchmark_ignore_eos(self) -> None:
+        self._set_benchmark_settings(ignore_eos=not self.benchmark_settings.ignore_eos)
+        self._post_message(
+            f"Benchmark parameters updated: {format_benchmark_settings_summary(self.benchmark_settings)}."
+        )
+
+    def _edit_benchmark_max_tokens(self) -> None:
+        value = simpledialog.askinteger(
+            "Benchmark max tokens",
+            "Maximum generated tokens",
+            initialvalue=self.benchmark_settings.max_tokens,
+            minvalue=1,
+            parent=self,
+        )
+        if value is None:
+            return
+        self._set_benchmark_settings(max_tokens=value)
+        self._post_message(
+            f"Benchmark parameters updated: {format_benchmark_settings_summary(self.benchmark_settings)}."
+        )
+
+    def _edit_benchmark_temperature(self) -> None:
+        value = simpledialog.askfloat(
+            "Benchmark temperature",
+            "Temperature",
+            initialvalue=self.benchmark_settings.temperature,
+            minvalue=0.0,
+            parent=self,
+        )
+        if value is None:
+            return
+        self._set_benchmark_settings(temperature=value)
+        self._post_message(
+            f"Benchmark parameters updated: {format_benchmark_settings_summary(self.benchmark_settings)}."
+        )
+
+    def _edit_optional_int_setting(self, label: str, field: str, *, minimum: int) -> None:
+        current = getattr(self.benchmark_settings, field)
+        value = simpledialog.askstring(
+            f"Benchmark {label}",
+            f"{label} (blank = server default)",
+            initialvalue="" if current is None else str(current),
+            parent=self,
+        )
+        if value is None:
+            return
+        clean = value.strip()
+        if not clean:
+            self._set_benchmark_settings(**{field: None})
+        else:
+            try:
+                parsed = int(clean)
+            except ValueError:
+                messagebox.showerror("Invalid value", f"{label} must be an integer.")
+                return
+            if parsed < minimum:
+                messagebox.showerror("Invalid value", f"{label} must be at least {minimum}.")
+                return
+            self._set_benchmark_settings(**{field: parsed})
+        self._post_message(
+            f"Benchmark parameters updated: {format_benchmark_settings_summary(self.benchmark_settings)}."
+        )
+
+    def _edit_optional_float_setting(
+        self,
+        label: str,
+        field: str,
+        *,
+        minimum: float,
+        maximum: float | None = None,
+    ) -> None:
+        current = getattr(self.benchmark_settings, field)
+        value = simpledialog.askstring(
+            f"Benchmark {label}",
+            f"{label} (blank = server default)",
+            initialvalue="" if current is None else f"{current:g}",
+            parent=self,
+        )
+        if value is None:
+            return
+        clean = value.strip()
+        if not clean:
+            self._set_benchmark_settings(**{field: None})
+        else:
+            try:
+                parsed = float(clean)
+            except ValueError:
+                messagebox.showerror("Invalid value", f"{label} must be a number.")
+                return
+            if parsed < minimum:
+                messagebox.showerror("Invalid value", f"{label} must be at least {minimum:g}.")
+                return
+            if maximum is not None and parsed > maximum:
+                messagebox.showerror("Invalid value", f"{label} must be at most {maximum:g}.")
+                return
+            self._set_benchmark_settings(**{field: parsed})
+        self._post_message(
+            f"Benchmark parameters updated: {format_benchmark_settings_summary(self.benchmark_settings)}."
+        )
+
+    def _reset_benchmark_params(self) -> None:
+        self._set_benchmark_settings(
+            max_tokens=DEFAULT_MAX_TOKENS,
+            temperature=DEFAULT_TEMPERATURE,
+            top_p=None,
+            top_k=None,
+            repeat_penalty=None,
+            seed=None,
+            endpoint=DEFAULT_ENDPOINT,
+            ignore_eos=False,
+        )
+        self._post_message(
+            f"Benchmark parameters reset: {format_benchmark_settings_summary(self.benchmark_settings)}."
+        )
+
+    def _open_benchmark_settings_file(self) -> None:
+        settings_path = save_benchmark_settings(self.benchmark_settings, self.project_root)
+        self._open_path(settings_path)
+
     def _select_prompt_file(self) -> None:
         path = filedialog.askopenfilename(
             title="Select benchmark prompt",
@@ -696,12 +932,7 @@ class LlamaOrchestratorGui(tk.Tk):
         )
         if not path:
             return
-        self.benchmark_settings = BenchmarkSettings(
-            prompt_file=Path(path),
-            max_tokens=self.benchmark_settings.max_tokens,
-        )
-        save_benchmark_settings(self.benchmark_settings, self.project_root)
-        self.prompt_var.set(self.benchmark_settings.prompt_file.name)
+        self._set_benchmark_settings(prompt_file=Path(path))
         self._post_message(f"Benchmark prompt set to {self.benchmark_settings.prompt_file.name}.")
 
     def _open_prompt_file(self) -> None:

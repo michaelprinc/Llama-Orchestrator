@@ -46,7 +46,7 @@
     "--no-mmproj",
     "--jinja",
     "--reasoning",
-    "on",
+    "off",
     "--flash-attn",
     "on"
   ],

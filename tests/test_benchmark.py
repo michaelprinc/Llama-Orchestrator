@@ -9,7 +9,9 @@ from llama_orchestrator.benchmark import (
     BenchmarkResult,
     BenchmarkSettings,
     _parse_vram_from_text,
+    build_benchmark_request_body,
     config_hash,
+    get_benchmark_endpoint_path,
     get_default_prompt_file,
     get_validated_benchmark_pid,
     init_benchmark_db,
@@ -19,6 +21,7 @@ from llama_orchestrator.benchmark import (
     sample_gpu_memory,
     sample_vram_mb_from_log,
     save_benchmark_settings,
+    write_benchmark_artifact,
 )
 from llama_orchestrator.config import InstanceConfig, ModelConfig
 
@@ -42,11 +45,115 @@ def test_benchmark_settings_roundtrip(tmp_path: Path, monkeypatch) -> None:
     prompt_file.parent.mkdir(parents=True)
     prompt_file.write_text("Prompt v2", encoding="utf-8")
 
-    save_benchmark_settings(BenchmarkSettings(prompt_file=prompt_file, max_tokens=64), tmp_path)
+    save_benchmark_settings(
+        BenchmarkSettings(
+            prompt_file=prompt_file,
+            max_tokens=64,
+            temperature=0.2,
+            top_p=0.9,
+            top_k=50,
+            repeat_penalty=1.15,
+            seed=42,
+            endpoint="completion",
+            ignore_eos=True,
+        ),
+        tmp_path,
+    )
     loaded = load_benchmark_settings(tmp_path)
 
     assert loaded.prompt_file == prompt_file
     assert loaded.max_tokens == 64
+    assert loaded.temperature == 0.2
+    assert loaded.top_p == 0.9
+    assert loaded.top_k == 50
+    assert loaded.repeat_penalty == 1.15
+    assert loaded.seed == 42
+    assert loaded.endpoint == "completion"
+    assert loaded.ignore_eos is True
+
+
+def test_benchmark_settings_clamp_invalid_values(tmp_path: Path, monkeypatch) -> None:
+    """Loaded benchmark settings should stay inside GUI-supported ranges."""
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    monkeypatch.setattr("llama_orchestrator.benchmark.get_state_dir", lambda: state_dir)
+
+    prompt_file = get_default_prompt_file(tmp_path)
+    (state_dir / "benchmark_settings.json").write_text(
+        json.dumps(
+            {
+                "prompt_file": str(prompt_file),
+                "max_tokens": -10,
+                "temperature": -1,
+                "top_p": 2,
+                "top_k": -4,
+                "repeat_penalty": -0.5,
+                "seed": -4,
+                "endpoint": "unknown",
+                "ignore_eos": "yes",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    loaded = load_benchmark_settings(tmp_path)
+
+    assert loaded.max_tokens == 1
+    assert loaded.temperature == 0.0
+    assert loaded.top_p == 1.0
+    assert loaded.top_k == 0
+    assert loaded.repeat_penalty == 0.0
+    assert loaded.seed == -1
+    assert loaded.endpoint == "chat_completions"
+    assert loaded.ignore_eos is True
+
+
+def test_build_benchmark_request_body_includes_custom_completion_params(tmp_path: Path) -> None:
+    """Quick benchmark should pass persisted sampling controls to /completion."""
+    settings = BenchmarkSettings(
+        prompt_file=tmp_path / "prompt.txt",
+        max_tokens=32,
+        temperature=0.1,
+        top_p=0.95,
+        top_k=40,
+        repeat_penalty=1.05,
+        seed=123,
+        endpoint="completion",
+        ignore_eos=True,
+    )
+
+    assert get_benchmark_endpoint_path(settings) == "/completion"
+    assert build_benchmark_request_body(settings, "Prompt") == {
+        "prompt": "Prompt",
+        "n_predict": 32,
+        "temperature": 0.1,
+        "stream": True,
+        "cache_prompt": False,
+        "top_p": 0.95,
+        "top_k": 40,
+        "repeat_penalty": 1.05,
+        "seed": 123,
+        "ignore_eos": True,
+    }
+
+
+def test_build_benchmark_request_body_uses_chat_endpoint_by_default(tmp_path: Path) -> None:
+    """The default benchmark endpoint should apply the model chat template."""
+    settings = BenchmarkSettings(prompt_file=tmp_path / "prompt.txt")
+
+    body = build_benchmark_request_body(settings, "Prompt")
+
+    assert get_benchmark_endpoint_path(settings) == "/v1/chat/completions"
+    assert body["messages"] == [{"role": "user", "content": "Prompt"}]
+    assert body["max_tokens"] == 200
+    assert body["temperature"] == 0.0
+    assert body["stream"] is True
+    assert "n_predict" not in body
+    assert "top_p" not in body
+    assert "top_k" not in body
+    assert "repeat_penalty" not in body
+    assert "seed" not in body
+    assert "ignore_eos" not in body
 
 
 def test_config_hash_changes_when_runtime_args_change() -> None:
@@ -89,6 +196,7 @@ def test_benchmark_history_latest_per_instance(tmp_path: Path) -> None:
         elapsed_ms=2000.0,
         vram_mb=2048.0,
         status="ok",
+        artifact_file="logs/bench/benchmarks/second.md",
     )
 
     record_benchmark_result(first, db_path)
@@ -102,6 +210,7 @@ def test_benchmark_history_latest_per_instance(tmp_path: Path) -> None:
     assert latest["bench"].dedicated_vram_mb == 2048.0
     assert latest["bench"].shared_ram_mb is None
     assert latest["bench"].total_gpu_memory_mb == 2048.0
+    assert latest["bench"].artifact_file == "logs/bench/benchmarks/second.md"
 
 
 def test_benchmark_history_additive_schema_keeps_legacy_rows(tmp_path: Path) -> None:
@@ -159,6 +268,63 @@ def test_benchmark_history_additive_schema_keeps_legacy_rows(tmp_path: Path) -> 
     assert latest["legacy"].dedicated_vram_mb == 4096.0
     assert latest["legacy"].shared_ram_mb is None
     assert latest["legacy"].total_gpu_memory_mb == 4096.0
+    assert latest["legacy"].artifact_file is None
+
+
+def test_write_benchmark_artifact_records_prompt_output_and_stats(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    """Each benchmark run should have a readable artifact with prompt and output."""
+    state_dir = tmp_path / "state"
+    monkeypatch.setattr("llama_orchestrator.benchmark.get_state_dir", lambda: state_dir)
+    logs_dir = tmp_path / "logs"
+    monkeypatch.setattr("llama_orchestrator.benchmark.get_logs_dir", lambda: logs_dir)
+    config = InstanceConfig(name="bench-demo", model=ModelConfig(path=Path("model.gguf")))
+    settings = BenchmarkSettings(
+        prompt_file=tmp_path / "prompt.txt",
+        max_tokens=32,
+        temperature=0.1,
+        top_p=0.9,
+    )
+    result = BenchmarkResult(
+        instance_name="bench-demo",
+        timestamp="2026-05-23T15:45:00+0200",
+        config_hash="cfg123",
+        prompt_file="prompt.txt",
+        prompt_sha256="sha",
+        prompt_chars=18,
+        output_tokens=12,
+        tokens_per_second=24.5,
+        latency_ms=100.0,
+        elapsed_ms=750.0,
+        vram_mb=1024.0,
+        status="ok",
+        dedicated_vram_mb=1024.0,
+        shared_ram_mb=0.0,
+        total_gpu_memory_mb=1024.0,
+    )
+
+    artifact = write_benchmark_artifact(
+        result,
+        config=config,
+        settings=settings,
+        prompt_text="Prompt body",
+        output_text="Model output",
+        request_body=build_benchmark_request_body(settings, "Prompt body"),
+        final_payload={"timings": {"predicted_n": 12}},
+    )
+
+    content = artifact.read_text(encoding="utf-8")
+
+    assert artifact.parent == logs_dir / "bench-demo" / "benchmarks"
+    assert "# Quick Benchmark - bench-demo" in content
+    assert "Prompt body" in content
+    assert "Model output" in content
+    assert "| Tokens/sec | 24.500 |" in content
+    assert '"max_tokens": 32' in content
+    assert '"temperature": 0.1' in content
+    assert '"endpoint": "chat_completions"' in content
 
 
 def test_parse_vram_from_text_supports_gib_units() -> None:
