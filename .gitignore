@@ -1,5 +1,9 @@
 # llama-orchestrator specific ignores
 
+# Local external source checkouts. Do not commit references to third-party
+# projects from this repository.
+external/
+
 # State files (do not commit runtime state)
 state/
 
