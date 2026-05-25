@@ -9,9 +9,9 @@
   },
   "model": {
     "path": "models/Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf",
-    "context_size": 200000,
+    "context_size": 262144,
     "batch_size": 512,
-    "threads": 4
+    "threads": 16
   },
   "server": {
     "host": "127.0.0.1",

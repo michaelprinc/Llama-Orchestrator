@@ -8,7 +8,10 @@ from pathlib import Path
 from llama_orchestrator.benchmark import (
     BenchmarkResult,
     BenchmarkSettings,
+    _extract_benchmark_telemetry,
+    _extract_token_count,
     _parse_vram_from_text,
+    _resolve_benchmark_sampling_device_id,
     build_benchmark_request_body,
     config_hash,
     get_benchmark_endpoint_path,
@@ -23,7 +26,7 @@ from llama_orchestrator.benchmark import (
     save_benchmark_settings,
     write_benchmark_artifact,
 )
-from llama_orchestrator.config import InstanceConfig, ModelConfig
+from llama_orchestrator.config import GpuConfig, InstanceConfig, ModelConfig, ServerConfig
 
 
 def test_default_prompt_file_is_created(tmp_path: Path) -> None:
@@ -197,6 +200,17 @@ def test_benchmark_history_latest_per_instance(tmp_path: Path) -> None:
         vram_mb=2048.0,
         status="ok",
         artifact_file="logs/bench/benchmarks/second.md",
+        prompt_tokens=128,
+        tokens_cached=96,
+        cache_hit_rate=75.0,
+        prompt_ms=640.0,
+        prompt_tokens_per_second=200.0,
+        time_per_output_token_ms=100.0,
+        end_to_end_tokens_per_second=10.0,
+        speculative_mode="draft-mtp",
+        draft_tokens=12,
+        draft_tokens_accepted=9,
+        draft_acceptance_rate=75.0,
     )
 
     record_benchmark_result(first, db_path)
@@ -211,6 +225,17 @@ def test_benchmark_history_latest_per_instance(tmp_path: Path) -> None:
     assert latest["bench"].shared_ram_mb is None
     assert latest["bench"].total_gpu_memory_mb == 2048.0
     assert latest["bench"].artifact_file == "logs/bench/benchmarks/second.md"
+    assert latest["bench"].prompt_tokens == 128
+    assert latest["bench"].tokens_cached == 96
+    assert latest["bench"].cache_hit_rate == 75.0
+    assert latest["bench"].prompt_ms == 640.0
+    assert latest["bench"].prompt_tokens_per_second == 200.0
+    assert latest["bench"].time_per_output_token_ms == 100.0
+    assert latest["bench"].end_to_end_tokens_per_second == 10.0
+    assert latest["bench"].speculative_mode == "draft-mtp"
+    assert latest["bench"].draft_tokens == 12
+    assert latest["bench"].draft_tokens_accepted == 9
+    assert latest["bench"].draft_acceptance_rate == 75.0
 
 
 def test_benchmark_history_additive_schema_keeps_legacy_rows(tmp_path: Path) -> None:
@@ -269,6 +294,74 @@ def test_benchmark_history_additive_schema_keeps_legacy_rows(tmp_path: Path) -> 
     assert latest["legacy"].shared_ram_mb is None
     assert latest["legacy"].total_gpu_memory_mb == 4096.0
     assert latest["legacy"].artifact_file is None
+    assert latest["legacy"].prompt_tokens is None
+    assert latest["legacy"].tokens_cached is None
+    assert latest["legacy"].cache_hit_rate is None
+    assert latest["legacy"].prompt_ms is None
+    assert latest["legacy"].prompt_tokens_per_second is None
+    assert latest["legacy"].time_per_output_token_ms is None
+    assert latest["legacy"].end_to_end_tokens_per_second is None
+    assert latest["legacy"].speculative_mode is None
+    assert latest["legacy"].draft_tokens is None
+    assert latest["legacy"].draft_tokens_accepted is None
+    assert latest["legacy"].draft_acceptance_rate is None
+
+
+def test_extract_benchmark_telemetry_uses_payload_cache_and_speculative_metrics() -> None:
+    """Quick benchmark should normalize cache and speculative timing metrics."""
+    payload = {
+        "tokens_cached": 96,
+        "__verbose": {"speculative.types": "none,draft-mtp"},
+        "timings": {
+            "prompt_n": 128,
+            "prompt_ms": 640.0,
+            "prompt_per_second": 200.0,
+            "predicted_per_token_ms": 125.0,
+            "predicted_per_second": 8.0,
+            "draft_n": 12,
+            "draft_n_accepted": 9,
+        },
+    }
+
+    telemetry = _extract_benchmark_telemetry(
+        payload,
+        args=["--spec-type", "draft-mtp", "--spec-draft-n-max", "6"],
+        output_tokens=32,
+        elapsed_ms=4000.0,
+        derived_tokens_per_second=7.5,
+    )
+
+    assert telemetry["tokens_per_second"] == 8.0
+    assert telemetry["prompt_tokens"] == 128
+    assert telemetry["tokens_cached"] == 96
+    assert telemetry["cache_hit_rate"] == 75.0
+    assert telemetry["prompt_ms"] == 640.0
+    assert telemetry["prompt_tokens_per_second"] == 200.0
+    assert telemetry["time_per_output_token_ms"] == 125.0
+    assert telemetry["end_to_end_tokens_per_second"] == 8.0
+    assert telemetry["speculative_mode"] == "draft-mtp"
+    assert telemetry["draft_tokens"] == 12
+    assert telemetry["draft_tokens_accepted"] == 9
+    assert telemetry["draft_acceptance_rate"] == 75.0
+
+
+def test_extract_benchmark_telemetry_requires_prompt_tokens_for_cache_hit_rate() -> None:
+    """Cache hit rate should stay unknown when prompt token telemetry is incomplete."""
+    telemetry = _extract_benchmark_telemetry(
+        {"tokens_cached": 96, "timings": {"predicted_per_second": 8.0}},
+        args=[],
+        output_tokens=32,
+        elapsed_ms=4000.0,
+        derived_tokens_per_second=7.5,
+    )
+
+    assert telemetry["tokens_cached"] == 96
+    assert telemetry["cache_hit_rate"] is None
+
+
+def test_extract_token_count_stays_unknown_without_server_token_metadata() -> None:
+    """Token metrics should not silently fall back to word counts."""
+    assert _extract_token_count({}, "two words") is None
 
 
 def test_write_benchmark_artifact_records_prompt_output_and_stats(
@@ -281,6 +374,18 @@ def test_write_benchmark_artifact_records_prompt_output_and_stats(
     logs_dir = tmp_path / "logs"
     monkeypatch.setattr("llama_orchestrator.benchmark.get_logs_dir", lambda: logs_dir)
     config = InstanceConfig(name="bench-demo", model=ModelConfig(path=Path("model.gguf")))
+    config.args = [
+        "--spec-type",
+        "draft-mtp",
+        "--mtp-head",
+        "models/assistant.gguf",
+        "--spec-draft-n-max",
+        "6",
+        "--spec-draft-n-min",
+        "1",
+        "--draft-block-size",
+        "3",
+    ]
     settings = BenchmarkSettings(
         prompt_file=tmp_path / "prompt.txt",
         max_tokens=32,
@@ -303,6 +408,17 @@ def test_write_benchmark_artifact_records_prompt_output_and_stats(
         dedicated_vram_mb=1024.0,
         shared_ram_mb=0.0,
         total_gpu_memory_mb=1024.0,
+        prompt_tokens=48,
+        tokens_cached=36,
+        cache_hit_rate=75.0,
+        prompt_ms=240.0,
+        prompt_tokens_per_second=200.0,
+        time_per_output_token_ms=40.0,
+        end_to_end_tokens_per_second=16.0,
+        speculative_mode="draft-mtp",
+        draft_tokens=8,
+        draft_tokens_accepted=6,
+        draft_acceptance_rate=75.0,
     )
 
     artifact = write_benchmark_artifact(
@@ -312,7 +428,11 @@ def test_write_benchmark_artifact_records_prompt_output_and_stats(
         prompt_text="Prompt body",
         output_text="Model output",
         request_body=build_benchmark_request_body(settings, "Prompt body"),
-        final_payload={"timings": {"predicted_n": 12}},
+        final_payload={
+            "__verbose": {"speculative.types": "none,draft-mtp"},
+            "tokens_cached": 36,
+            "timings": {"predicted_n": 12, "draft_n": 8, "draft_n_accepted": 6},
+        },
     )
 
     content = artifact.read_text(encoding="utf-8")
@@ -321,7 +441,15 @@ def test_write_benchmark_artifact_records_prompt_output_and_stats(
     assert "# Quick Benchmark - bench-demo" in content
     assert "Prompt body" in content
     assert "Model output" in content
-    assert "| Tokens/sec | 24.500 |" in content
+    assert "## Core Metrics" in content
+    assert "| Generation TPS | 24.500 |" in content
+    assert "| TTFT (first token) ms | 100.000 |" in content
+    assert "| Cache hit rate | 75.00% |" in content
+    assert "## Speculative / Draft Metrics" in content
+    assert "| Speculative mode | draft-mtp |" in content
+    assert "| Draft model / MTP head | models/assistant.gguf |" in content
+    assert "| Draft tokens accepted | 6 |" in content
+    assert "| Draft acceptance rate | 75.00% |" in content
     assert '"max_tokens": 32' in content
     assert '"temperature": 0.1' in content
     assert '"endpoint": "chat_completions"' in content
@@ -420,3 +548,31 @@ def test_sample_vram_mb_from_log_falls_back_to_total_minus_free(tmp_path: Path) 
     )
 
     assert sample_vram_mb_from_log(stderr_log, backend="vulkan", device_id=1) == 5670.0
+
+
+def test_resolve_benchmark_sampling_device_id_prefers_explicit_main_gpu_arg() -> None:
+    """Benchmark memory sampling should follow the effective primary GPU, not raw config.device_id."""
+    config = InstanceConfig(
+        name="multi-gpu",
+        model=ModelConfig(path=Path("models/demo.gguf")),
+        server=ServerConfig(port=8001),
+        gpu=GpuConfig(backend="vulkan", device_id=2, layers=999),
+        env={"GGML_VULKAN_DEVICE": "2"},
+        args=["--device", "Vulkan2,Vulkan0", "--main-gpu", "0"],
+    )
+
+    assert _resolve_benchmark_sampling_device_id(config) == 0
+
+
+def test_resolve_benchmark_sampling_device_id_ignores_draft_only_device_override() -> None:
+    """Draft-only GPU routing should not replace the primary benchmark sampling device."""
+    config = InstanceConfig(
+        name="draft-gpu",
+        model=ModelConfig(path=Path("models/demo.gguf")),
+        server=ServerConfig(port=8001),
+        gpu=GpuConfig(backend="vulkan", device_id=2, layers=999),
+        env={"GGML_VULKAN_DEVICE": "2"},
+        args=["--device-draft", "Vulkan0"],
+    )
+
+    assert _resolve_benchmark_sampling_device_id(config) == 2

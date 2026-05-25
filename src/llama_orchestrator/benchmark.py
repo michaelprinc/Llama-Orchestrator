@@ -21,6 +21,7 @@ from typing import Any
 import httpx
 
 from llama_orchestrator.config import InstanceConfig, get_logs_dir, get_project_root, get_state_dir
+from llama_orchestrator.engine.detection import describe_effective_runtime, get_backend_device_label
 from llama_orchestrator.engine.process import get_log_files
 from llama_orchestrator.engine.validator import validate_process
 
@@ -70,6 +71,17 @@ class BenchmarkResult:
     total_gpu_memory_mb: float | None = None
     error: str | None = None
     artifact_file: str | None = None
+    prompt_tokens: int | None = None
+    tokens_cached: int | None = None
+    cache_hit_rate: float | None = None
+    prompt_ms: float | None = None
+    prompt_tokens_per_second: float | None = None
+    time_per_output_token_ms: float | None = None
+    end_to_end_tokens_per_second: float | None = None
+    speculative_mode: str | None = None
+    draft_tokens: int | None = None
+    draft_tokens_accepted: int | None = None
+    draft_acceptance_rate: float | None = None
 
 
 @dataclass(frozen=True)
@@ -282,6 +294,14 @@ def config_hash(config: InstanceConfig) -> str:
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:16]
 
 
+def _display_project_path(path: Path, project_root: Path | None = None) -> str:
+    root = project_root or get_project_root()
+    try:
+        return str(path.resolve().relative_to(root.resolve()))
+    except ValueError:
+        return str(path)
+
+
 def get_benchmark_db_path() -> Path:
     """Return the SQLite benchmark history path."""
     return get_state_dir() / "benchmark_history.sqlite"
@@ -315,6 +335,17 @@ def init_benchmark_db(db_path: Path | None = None) -> Path:
                 dedicated_vram_mb REAL,
                 shared_ram_mb REAL,
                 total_gpu_memory_mb REAL,
+                prompt_tokens INTEGER,
+                tokens_cached INTEGER,
+                cache_hit_rate REAL,
+                prompt_ms REAL,
+                prompt_tokens_per_second REAL,
+                time_per_output_token_ms REAL,
+                end_to_end_tokens_per_second REAL,
+                speculative_mode TEXT,
+                draft_tokens INTEGER,
+                draft_tokens_accepted INTEGER,
+                draft_acceptance_rate REAL,
                 status TEXT NOT NULL,
                 error TEXT,
                 artifact_file TEXT
@@ -328,10 +359,31 @@ def init_benchmark_db(db_path: Path | None = None) -> Path:
             "dedicated_vram_mb",
             "shared_ram_mb",
             "total_gpu_memory_mb",
+            "prompt_tokens",
+            "tokens_cached",
+            "cache_hit_rate",
+            "prompt_ms",
+            "prompt_tokens_per_second",
+            "time_per_output_token_ms",
+            "end_to_end_tokens_per_second",
+            "speculative_mode",
+            "draft_tokens",
+            "draft_tokens_accepted",
+            "draft_acceptance_rate",
             "artifact_file",
         ):
             if column_name not in existing_columns:
-                column_type = "TEXT" if column_name == "artifact_file" else "REAL"
+                if column_name in {"artifact_file", "speculative_mode"}:
+                    column_type = "TEXT"
+                elif column_name in {
+                    "prompt_tokens",
+                    "tokens_cached",
+                    "draft_tokens",
+                    "draft_tokens_accepted",
+                }:
+                    column_type = "INTEGER"
+                else:
+                    column_type = "REAL"
                 conn.execute(f"ALTER TABLE benchmarks ADD COLUMN {column_name} {column_type}")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_benchmarks_instance_time "
@@ -353,8 +405,12 @@ def record_benchmark_result(
                 timestamp, instance_name, config_hash, prompt_file, prompt_sha256,
                 prompt_chars, output_tokens, tokens_per_second, latency_ms,
                 elapsed_ms, vram_mb, dedicated_vram_mb, shared_ram_mb,
-                total_gpu_memory_mb, status, error, artifact_file
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                total_gpu_memory_mb, prompt_tokens, tokens_cached, cache_hit_rate,
+                prompt_ms, prompt_tokens_per_second, time_per_output_token_ms,
+                end_to_end_tokens_per_second, speculative_mode, draft_tokens,
+                draft_tokens_accepted, draft_acceptance_rate, status, error,
+                artifact_file
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 result.timestamp,
@@ -371,6 +427,17 @@ def record_benchmark_result(
                 result.dedicated_vram_mb,
                 result.shared_ram_mb,
                 result.total_gpu_memory_mb,
+                result.prompt_tokens,
+                result.tokens_cached,
+                result.cache_hit_rate,
+                result.prompt_ms,
+                result.prompt_tokens_per_second,
+                result.time_per_output_token_ms,
+                result.end_to_end_tokens_per_second,
+                result.speculative_mode,
+                result.draft_tokens,
+                result.draft_tokens_accepted,
+                result.draft_acceptance_rate,
                 result.status,
                 result.error,
                 result.artifact_file,
@@ -424,6 +491,17 @@ def latest_benchmark_results(db_path: Path | None = None) -> dict[str, Benchmark
             total_gpu_memory_mb=total_gpu_memory_mb,
             error=row_data["error"],
             artifact_file=row_data.get("artifact_file"),
+            prompt_tokens=row_data.get("prompt_tokens"),
+            tokens_cached=row_data.get("tokens_cached"),
+            cache_hit_rate=row_data.get("cache_hit_rate"),
+            prompt_ms=row_data.get("prompt_ms"),
+            prompt_tokens_per_second=row_data.get("prompt_tokens_per_second"),
+            time_per_output_token_ms=row_data.get("time_per_output_token_ms"),
+            end_to_end_tokens_per_second=row_data.get("end_to_end_tokens_per_second"),
+            speculative_mode=row_data.get("speculative_mode"),
+            draft_tokens=row_data.get("draft_tokens"),
+            draft_tokens_accepted=row_data.get("draft_tokens_accepted"),
+            draft_acceptance_rate=row_data.get("draft_acceptance_rate"),
         )
 
     return results
@@ -493,19 +571,6 @@ def _normalize_vram_value(value: float, unit: str | None) -> float:
     return value
 
 
-def _device_log_label(backend: str, device_id: int) -> str | None:
-    prefixes = {
-        "vulkan": "Vulkan",
-        "cuda": "CUDA",
-        "hip": "HIP",
-        "metal": "Metal",
-    }
-    prefix = prefixes.get(backend.lower())
-    if prefix is None:
-        return None
-    return f"{prefix}{device_id}"
-
-
 def sample_vram_mb_from_log(
     stderr_log: Path,
     *,
@@ -516,7 +581,7 @@ def sample_vram_mb_from_log(
     if not stderr_log.exists():
         return None
 
-    device_label = _device_log_label(backend, device_id)
+    device_label = get_backend_device_label(backend, device_id)
     if device_label is None:
         return None
 
@@ -622,7 +687,15 @@ def sample_gpu_memory(
     return _normalize_gpu_memory_sample(dedicated_vram_mb, None)
 
 
-def _extract_token_count(payload: dict[str, Any], fallback_text: str) -> int:
+def _resolve_benchmark_sampling_device_id(config: InstanceConfig) -> int:
+    """Return the primary effective device id for benchmark-side memory sampling."""
+    selection = describe_effective_runtime(config)
+    if selection.primary_device_id is not None:
+        return selection.primary_device_id
+    return int(config.gpu.device_id)
+
+
+def _extract_token_count(payload: dict[str, Any], fallback_text: str) -> int | None:
     timings = payload.get("timings")
     if isinstance(timings, dict):
         for key in ("predicted_n", "predicted_tokens", "tokens_predicted"):
@@ -641,7 +714,180 @@ def _extract_token_count(payload: dict[str, Any], fallback_text: str) -> int:
         if isinstance(value, int) and value > 0:
             return value
 
-    return max(1, len(fallback_text.split()))
+    return None
+
+
+def _extract_nested_value(payload: dict[str, Any], path: tuple[str, ...]) -> Any:
+    current: Any = payload
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _extract_int_metric(payload: dict[str, Any], *paths: tuple[str, ...]) -> int | None:
+    for path in paths:
+        value = _extract_nested_value(payload, path)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, int):
+            return value
+        if isinstance(value, float) and value.is_integer():
+            return int(value)
+    return None
+
+
+def _extract_float_metric(payload: dict[str, Any], *paths: tuple[str, ...]) -> float | None:
+    for path in paths:
+        value = _extract_nested_value(payload, path)
+        if isinstance(value, bool):
+            continue
+        if isinstance(value, (int, float)):
+            return float(value)
+    return None
+
+
+def _extract_string_metric(payload: dict[str, Any], *paths: tuple[str, ...]) -> str | None:
+    for path in paths:
+        value = _extract_nested_value(payload, path)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def _extract_runtime_arg_value(args: list[str], flag: str) -> str | None:
+    for index, arg in enumerate(args):
+        if arg == flag:
+            if index + 1 < len(args):
+                return args[index + 1]
+            return None
+        prefix = f"{flag}="
+        if arg.startswith(prefix):
+            return arg[len(prefix) :]
+    return None
+
+
+def _normalize_speculative_mode(value: str | None) -> str | None:
+    if not value:
+        return None
+    modes: list[str] = []
+    for part in value.split(","):
+        normalized = part.strip()
+        if not normalized or normalized.lower() == "none":
+            continue
+        if normalized not in modes:
+            modes.append(normalized)
+    if not modes:
+        return None
+    return ", ".join(modes)
+
+
+def _extract_benchmark_telemetry(
+    payload: dict[str, Any],
+    *,
+    args: list[str],
+    output_tokens: int | None,
+    elapsed_ms: float | None,
+    derived_tokens_per_second: float | None,
+) -> dict[str, float | int | str | None]:
+    prompt_tokens = _extract_int_metric(
+        payload,
+        ("timings", "prompt_n"),
+        ("usage", "prompt_tokens"),
+        ("prompt_tokens",),
+    )
+    tokens_cached = _extract_int_metric(
+        payload,
+        ("tokens_cached",),
+        ("usage", "prompt_tokens_cached"),
+        ("timings", "tokens_cached"),
+        ("timings", "cache_tokens"),
+        ("timings", "cache_n"),
+    )
+    cache_hit_rate: float | None = None
+    if (
+        prompt_tokens is not None
+        and prompt_tokens > 0
+        and tokens_cached is not None
+        and 0 <= tokens_cached <= prompt_tokens
+    ):
+        cache_hit_rate = (tokens_cached / prompt_tokens) * 100.0
+
+    prompt_ms = _extract_float_metric(payload, ("timings", "prompt_ms"))
+    prompt_tokens_per_second = _extract_float_metric(payload, ("timings", "prompt_per_second"))
+    time_per_output_token_ms = _extract_float_metric(payload, ("timings", "predicted_per_token_ms"))
+    if time_per_output_token_ms is None:
+        predicted_ms = _extract_float_metric(payload, ("timings", "predicted_ms"))
+        if predicted_ms is not None and output_tokens and output_tokens > 0:
+            time_per_output_token_ms = predicted_ms / output_tokens
+
+    tokens_per_second = _extract_float_metric(
+        payload,
+        ("timings", "predicted_per_second"),
+        ("timings", "tokens_per_second"),
+    )
+    if tokens_per_second is None:
+        tokens_per_second = derived_tokens_per_second
+
+    end_to_end_tokens_per_second: float | None = None
+    if output_tokens and output_tokens > 0 and elapsed_ms and elapsed_ms > 0:
+        end_to_end_tokens_per_second = output_tokens / max(elapsed_ms / 1000.0, 0.001)
+
+    speculative_mode = _normalize_speculative_mode(
+        _extract_string_metric(
+            payload,
+            ("__verbose", "speculative.types"),
+            ("speculative.types",),
+            ("speculative_types",),
+        )
+        or _extract_runtime_arg_value(args, "--spec-type")
+    )
+
+    draft_tokens = _extract_int_metric(payload, ("timings", "draft_n"), ("draft_n",))
+    draft_tokens_accepted = _extract_int_metric(
+        payload,
+        ("timings", "draft_n_accepted"),
+        ("draft_n_accepted",),
+    )
+    draft_acceptance_rate: float | None = None
+    if draft_tokens is not None and draft_tokens >= 0 and draft_tokens_accepted is not None:
+        draft_tokens_accepted = max(0, min(draft_tokens_accepted, draft_tokens))
+        if draft_tokens > 0:
+            draft_acceptance_rate = (draft_tokens_accepted / draft_tokens) * 100.0
+
+    return {
+        "prompt_tokens": prompt_tokens,
+        "tokens_cached": tokens_cached,
+        "cache_hit_rate": cache_hit_rate,
+        "prompt_ms": prompt_ms,
+        "prompt_tokens_per_second": prompt_tokens_per_second,
+        "time_per_output_token_ms": time_per_output_token_ms,
+        "end_to_end_tokens_per_second": end_to_end_tokens_per_second,
+        "speculative_mode": speculative_mode,
+        "draft_tokens": draft_tokens,
+        "draft_tokens_accepted": draft_tokens_accepted,
+        "draft_acceptance_rate": draft_acceptance_rate,
+        "tokens_per_second": tokens_per_second,
+    }
+
+
+def _collect_speculative_runtime_config(args: list[str]) -> dict[str, int | str | None]:
+    return {
+        "speculative_mode": _normalize_speculative_mode(_extract_runtime_arg_value(args, "--spec-type")),
+        "draft_model": _extract_runtime_arg_value(args, "--mtp-head")
+        or _extract_runtime_arg_value(args, "--draft-model")
+        or _extract_runtime_arg_value(args, "--model-draft"),
+        "draft_max_tokens": _coerce_optional_int(
+            _extract_runtime_arg_value(args, "--spec-draft-n-max")
+            or _extract_runtime_arg_value(args, "--draft-max")
+        ),
+        "draft_min_tokens": _coerce_optional_int(
+            _extract_runtime_arg_value(args, "--spec-draft-n-min")
+            or _extract_runtime_arg_value(args, "--draft-min")
+        ),
+        "draft_block_size": _coerce_optional_int(_extract_runtime_arg_value(args, "--draft-block-size")),
+    }
 
 
 def get_benchmark_endpoint_path(settings: BenchmarkSettings) -> str:
@@ -722,10 +968,7 @@ def _benchmark_artifact_path(result: BenchmarkResult) -> Path:
 
 
 def _display_artifact_path(path: Path) -> str:
-    try:
-        return str(path.resolve().relative_to(get_project_root().resolve()))
-    except ValueError:
-        return str(path)
+    return _display_project_path(path)
 
 
 def _format_optional_metric(value: float | int | str | None) -> str:
@@ -734,6 +977,20 @@ def _format_optional_metric(value: float | int | str | None) -> str:
     if isinstance(value, float):
         return f"{value:.3f}"
     return str(value)
+
+
+def _format_optional_percent(value: float | None) -> str:
+    if value is None:
+        return "-"
+    return f"{value:.2f}%"
+
+
+def _markdown_table_lines(rows: list[tuple[str, str]]) -> list[str]:
+    return [
+        "| Metric | Value |",
+        "|--------|-------|",
+        *[f"| {label} | {value} |" for label, value in rows],
+    ]
 
 
 def _markdown_fence(text: str) -> str:
@@ -767,6 +1024,15 @@ def write_benchmark_artifact(
     """Write a Markdown artifact with prompt, model output, and benchmark stats."""
     artifact_path = _benchmark_artifact_path(result)
     artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    speculative_config = _collect_speculative_runtime_config(config.args)
+    speculative_mode = result.speculative_mode or speculative_config["speculative_mode"]
+    draft_tokens_rejected: int | None = None
+    draft_accepted_vs_output: float | None = None
+    if result.draft_tokens is not None and result.draft_tokens_accepted is not None:
+        draft_tokens_rejected = max(0, result.draft_tokens - result.draft_tokens_accepted)
+    if result.output_tokens and result.output_tokens > 0 and result.draft_tokens_accepted is not None:
+        draft_accepted_vs_output = (result.draft_tokens_accepted / result.output_tokens) * 100.0
+
     request_without_prompt = {
         key: value
         for key, value in request_body.items()
@@ -778,6 +1044,38 @@ def write_benchmark_artifact(
     payload_fence = _markdown_fence(payload_text)
     settings_text = json.dumps(_settings_summary(settings), indent=2, ensure_ascii=False)
     request_text = json.dumps(request_without_prompt, indent=2, ensure_ascii=False)
+    core_metric_rows = [
+        ("Output tokens", _format_optional_metric(result.output_tokens)),
+        ("Generation TPS", _format_optional_metric(result.tokens_per_second)),
+        ("End-to-end TPS", _format_optional_metric(result.end_to_end_tokens_per_second)),
+        ("TTFT (first token) ms", _format_optional_metric(result.latency_ms)),
+        ("Time per output token ms", _format_optional_metric(result.time_per_output_token_ms)),
+        ("Elapsed ms", _format_optional_metric(result.elapsed_ms)),
+        ("Prompt tokens", _format_optional_metric(result.prompt_tokens)),
+        ("Prompt eval ms", _format_optional_metric(result.prompt_ms)),
+        ("Prompt eval tokens/sec", _format_optional_metric(result.prompt_tokens_per_second)),
+        ("Cached prompt tokens", _format_optional_metric(result.tokens_cached)),
+        ("Cache hit rate", _format_optional_percent(result.cache_hit_rate)),
+        ("Error", result.error or "-"),
+    ]
+    memory_metric_rows = [
+        ("Dedicated VRAM MB", _format_optional_metric(result.dedicated_vram_mb)),
+        ("Shared RAM MB", _format_optional_metric(result.shared_ram_mb)),
+        ("Total sampled GPU memory MB", _format_optional_metric(result.total_gpu_memory_mb)),
+    ]
+    speculative_metric_rows = [
+        ("Speculative mode", _format_optional_metric(speculative_mode)),
+        ("Draft model / MTP head", _format_optional_metric(speculative_config["draft_model"])),
+        ("Draft max tokens", _format_optional_metric(speculative_config["draft_max_tokens"])),
+        ("Draft min tokens", _format_optional_metric(speculative_config["draft_min_tokens"])),
+        ("Draft block size", _format_optional_metric(speculative_config["draft_block_size"])),
+        ("Draft tokens attempted", _format_optional_metric(result.draft_tokens)),
+        ("Draft tokens accepted", _format_optional_metric(result.draft_tokens_accepted)),
+        ("Draft tokens rejected", _format_optional_metric(draft_tokens_rejected)),
+        ("Draft acceptance rate", _format_optional_percent(result.draft_acceptance_rate)),
+        ("Accepted draft vs output tokens", _format_optional_percent(draft_accepted_vs_output)),
+    ]
+    has_speculative_metrics = any(value != "-" for _, value in speculative_metric_rows)
 
     artifact_path.write_text(
         "\n".join(
@@ -797,18 +1095,21 @@ def write_benchmark_artifact(
                 f"- Device ID: `{config.gpu.device_id}`",
                 f"- Server: `{config.server.host}:{config.server.port}`",
                 "",
-                "## Metrics",
+                "## Core Metrics",
                 "",
-                "| Metric | Value |",
-                "|--------|-------|",
-                f"| Output tokens | {_format_optional_metric(result.output_tokens)} |",
-                f"| Tokens/sec | {_format_optional_metric(result.tokens_per_second)} |",
-                f"| First-token latency ms | {_format_optional_metric(result.latency_ms)} |",
-                f"| Elapsed ms | {_format_optional_metric(result.elapsed_ms)} |",
-                f"| Dedicated VRAM MB | {_format_optional_metric(result.dedicated_vram_mb)} |",
-                f"| Shared RAM MB | {_format_optional_metric(result.shared_ram_mb)} |",
-                f"| Total sampled GPU memory MB | {_format_optional_metric(result.total_gpu_memory_mb)} |",
-                f"| Error | {result.error or '-'} |",
+                *_markdown_table_lines(core_metric_rows),
+                "",
+                "## Memory Metrics",
+                "",
+                *_markdown_table_lines(memory_metric_rows),
+                "",
+                "## Speculative / Draft Metrics",
+                "",
+                *(
+                    _markdown_table_lines(speculative_metric_rows)
+                    if has_speculative_metrics
+                    else ["No speculative or draft runtime telemetry detected."]
+                ),
                 "",
                 "## Benchmark Settings",
                 "",
@@ -855,7 +1156,7 @@ def quick_benchmark_instance(
     active_settings = settings or load_benchmark_settings()
     timestamp = time.strftime("%Y-%m-%dT%H:%M:%S%z")
     cfg_hash = config_hash(config)
-    prompt_file = active_settings.prompt_file.name
+    prompt_file = _display_project_path(active_settings.prompt_file)
     stderr_log = get_log_files(config.name)[1]
     pid = get_validated_benchmark_pid(config.name)
     prompt = ""
@@ -903,10 +1204,19 @@ def quick_benchmark_instance(
         elapsed_ms = (ended - started) * 1000
         latency_ms = ((first_token_at or ended) - started) * 1000
         generation_seconds = max(0.001, (ended - (first_token_at or started)))
-        tokens_per_second = output_tokens / generation_seconds
+        derived_tokens_per_second: float | None = None
+        if output_tokens and output_tokens > 0:
+            derived_tokens_per_second = output_tokens / generation_seconds
+        telemetry = _extract_benchmark_telemetry(
+            final_payload,
+            args=config.args,
+            output_tokens=output_tokens,
+            elapsed_ms=elapsed_ms,
+            derived_tokens_per_second=derived_tokens_per_second,
+        )
         memory_sample = sample_gpu_memory(
             pid=pid,
-            device_id=config.gpu.device_id,
+            device_id=_resolve_benchmark_sampling_device_id(config),
             backend=config.gpu.backend,
             stderr_log=stderr_log,
         )
@@ -919,7 +1229,7 @@ def quick_benchmark_instance(
             prompt_sha256=prompt_digest,
             prompt_chars=len(prompt),
             output_tokens=output_tokens,
-            tokens_per_second=tokens_per_second,
+            tokens_per_second=telemetry["tokens_per_second"],
             latency_ms=latency_ms,
             elapsed_ms=elapsed_ms,
             vram_mb=memory_sample.dedicated_vram_mb,
@@ -927,11 +1237,29 @@ def quick_benchmark_instance(
             dedicated_vram_mb=memory_sample.dedicated_vram_mb,
             shared_ram_mb=memory_sample.shared_ram_mb,
             total_gpu_memory_mb=memory_sample.total_gpu_memory_mb,
+            prompt_tokens=telemetry["prompt_tokens"],
+            tokens_cached=telemetry["tokens_cached"],
+            cache_hit_rate=telemetry["cache_hit_rate"],
+            prompt_ms=telemetry["prompt_ms"],
+            prompt_tokens_per_second=telemetry["prompt_tokens_per_second"],
+            time_per_output_token_ms=telemetry["time_per_output_token_ms"],
+            end_to_end_tokens_per_second=telemetry["end_to_end_tokens_per_second"],
+            speculative_mode=telemetry["speculative_mode"],
+            draft_tokens=telemetry["draft_tokens"],
+            draft_tokens_accepted=telemetry["draft_tokens_accepted"],
+            draft_acceptance_rate=telemetry["draft_acceptance_rate"],
         )
     except Exception as exc:
         output_text = "".join(chunks)
         with suppress(Exception):
             prompt, prompt_digest = read_prompt(active_settings)
+        telemetry = _extract_benchmark_telemetry(
+            final_payload,
+            args=config.args,
+            output_tokens=None,
+            elapsed_ms=None,
+            derived_tokens_per_second=None,
+        )
         result = BenchmarkResult(
             instance_name=config.name,
             timestamp=timestamp,
@@ -949,10 +1277,21 @@ def quick_benchmark_instance(
             shared_ram_mb=None,
             total_gpu_memory_mb=None,
             error=str(exc),
+            prompt_tokens=telemetry["prompt_tokens"],
+            tokens_cached=telemetry["tokens_cached"],
+            cache_hit_rate=telemetry["cache_hit_rate"],
+            prompt_ms=telemetry["prompt_ms"],
+            prompt_tokens_per_second=telemetry["prompt_tokens_per_second"],
+            time_per_output_token_ms=telemetry["time_per_output_token_ms"],
+            end_to_end_tokens_per_second=telemetry["end_to_end_tokens_per_second"],
+            speculative_mode=telemetry["speculative_mode"],
+            draft_tokens=telemetry["draft_tokens"],
+            draft_tokens_accepted=telemetry["draft_tokens_accepted"],
+            draft_acceptance_rate=telemetry["draft_acceptance_rate"],
         )
         memory_sample = sample_gpu_memory(
             pid=pid,
-            device_id=config.gpu.device_id,
+            device_id=_resolve_benchmark_sampling_device_id(config),
             backend=config.gpu.backend,
             stderr_log=stderr_log,
         )

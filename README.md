@@ -69,10 +69,12 @@ session-local today.
   `logs`, detached execution, restart policy). The shipped runtime remains
   Windows-native with Task Scheduler and NSSM integration, not a Docker
   deployment target.
-- Telemetry shipped today is partial: benchmark TPS, latency, prompt history,
-  and best-effort memory or VRAM reporting are available. TTFT dashboards,
-  cache-hit dashboards, MCP gateway integration, and llama-swap export are not
-  part of `2.1.0`.
+- Telemetry shipped today is still partial: Quick benchmark artifacts now
+  include TTFT, generation and end-to-end throughput, prompt and cache reuse
+  metrics when llama.cpp returns the needed counters, speculative or draft
+  acceptance metrics when available, and best-effort memory or VRAM reporting.
+  Dedicated TTFT or cache trend dashboards, MCP gateway integration, and
+  llama-swap export are not part of `2.1.0`.
 
 ## Quick Start
 
@@ -380,8 +382,8 @@ llama-orch gui
 The GUI supports:
 
 - Viewing configured model instances with status, health, PID, port, backend,
-  model path, runtime args, tags, benchmark TPS, first-token latency, VRAM MB,
-  prompt file, and uptime.
+  effective GPU label, CPU-use indicator, model size, model path, runtime args,
+  tags, benchmark TPS, first-token latency, VRAM MB, prompt file, and uptime.
 - Starting, stopping, restarting, and health-checking selected instances.
 - Starting and stopping the orchestrator daemon.
 - Adding a new GGUF-backed model instance config.
@@ -404,6 +406,9 @@ The GUI supports:
 - Copying a selected instance launch command with `Copy CLI`.
 - Editing the `Runtime args` cell inline; saving restarts the instance when it
   is already running.
+- Showing a hideable `Detected GPUs` panel with one device per line, using
+  labels such as `Vulkan0` plus best-effort adapter names learned from
+  llama.cpp stderr.
 
 GUI status display intentionally separates engine state from readiness:
 `running + loading` is shown as `loading`, while `running + healthy` is shown
@@ -413,6 +418,31 @@ Persisted GUI-observed state currently includes the selected benchmark prompt
 and quick benchmark parameters (`state/benchmark_settings.json`) plus manual
 health/benchmark health updates in the runtime state and `health_history`.
 Column visibility, tag filter, and window geometry reset on GUI launch.
+
+### Runtime Detection and GPU Mapping
+
+- The GUI shows effective runtime selection, not just raw config values.
+- `GPU` is derived from the final command and merged environment variables.
+  Explicit main runtime device flags such as `--device` win first, then
+  backend device env vars, then `gpu.device_id` when no stronger signal exists.
+  Today the env-driven device mapping is treated as authoritative for Vulkan via
+  `GGML_VULKAN_DEVICE`. `--device-draft` contributes additional active adapters
+  to the GUI display but does not replace the primary runtime GPU.
+- `CPU` shows a checkmark when inference resolves to CPU execution, either
+  because the backend is `cpu` or because the effective `--n-gpu-layers`
+  resolves to `0`.
+- `Runtime args` remain unchanged by this feature. The GUI derives display
+  metadata from the effective runtime but does not rewrite config values to
+  make the display cleaner.
+- `Model size` is the resolved GGUF file size shown in base-1024 `GB`, matching
+  the project's RAM/VRAM normalization convention.
+- The `Detected GPUs` summary is best-effort and log-driven. It parses llama.cpp
+  stderr inventory lines such as `Vulkan0 : Adapter Name (...)` and active-device
+  lines such as `using device Vulkan1 (Adapter Name)`.
+- If the GPU label is known but stderr has not exposed an adapter name yet, the
+  summary keeps the label and shows `adapter name unavailable`.
+- Quick benchmark fallback sampling uses the same effective runtime resolver and
+  samples the primary resolved device when a multi-GPU config declares one.
 
 ### Quick Benchmark and VRAM
 
@@ -462,10 +492,10 @@ uv sync
 uv run pytest
 
 # Focus the current GUI/benchmark slice
-uv run pytest tests/test_gui.py tests/test_benchmark.py -v --no-cov
+uv run pytest tests/test_gui.py tests/test_detection.py tests/test_benchmark.py -v --no-cov
 
 # Lint touched GUI/benchmark files
-uv run ruff check src\llama_orchestrator\benchmark.py src\llama_orchestrator\gui.py tests\test_benchmark.py tests\test_gui.py
+uv run ruff check src\llama_orchestrator\benchmark.py src\llama_orchestrator\engine\detection.py src\llama_orchestrator\gui.py tests\test_benchmark.py tests\test_detection.py tests\test_gui.py
 
 # Run in dev mode
 python -m llama_orchestrator --help
@@ -487,6 +517,7 @@ benchmark changes were validated with Ruff scoped to touched files.
 
 ### Recent Implementation Reports
 
+- [Runtime detection and hardware display](../../reports/implementation/infra-local/llama-orchestrator/2026/20260525-llama-orchestrator-runtime-detection-display-report.md)
 - [Benchmark artifact history](../../reports/implementation/infra-local/llama-orchestrator/2026/20260523-llama-orchestrator-benchmark-artifact-history.md)
 - [Benchmark settings and artifact location](../../reports/implementation/infra-local/llama-orchestrator/2026/20260523-llama-orchestrator-benchmark-settings-artifact-location.md)
 - [V2 implementation report](../../reports/20260516_llama-orchestrator-v2-implementation-report.md)

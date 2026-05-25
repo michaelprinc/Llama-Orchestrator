@@ -14,7 +14,7 @@ import shlex
 import threading
 import time
 import tkinter as tk
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, simpledialog, ttk
@@ -51,6 +51,12 @@ from llama_orchestrator.engine import (
     start_instance,
     stop_instance,
 )
+from llama_orchestrator.engine.detection import (
+    DetectedGpu,
+    collect_detected_gpu_inventory,
+    describe_effective_runtime,
+    resolve_model_size_gb,
+)
 from llama_orchestrator.engine.state import (
     HealthStatus,
     InstanceState,
@@ -74,6 +80,7 @@ VULKAN_BINARY_MISSING_MESSAGE = (
     "No win-vulkan-x64 llama-server binary is installed. Use Install llama-server "
     "to download the default variant, or choose another llama-server variant."
 )
+CPU_ACTIVE_GLYPH = "\u2713"
 
 ALL_COLUMNS = (
     "name",
@@ -82,11 +89,14 @@ ALL_COLUMNS = (
     "pid",
     "port",
     "backend",
+    "gpu",
+    "cpu",
     "tags",
     "tps",
     "latency",
     "vram",
     "prompt",
+    "model_size",
     "model",
     "args",
     "uptime",
@@ -98,11 +108,14 @@ COLUMN_HEADINGS = {
     "pid": "PID",
     "port": "Port",
     "backend": "Backend",
+    "gpu": "GPU",
+    "cpu": "CPU",
     "tags": "Tags",
     "tps": "TPS",
     "latency": "Latency ms",
     "vram": "Memory MB",
     "prompt": "Prompt file",
+    "model_size": "Model size",
     "model": "Model",
     "args": "Runtime args",
     "uptime": "Uptime",
@@ -114,11 +127,14 @@ COLUMN_WIDTHS = {
     "pid": 70,
     "port": 70,
     "backend": 90,
+    "gpu": 110,
+    "cpu": 60,
     "tags": 150,
     "tps": 80,
     "latency": 90,
     "vram": 260,
     "prompt": 140,
+    "model_size": 90,
     "model": 280,
     "args": 260,
     "uptime": 90,
@@ -176,6 +192,31 @@ def format_metric(value: float | None, digits: int = 1) -> str:
     return f"{value:.{digits}f}"
 
 
+def format_model_size_gb(value: float | None) -> str:
+    """Format optional GGUF file size using the GUI's base-1024 GB convention."""
+    if value is None:
+        return "-"
+    return f"{value:.1f} GB"
+
+
+def format_cpu_indicator(cpu_active: bool) -> str:
+    """Render a compact CPU-in-use marker for the table."""
+    return CPU_ACTIVE_GLYPH if cpu_active else ""
+
+
+def format_detected_gpu_summary(gpus: Sequence[DetectedGpu]) -> str:
+    """Format a multiline GPU inventory summary for the toolbar panel."""
+    if not gpus:
+        return (
+            "No GPU mapping detected yet. Start or benchmark a GPU-backed instance "
+            "to capture VulkanN adapter names."
+        )
+    return "\n".join(
+        f"{gpu.label} - {gpu.name}" if gpu.name else f"{gpu.label} - adapter name unavailable"
+        for gpu in gpus
+    )
+
+
 def format_benchmark_settings_summary(settings: BenchmarkSettings) -> str:
     """Format quick benchmark settings for compact GUI labels and logs."""
     optional = {
@@ -219,7 +260,7 @@ def format_benchmark_message(result: BenchmarkResult) -> str:
     message = (
         f"Benchmark {result.instance_name} using {result.prompt_file}: "
         f"{format_metric(result.tokens_per_second)} TPS, "
-        f"{format_metric(result.latency_ms, 0)} ms latency, "
+        f"TTFT {format_metric(result.latency_ms, 0)} ms, "
         f"{format_benchmark_memory(result)}."
     )
     if warning:
@@ -324,7 +365,7 @@ class LlamaOrchestratorGui(tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("llama-orchestrator")
-        self.geometry("1120x720")
+        self.geometry("1260x720")
         self.minsize(960, 560)
 
         self.project_root = get_project_root()
@@ -334,6 +375,8 @@ class LlamaOrchestratorGui(tk.Tk):
         self.benchmark_params_menu: tk.Menu | None = None
         self.tag_filter_var = tk.StringVar(value="All tags")
         self.prompt_var = tk.StringVar(value=self.benchmark_settings.prompt_file.name)
+        self.show_gpu_inventory_var = tk.BooleanVar(value=True)
+        self.gpu_inventory_var = tk.StringVar(value=format_detected_gpu_summary(()))
 
         self._build_widgets()
         self._schedule_message_pump()
@@ -393,6 +436,12 @@ class LlamaOrchestratorGui(tk.Tk):
 
         ttk.Button(toolbar, text=EDIT_BENCHMARK_PROMPT_LABEL, command=self._select_prompt_file).grid(row=0, column=12, padx=6)
         ttk.Label(toolbar, textvariable=self.prompt_var).grid(row=0, column=13, sticky="w", padx=(0, 6))
+        ttk.Checkbutton(
+            toolbar,
+            text="GPU map",
+            variable=self.show_gpu_inventory_var,
+            command=self._toggle_gpu_inventory,
+        ).grid(row=0, column=14, padx=(12, 6))
 
         self.daemon_var = tk.StringVar(value="Daemon: unknown")
         ttk.Label(toolbar, textvariable=self.daemon_var).grid(row=0, column=16, sticky="e", padx=(10, 6))
@@ -404,8 +453,17 @@ class LlamaOrchestratorGui(tk.Tk):
 
         table_frame = ttk.Frame(main)
         table_frame.columnconfigure(0, weight=1)
-        table_frame.rowconfigure(0, weight=1)
+        table_frame.rowconfigure(1, weight=1)
         main.add(table_frame, weight=4)
+
+        self.gpu_inventory_frame = ttk.LabelFrame(table_frame, text="Detected GPUs", padding=(8, 6))
+        self.gpu_inventory_frame.columnconfigure(0, weight=1)
+        self.gpu_inventory_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
+        ttk.Label(
+            self.gpu_inventory_frame,
+            textvariable=self.gpu_inventory_var,
+            justify=tk.LEFT,
+        ).grid(row=0, column=0, sticky="w")
 
         self.tree = ttk.Treeview(table_frame, columns=ALL_COLUMNS, show="headings", selectmode="extended")
         for column in ALL_COLUMNS:
@@ -414,12 +472,13 @@ class LlamaOrchestratorGui(tk.Tk):
 
         y_scroll = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=y_scroll.set)
-        self.tree.grid(row=0, column=0, sticky="nsew")
-        y_scroll.grid(row=0, column=1, sticky="ns")
+        self.tree.grid(row=1, column=0, sticky="nsew")
+        y_scroll.grid(row=1, column=1, sticky="ns")
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
         self.tree.bind("<Double-1>", self._on_tree_double_click)
         self.tree.bind("<Button-3>", self._show_context_menu)
         self._apply_visible_columns()
+        self._toggle_gpu_inventory()
 
         self.context_menu = tk.Menu(self, tearoff=False)
         self.context_menu.add_command(label="Quick benchmark", command=self._run_benchmark_selected)
@@ -429,7 +488,7 @@ class LlamaOrchestratorGui(tk.Tk):
         self.context_menu.add_command(label="Open config", command=self._open_config)
 
         detail_bar = ttk.Frame(table_frame, padding=(0, 8, 0, 0))
-        detail_bar.grid(row=1, column=0, sticky="ew")
+        detail_bar.grid(row=2, column=0, sticky="ew")
         ttk.Button(detail_bar, text="Quick benchmark", command=self._run_benchmark_selected).pack(side=tk.LEFT)
         params_button = ttk.Menubutton(detail_bar, text=BENCHMARK_PARAMS_MENU_LABEL)
         self.benchmark_params_menu = tk.Menu(params_button, tearoff=False)
@@ -463,6 +522,12 @@ class LlamaOrchestratorGui(tk.Tk):
             self._column_vars["name"].set(True)
             visible = ["name"]
         self.tree["displaycolumns"] = visible
+
+    def _toggle_gpu_inventory(self) -> None:
+        if self.show_gpu_inventory_var.get():
+            self.gpu_inventory_frame.grid()
+        else:
+            self.gpu_inventory_frame.grid_remove()
 
     def _schedule_message_pump(self) -> None:
         self._pump_messages()
@@ -501,22 +566,31 @@ class LlamaOrchestratorGui(tk.Tk):
         all_tags: set[str] = set()
         visible_names: set[str] = set()
         latest_results = latest_benchmark_results()
+        loaded_configs: list[InstanceConfig] = []
 
         for name in all_names:
             state = states.get(name)
             try:
                 config = get_instance_config(name)
+                loaded_configs.append(config)
+                runtime_selection = describe_effective_runtime(config)
                 port = str(config.server.port)
                 backend = config.gpu.backend
+                gpu = runtime_selection.gpu_display
+                cpu = format_cpu_indicator(runtime_selection.cpu_active)
                 tags = ", ".join(config.tags) if config.tags else "-"
                 all_tags.update(config.tags)
                 model = str(config.model.path)
+                model_size = format_model_size_gb(resolve_model_size_gb(config))
                 runtime_args = " ".join(config.args) if config.args else "-"
             except Exception:
                 port = "-"
                 backend = "-"
+                gpu = "-"
+                cpu = ""
                 tags = "-"
                 model = "-"
+                model_size = "-"
                 runtime_args = "-"
 
             if active_tag != "All tags" and active_tag not in {tag.strip() for tag in tags.split(",")}:
@@ -554,16 +628,23 @@ class LlamaOrchestratorGui(tk.Tk):
                     pid,
                     port,
                     backend,
+                    gpu,
+                    cpu,
                     tags,
                     tps,
                     latency,
                     vram,
                     prompt,
+                    model_size,
                     model,
                     runtime_args,
                     uptime,
                 ),
             )
+
+        self.gpu_inventory_var.set(
+            format_detected_gpu_summary(collect_detected_gpu_inventory(loaded_configs))
+        )
 
         filter_values = ("All tags", *sorted(all_tags))
         self.tag_filter.configure(values=filter_values)

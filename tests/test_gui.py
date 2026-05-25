@@ -4,10 +4,13 @@ from pathlib import Path
 from unittest.mock import patch
 
 from llama_orchestrator.benchmark import BenchmarkResult, BenchmarkSettings
+from llama_orchestrator.engine.detection import DetectedGpu
 from llama_orchestrator.engine.state import HealthStatus, InstanceState, InstanceStatus
 from llama_orchestrator.gui import (
     BENCHMARK_PARAMS_MENU_LABEL,
+    COLUMN_HEADINGS,
     COLUMN_WIDTHS,
+    CPU_ACTIVE_GLYPH,
     DEFAULT_RUNTIME_ARGS,
     EDIT_BENCHMARK_PROMPT_LABEL,
     INSTALL_LLAMA_SERVER_LABEL,
@@ -18,6 +21,9 @@ from llama_orchestrator.gui import (
     format_benchmark_memory,
     format_benchmark_message,
     format_benchmark_settings_summary,
+    format_cpu_indicator,
+    format_detected_gpu_summary,
+    format_model_size_gb,
     parse_tag_string,
     persist_instance_health,
 )
@@ -191,6 +197,40 @@ def test_format_benchmark_memory_keeps_legacy_vram_rows_readable() -> None:
     assert format_benchmark_memory(result) == "4861 total (VRAM 4861)"
     assert benchmark_shared_ram_warning(result) == ""
     assert "Memory: 4861 total (VRAM 4861)." in format_benchmark_message(result)
+
+
+def test_gui_columns_include_gpu_cpu_and_model_size() -> None:
+    """The main table should expose the new runtime hardware summary columns."""
+    assert COLUMN_HEADINGS["gpu"] == "GPU"
+    assert COLUMN_HEADINGS["cpu"] == "CPU"
+    assert COLUMN_HEADINGS["model_size"] == "Model size"
+
+
+def test_format_model_size_gb_uses_base_1024_display_units() -> None:
+    """Model sizes should render in compact GB values for the table."""
+    assert format_model_size_gb(7.625) == "7.6 GB"
+    assert format_model_size_gb(None) == "-"
+
+
+def test_format_cpu_indicator_uses_checkmark_only_when_cpu_is_active() -> None:
+    """CPU-only rows should show a compact checkmark indicator."""
+    assert format_cpu_indicator(True) == CPU_ACTIVE_GLYPH
+    assert format_cpu_indicator(False) == ""
+
+
+def test_format_detected_gpu_summary_lists_each_device_on_its_own_line() -> None:
+    """The GPU summary panel should remain readable and tolerate missing names."""
+    summary = format_detected_gpu_summary(
+        [
+            DetectedGpu(label="Vulkan0", name="AMD Radeon(TM) Graphics"),
+            DetectedGpu(label="Vulkan1", name=None),
+        ]
+    )
+
+    assert summary == (
+        "Vulkan0 - AMD Radeon(TM) Graphics\n"
+        "Vulkan1 - adapter name unavailable"
+    )
 
 
 def test_memory_column_width_matches_expanded_display_text() -> None:

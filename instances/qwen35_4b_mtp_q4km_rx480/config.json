@@ -9,7 +9,7 @@
   },
   "model": {
     "path": "models/unsloth_Qwen3.5-4B-MTP-GGUF/Qwen3.5-4B-Q4_K_M.gguf",
-    "context_size": 32768,
+    "context_size": 200000,
     "batch_size": 256,
     "threads": 16
   },
@@ -41,9 +41,9 @@
     "--reasoning",
     "off",
     "--cache-type-k",
-    "q8_0",
+    "q4_0",
     "--cache-type-v",
-    "q8_0",
+    "q4_0",
     "--flash-attn",
     "on",
     "--ubatch-size",
