@@ -9,7 +9,7 @@
   },
   "model": {
     "path": "models/Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf",
-    "context_size": 50000,
+    "context_size": 200000,
     "batch_size": 512,
     "threads": 4
   },

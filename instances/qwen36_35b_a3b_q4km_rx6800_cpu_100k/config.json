@@ -11,7 +11,7 @@
     "path": "models/Qwen3.6-35B-A3B-Q4_K_M.gguf",
     "context_size": 128000,
     "batch_size": 512,
-    "threads": 16
+    "threads": 8
   },
   "server": {
     "host": "127.0.0.1",
