@@ -211,6 +211,86 @@ def _wait_for_instance_ready(
     return state
 
 
+def _wait_for_detached_instance_ready(
+    state: InstanceState,
+    config: "InstanceConfig",
+    cmdline: str,
+) -> InstanceState:
+    """Wait for a detached instance to become healthy within the startup budget."""
+    from llama_orchestrator.health.checker import check_instance_health
+
+    if state.pid is None:
+        raise ProcessError(state.name, "Detached process did not return a PID")
+
+    total_budget = float(max(config.healthcheck.start_period, config.healthcheck.timeout))
+    deadline = time.monotonic() + total_budget
+
+    while True:
+        if not is_process_running(state.pid):
+            state.status = InstanceStatus.ERROR
+            state.health = HealthStatus.ERROR
+            state.error_message = "Detached process exited before readiness completed"
+            save_state(state)
+            _sync_runtime_from_state(state, config=config, cmdline=cmdline, last_error=state.error_message)
+            log_event(
+                event_type="start_failed",
+                message=state.error_message,
+                instance_name=state.name,
+                level="error",
+                meta={"pid": state.pid},
+            )
+            raise ProcessError(state.name, state.error_message)
+
+        remaining_budget = max(0.0, deadline - time.monotonic())
+        if remaining_budget <= 0:
+            break
+
+        result = check_instance_health(
+            state.name,
+            timeout=min(float(config.healthcheck.timeout), remaining_budget),
+        )
+
+        if not is_process_running(state.pid):
+            state.status = InstanceStatus.ERROR
+            state.health = HealthStatus.ERROR
+            state.error_message = "Detached process exited before readiness completed"
+            save_state(state)
+            _sync_runtime_from_state(state, config=config, cmdline=cmdline, last_error=state.error_message)
+            log_event(
+                event_type="start_failed",
+                message=state.error_message,
+                instance_name=state.name,
+                level="error",
+                meta={"pid": state.pid},
+            )
+            raise ProcessError(state.name, state.error_message)
+
+        persisted_health = HealthStatus.HEALTHY if result.is_healthy else HealthStatus.LOADING
+        _persist_health_update(
+            state,
+            config,
+            cmdline,
+            health=persisted_health,
+            response_time_ms=result.response_time_ms,
+            error_message="" if result.is_healthy else (result.error_message or ""),
+        )
+
+        if result.is_healthy:
+            return state
+
+        remaining_budget = max(0.0, deadline - time.monotonic())
+        if remaining_budget <= 0:
+            break
+
+        time.sleep(min(float(config.healthcheck.retry_delay), remaining_budget))
+
+    state.status = InstanceStatus.RUNNING
+    state.health = HealthStatus.LOADING
+    save_state(state)
+    _sync_runtime_from_state(state, config=config, cmdline=cmdline)
+    return state
+
+
 def get_log_files(name: str) -> tuple[Path, Path]:
     """Get log file paths for an instance."""
     logs_dir = get_logs_dir()
@@ -415,6 +495,14 @@ def start_instance(name: str, wait_for_ready: bool = True, detach: bool = False)
                 state.health = HealthStatus.LOADING
                 save_state(state)
                 _sync_runtime_from_state(state, config=config, cmdline=cmdline, last_error="")
+                log_event(
+                    event_type="started",
+                    message=f"Instance started (PID: {detach_result.pid}, port: {config.server.port})",
+                    instance_name=name,
+                    meta={"pid": detach_result.pid, "port": config.server.port},
+                )
+                if wait_for_ready:
+                    return _wait_for_detached_instance_ready(state, config, cmdline)
                 return state
 
             # Open log files

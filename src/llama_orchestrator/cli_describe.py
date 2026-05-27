@@ -413,7 +413,7 @@ def format_description_rich(desc: InstanceDescription) -> str:
     # Process validation
     if desc.pid:
         lines.append("[bold cyan]Process Validation[/bold cyan]")
-        valid_icon = "✓" if desc.process_valid else "✗"
+        valid_icon = "OK" if desc.process_valid else "X"
         valid_color = "green" if desc.process_valid else "red"
         lines.append(f"  Valid:        [{valid_color}]{valid_icon}[/{valid_color}] {desc.process_valid}")
         lines.append(f"  Exists:       {desc.process_exists}")

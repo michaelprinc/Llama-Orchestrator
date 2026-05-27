@@ -133,14 +133,14 @@ class TestInstanceState:
             status=InstanceStatus.RUNNING,
             health=HealthStatus.HEALTHY,
         )
-        assert running.status_symbol == "●"
+        assert running.status_symbol == "*"
         
         stopped = InstanceState(
             name="test",
             status=InstanceStatus.STOPPED,
             health=HealthStatus.UNKNOWN,
         )
-        assert stopped.status_symbol == "○"
+        assert stopped.status_symbol == "-"
 
     def test_health_symbol(self):
         """Test health symbol property."""
@@ -149,15 +149,14 @@ class TestInstanceState:
             status=InstanceStatus.RUNNING,
             health=HealthStatus.HEALTHY,
         )
-        # Healthy uses filled circle
-        assert healthy.health_symbol == "●"
+        assert healthy.health_symbol == "*"
         
         unhealthy = InstanceState(
             name="test",
             status=InstanceStatus.ERROR,
             health=HealthStatus.ERROR,
         )
-        assert unhealthy.health_symbol == "✗"
+        assert unhealthy.health_symbol == "X"
 
     def test_uptime_str_no_start_time(self):
         """Test uptime string when not started."""

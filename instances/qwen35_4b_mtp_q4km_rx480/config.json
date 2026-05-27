@@ -29,7 +29,7 @@
   },
   "args": [
     "--parallel",
-    "2",
+    "1",
     "--device",
     "Vulkan2",
     "--main-gpu",

@@ -38,10 +38,10 @@ class ValidationIssue:
     suggestion: str = ""
     
     def __str__(self) -> str:
-        prefix = {"error": "❌", "warning": "⚠️", "info": "ℹ️"}[self.severity]
+        prefix = {"error": "ERROR", "warning": "WARNING", "info": "INFO"}[self.severity]
         msg = f"{prefix} [{self.instance}] {self.field}: {self.message}"
         if self.suggestion:
-            msg += f"\n   → {self.suggestion}"
+            msg += f"\n   -> {self.suggestion}"
         return msg
 
 

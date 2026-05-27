@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 import re
+import shutil
+import subprocess
+import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 
@@ -31,6 +34,10 @@ _ACTIVE_DEVICE_PATTERN = re.compile(
     re.IGNORECASE,
 )
 _LABEL_PATTERN = re.compile(r"^(?P<prefix>[A-Za-z]+)(?P<index>\d+)$")
+_VULKANINFO_GPU_PATTERN = re.compile(r"^GPU(?P<index>\d+):\s*$", re.IGNORECASE)
+_VULKANINFO_DEVICE_NAME_PATTERN = re.compile(r"^\s*deviceName\s*=\s*(?P<name>.+?)\s*$")
+_VULKANINFO_CACHE_TTL_SECONDS = 30.0
+_vulkaninfo_cache: tuple[float, tuple[DetectedGpu, ...]] | None = None
 
 
 @dataclass(frozen=True)
@@ -233,9 +240,69 @@ def parse_detected_gpus(text: str) -> list[DetectedGpu]:
     return sorted(detected.values(), key=_sort_gpu_label)
 
 
-def collect_detected_gpu_inventory(configs: Iterable[InstanceConfig]) -> list[DetectedGpu]:
-    """Aggregate known GPU labels and adapter names across instance stderr logs."""
+def parse_vulkaninfo_summary(text: str) -> list[DetectedGpu]:
+    """Parse VulkanN adapter names from ``vulkaninfo --summary`` output."""
     detected: dict[str, DetectedGpu] = {}
+    current_label: str | None = None
+
+    for line in text.splitlines():
+        gpu_match = _VULKANINFO_GPU_PATTERN.match(line.strip())
+        if gpu_match:
+            current_label = f"Vulkan{int(gpu_match.group('index'))}"
+            detected.setdefault(current_label, DetectedGpu(label=current_label))
+            continue
+
+        name_match = _VULKANINFO_DEVICE_NAME_PATTERN.match(line)
+        if name_match and current_label is not None:
+            detected[current_label] = DetectedGpu(
+                label=current_label,
+                name=name_match.group("name").strip(),
+            )
+
+    return sorted(detected.values(), key=_sort_gpu_label)
+
+
+def probe_vulkan_gpu_inventory(*, refresh: bool = False) -> list[DetectedGpu]:
+    """Return current Vulkan labels and adapter names from the local Vulkan loader."""
+    global _vulkaninfo_cache
+
+    now = time.monotonic()
+    if (
+        not refresh
+        and _vulkaninfo_cache is not None
+        and now - _vulkaninfo_cache[0] < _VULKANINFO_CACHE_TTL_SECONDS
+    ):
+        return list(_vulkaninfo_cache[1])
+
+    vulkaninfo = shutil.which("vulkaninfo")
+    if vulkaninfo is None:
+        _vulkaninfo_cache = (now, ())
+        return []
+
+    try:
+        completed = subprocess.run(
+            [vulkaninfo, "--summary"],
+            capture_output=True,
+            check=False,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError):
+        _vulkaninfo_cache = (now, ())
+        return []
+
+    text = "\n".join(part for part in (completed.stdout, completed.stderr) if part)
+    inventory = tuple(parse_vulkaninfo_summary(text))
+    _vulkaninfo_cache = (now, inventory)
+    return list(inventory)
+
+
+def collect_detected_gpu_inventory(configs: Iterable[InstanceConfig]) -> list[DetectedGpu]:
+    """Aggregate known GPU labels and adapter names, preferring live Vulkan inventory."""
+    detected: dict[str, DetectedGpu] = {
+        gpu.label: gpu for gpu in probe_vulkan_gpu_inventory()
+    }
 
     for config in configs:
         selection = describe_effective_runtime(config)

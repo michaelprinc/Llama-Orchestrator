@@ -211,7 +211,7 @@ def exit_with_code(
         if code.is_error:
             console.print(f"[red]Error:[/red] {message}")
         else:
-            console.print(f"[green]✓[/green] {message}")
+            console.print(f"[green]OK[/green] {message}")
     elif message:
         if code.is_error:
             print(f"Error: {message}", file=sys.stderr)

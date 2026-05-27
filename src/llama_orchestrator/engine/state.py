@@ -118,11 +118,11 @@ class InstanceState:
     def status_symbol(self) -> str:
         """Get status indicator symbol."""
         return {
-            InstanceStatus.STOPPED: "○",
-            InstanceStatus.STARTING: "◐",
-            InstanceStatus.RUNNING: "●",
-            InstanceStatus.STOPPING: "◑",
-            InstanceStatus.ERROR: "✗",
+            InstanceStatus.STOPPED: "-",
+            InstanceStatus.STARTING: "~",
+            InstanceStatus.RUNNING: "*",
+            InstanceStatus.STOPPING: "~",
+            InstanceStatus.ERROR: "X",
         }.get(self.status, "?")
     
     @property
@@ -130,10 +130,10 @@ class InstanceState:
         """Get health indicator symbol."""
         return {
             HealthStatus.UNKNOWN: "?",
-            HealthStatus.LOADING: "◐",
-            HealthStatus.HEALTHY: "●",
-            HealthStatus.UNHEALTHY: "◑",
-            HealthStatus.ERROR: "✗",
+            HealthStatus.LOADING: "~",
+            HealthStatus.HEALTHY: "*",
+            HealthStatus.UNHEALTHY: "!",
+            HealthStatus.ERROR: "X",
         }.get(self.health, "?")
 
 

@@ -201,6 +201,40 @@ def test_start_instance_fails_if_process_exits_during_readiness_wait() -> None:
 
 def test_start_instance_uses_detached_launcher_when_requested() -> None:
     config = _sample_config()
+    healthy_result = HealthCheckResult(status=HealthCheckStatus.OK, response_time_ms=8.0)
+
+    with patch("llama_orchestrator.engine.process.instance_lock", return_value=nullcontext()), \
+         patch("llama_orchestrator.engine.process.get_instance_config", return_value=config), \
+         patch("llama_orchestrator.engine.process.validate_executable", return_value=(True, "")), \
+         patch("llama_orchestrator.engine.process.load_state", return_value=None), \
+         patch("llama_orchestrator.engine.process.load_runtime", return_value=None), \
+         patch("llama_orchestrator.health.ports.validate_port_for_instance", return_value=(True, "ok")), \
+         patch("llama_orchestrator.engine.process.build_command", return_value=["llama-server", "--port", "8001"]), \
+         patch("llama_orchestrator.engine.process.build_env", return_value={}), \
+         patch("llama_orchestrator.engine.process.get_instance_log_handler"), \
+         patch("llama_orchestrator.engine.process.start_detached") as mock_start_detached, \
+         patch("llama_orchestrator.engine.process.is_process_running", return_value=True), \
+         patch("llama_orchestrator.health.checker.check_instance_health", return_value=healthy_result) as mock_check_health, \
+         patch("llama_orchestrator.engine.process.record_health_check") as mock_record_health, \
+         patch("llama_orchestrator.engine.process.save_state") as mock_save_state, \
+         patch("llama_orchestrator.engine.process.save_runtime"), \
+         patch("llama_orchestrator.engine.process.log_event") as mock_log_event:
+        mock_start_detached.return_value = MagicMock(success=True, pid=2468)
+
+        state = start_instance("test-instance", detach=True)
+
+    assert state.pid == 2468
+    assert state.status == InstanceStatus.RUNNING
+    assert state.health == HealthStatus.HEALTHY
+    mock_start_detached.assert_called_once()
+    mock_check_health.assert_called_once_with("test-instance", timeout=2.0)
+    mock_record_health.assert_called_once()
+    assert any(call.kwargs.get("event_type") == "started" for call in mock_log_event.call_args_list)
+    assert mock_save_state.called
+
+
+def test_start_instance_detached_can_skip_readiness_wait() -> None:
+    config = _sample_config()
 
     with patch("llama_orchestrator.engine.process.instance_lock", return_value=nullcontext()), \
          patch("llama_orchestrator.engine.process.get_instance_config", return_value=config), \
@@ -217,10 +251,11 @@ def test_start_instance_uses_detached_launcher_when_requested() -> None:
          patch("llama_orchestrator.engine.process.save_runtime"):
         mock_start_detached.return_value = MagicMock(success=True, pid=2468)
 
-        state = start_instance("test-instance", detach=True)
+        state = start_instance("test-instance", detach=True, wait_for_ready=False)
 
     assert state.pid == 2468
     assert state.status == InstanceStatus.RUNNING
+    assert state.health == HealthStatus.LOADING
     mock_start_detached.assert_called_once()
     mock_check_health.assert_not_called()
     assert mock_save_state.called

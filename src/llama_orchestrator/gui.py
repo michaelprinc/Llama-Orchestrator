@@ -15,7 +15,7 @@ import threading
 import time
 import tkinter as tk
 from collections.abc import Callable, Sequence
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, simpledialog, ttk
 
@@ -65,6 +65,14 @@ from llama_orchestrator.engine.state import (
     record_health_check,
     save_runtime,
     save_state,
+)
+from llama_orchestrator.gui_state import (
+    GuiSettings,
+    cycle_sort_order,
+    format_sort_heading,
+    load_gui_settings,
+    save_gui_settings,
+    stable_sort_rows,
 )
 from llama_orchestrator.health import check_instance_health
 from llama_orchestrator.health.ports import suggest_port_for_instance
@@ -139,6 +147,15 @@ COLUMN_WIDTHS = {
     "args": 260,
     "uptime": 90,
 }
+
+
+@dataclass(frozen=True)
+class TableRow:
+    """One rendered GUI table row plus raw sort values."""
+
+    name: str
+    values: tuple[str, ...]
+    sort_values: dict[str, object]
 
 
 def apply_managed_runtime_args(
@@ -371,7 +388,10 @@ class LlamaOrchestratorGui(tk.Tk):
         self.project_root = get_project_root()
         self._messages: queue.Queue[str] = queue.Queue()
         self._selected_name: str | None = None
+        self._selected_names: tuple[str, ...] = ()
+        self._focused_name: str | None = None
         self.benchmark_settings = load_benchmark_settings(self.project_root)
+        self.gui_settings: GuiSettings = load_gui_settings(ALL_COLUMNS)
         self.benchmark_params_menu: tk.Menu | None = None
         self.tag_filter_var = tk.StringVar(value="All tags")
         self.prompt_var = tk.StringVar(value=self.benchmark_settings.prompt_file.name)
@@ -406,7 +426,7 @@ class LlamaOrchestratorGui(tk.Tk):
         columns_button["menu"] = columns_menu
         self._column_vars: dict[str, tk.BooleanVar] = {}
         for column in ALL_COLUMNS:
-            var = tk.BooleanVar(value=True)
+            var = tk.BooleanVar(value=column in self.gui_settings.visible_columns)
             self._column_vars[column] = var
             columns_menu.add_checkbutton(
                 label=COLUMN_HEADINGS[column],
@@ -467,8 +487,8 @@ class LlamaOrchestratorGui(tk.Tk):
 
         self.tree = ttk.Treeview(table_frame, columns=ALL_COLUMNS, show="headings", selectmode="extended")
         for column in ALL_COLUMNS:
-            self.tree.heading(column, text=COLUMN_HEADINGS[column])
             self.tree.column(column, width=COLUMN_WIDTHS[column], anchor=tk.W)
+        self._refresh_tree_headings()
 
         y_scroll = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=y_scroll.set)
@@ -502,6 +522,8 @@ class LlamaOrchestratorGui(tk.Tk):
         ttk.Button(detail_bar, text="Open logs", command=self._open_logs).pack(side=tk.LEFT, padx=6)
         ttk.Button(detail_bar, text="Open project", command=self._open_project).pack(side=tk.LEFT, padx=6)
         ttk.Button(detail_bar, text="Open prompt", command=self._open_prompt_file).pack(side=tk.LEFT)
+        ttk.Frame(detail_bar).pack(side=tk.LEFT, expand=True, fill=tk.X)
+        ttk.Button(detail_bar, text="Reset GUI", command=self._reset_gui_state).pack(side=tk.RIGHT)
 
         log_frame = ttk.Frame(main)
         log_frame.columnconfigure(0, weight=1)
@@ -516,12 +538,39 @@ class LlamaOrchestratorGui(tk.Tk):
         self.refresh()
         self.after(self.refresh_interval_ms, self._auto_refresh)
 
-    def _apply_visible_columns(self) -> None:
+    def _apply_visible_columns(self, *, persist: bool = True) -> None:
         visible = [column for column in ALL_COLUMNS if self._column_vars[column].get()]
         if not visible:
             self._column_vars["name"].set(True)
             visible = ["name"]
         self.tree["displaycolumns"] = visible
+        if persist:
+            self.gui_settings = replace(self.gui_settings, visible_columns=tuple(visible))
+            save_gui_settings(self.gui_settings)
+
+    def _refresh_tree_headings(self) -> None:
+        for column in ALL_COLUMNS:
+            self.tree.heading(
+                column,
+                text=format_sort_heading(COLUMN_HEADINGS[column], column, self.gui_settings.sort_order),
+                command=lambda current=column: self._toggle_sort(current),
+            )
+
+    def _toggle_sort(self, column: str) -> None:
+        self.gui_settings = replace(
+            self.gui_settings,
+            sort_order=cycle_sort_order(self.gui_settings.sort_order, column),
+        )
+        save_gui_settings(self.gui_settings)
+        self._refresh_tree_headings()
+        self.refresh()
+
+    def _reset_gui_state(self) -> None:
+        self.gui_settings = replace(self.gui_settings, sort_order=())
+        save_gui_settings(self.gui_settings)
+        self._refresh_tree_headings()
+        self.refresh()
+        self._post_message("GUI sorting reset.")
 
     def _toggle_gpu_inventory(self) -> None:
         if self.show_gpu_inventory_var.get():
@@ -555,7 +604,12 @@ class LlamaOrchestratorGui(tk.Tk):
         self._messages.put(message)
 
     def refresh(self) -> None:
-        selected = self._selected_name
+        selection = tuple(str(item) for item in self.tree.selection()) or self._selected_names
+        if not selection and self._selected_name:
+            selection = (self._selected_name,)
+        focused = str(self.tree.focus()) if self.tree.focus() else self._focused_name
+        if not focused and selection:
+            focused = selection[0]
         for item in self.tree.get_children():
             self.tree.delete(item)
 
@@ -567,6 +621,7 @@ class LlamaOrchestratorGui(tk.Tk):
         visible_names: set[str] = set()
         latest_results = latest_benchmark_results()
         loaded_configs: list[InstanceConfig] = []
+        rows: list[TableRow] = []
 
         for name in all_names:
             state = states.get(name)
@@ -578,20 +633,37 @@ class LlamaOrchestratorGui(tk.Tk):
                 backend = config.gpu.backend
                 gpu = runtime_selection.gpu_display
                 cpu = format_cpu_indicator(runtime_selection.cpu_active)
+                cpu_active = runtime_selection.cpu_active
                 tags = ", ".join(config.tags) if config.tags else "-"
                 all_tags.update(config.tags)
                 model = str(config.model.path)
-                model_size = format_model_size_gb(resolve_model_size_gb(config))
+                model_size_value = resolve_model_size_gb(config)
+                model_size = format_model_size_gb(model_size_value)
                 runtime_args = " ".join(config.args) if config.args else "-"
+                sort_tags: object = tuple(config.tags)
+                sort_port: object = config.server.port
+                sort_backend: object = backend
+                sort_gpu: object = gpu
+                sort_model: object = model
+                sort_model_size: object = model_size_value
+                sort_args: object = tuple(config.args)
             except Exception:
                 port = "-"
                 backend = "-"
                 gpu = "-"
                 cpu = ""
+                cpu_active = False
                 tags = "-"
                 model = "-"
                 model_size = "-"
                 runtime_args = "-"
+                sort_tags = ()
+                sort_port = None
+                sort_backend = None
+                sort_gpu = None
+                sort_model = None
+                sort_model_size = None
+                sort_args = ()
 
             if active_tag != "All tags" and active_tag not in {tag.strip() for tag in tags.split(",")}:
                 continue
@@ -600,47 +672,77 @@ class LlamaOrchestratorGui(tk.Tk):
             status, health = derive_display_status_and_health(state)
             pid = str(state.pid) if state and state.pid else "-"
             uptime = state.uptime_str if state else "-"
+            uptime_value = state.uptime if state else None
             benchmark = latest_results.get(name)
             if benchmark and benchmark.status == "ok":
+                total_memory = benchmark.total_gpu_memory_mb or benchmark.vram_mb
                 tps = format_metric(benchmark.tokens_per_second)
                 latency = format_metric(benchmark.latency_ms, 0)
                 vram = format_benchmark_memory(benchmark)
                 prompt = benchmark.prompt_file
             elif benchmark:
+                total_memory = benchmark.total_gpu_memory_mb or benchmark.vram_mb
                 tps = "failed"
                 latency = "-"
                 vram = format_benchmark_memory(benchmark)
                 prompt = benchmark.prompt_file
             else:
+                total_memory = None
                 tps = "-"
                 latency = "-"
                 vram = "-"
                 prompt = "-"
 
-            self.tree.insert(
-                "",
-                tk.END,
-                iid=name,
-                values=(
-                    name,
-                    status,
-                    health,
-                    pid,
-                    port,
-                    backend,
-                    gpu,
-                    cpu,
-                    tags,
-                    tps,
-                    latency,
-                    vram,
-                    prompt,
-                    model_size,
-                    model,
-                    runtime_args,
-                    uptime,
-                ),
+            rows.append(
+                TableRow(
+                    name=name,
+                    values=(
+                        name,
+                        status,
+                        health,
+                        pid,
+                        port,
+                        backend,
+                        gpu,
+                        cpu,
+                        tags,
+                        tps,
+                        latency,
+                        vram,
+                        prompt,
+                        model_size,
+                        model,
+                        runtime_args,
+                        uptime,
+                    ),
+                    sort_values={
+                        "name": name,
+                        "status": status,
+                        "health": health,
+                        "pid": state.pid if state and state.pid else None,
+                        "port": sort_port,
+                        "backend": sort_backend,
+                        "gpu": sort_gpu,
+                        "cpu": cpu_active,
+                        "tags": sort_tags,
+                        "tps": benchmark.tokens_per_second if benchmark and benchmark.status == "ok" else None,
+                        "latency": benchmark.latency_ms if benchmark and benchmark.status == "ok" else None,
+                        "vram": total_memory,
+                        "prompt": benchmark.prompt_file if benchmark else None,
+                        "model_size": sort_model_size,
+                        "model": sort_model,
+                        "args": sort_args,
+                        "uptime": uptime_value,
+                    },
+                )
             )
+
+        for row in stable_sort_rows(
+            rows,
+            self.gui_settings.sort_order,
+            lambda current, column: current.sort_values.get(column),
+        ):
+            self.tree.insert("", tk.END, iid=row.name, values=row.values)
 
         self.gpu_inventory_var.set(
             format_detected_gpu_summary(collect_detected_gpu_inventory(loaded_configs))
@@ -652,9 +754,21 @@ class LlamaOrchestratorGui(tk.Tk):
             self.tag_filter_var.set("All tags")
         self.prompt_var.set(self.benchmark_settings.prompt_file.name)
 
-        if selected and selected in visible_names:
-            self.tree.selection_set(selected)
-            self.tree.focus(selected)
+        visible_selection = tuple(name for name in selection if name in visible_names)
+        if visible_selection:
+            self.tree.selection_set(visible_selection)
+        focus_target = None
+        if focused and focused in visible_names:
+            focus_target = focused
+        elif visible_selection:
+            focus_target = visible_selection[0]
+        if focus_target:
+            self.tree.focus(focus_target)
+            self.tree.see(focus_target)
+
+        self._selected_names = visible_selection
+        self._selected_name = visible_selection[0] if visible_selection else None
+        self._focused_name = focus_target
 
         daemon = get_daemon_status()
         if daemon.running:
@@ -664,7 +778,10 @@ class LlamaOrchestratorGui(tk.Tk):
 
     def _on_select(self, _event: tk.Event) -> None:
         selection = self.tree.selection()
-        self._selected_name = selection[0] if selection else None
+        self._selected_names = tuple(str(item) for item in selection)
+        self._selected_name = self._selected_names[0] if self._selected_names else None
+        focused = str(self.tree.focus()) if self.tree.focus() else None
+        self._focused_name = focused or self._selected_name
 
     def _tree_column_from_event(self, event: tk.Event) -> str | None:
         column_id = self.tree.identify_column(event.x)
@@ -685,7 +802,10 @@ class LlamaOrchestratorGui(tk.Tk):
         if not item:
             return
         self.tree.selection_set(item)
+        self.tree.focus(item)
+        self._selected_names = (item,)
         self._selected_name = item
+        self._focused_name = item
         if self._tree_column_from_event(event) == "args":
             self._edit_args_inline(item, event)
             return
@@ -695,7 +815,10 @@ class LlamaOrchestratorGui(tk.Tk):
         item = self.tree.identify_row(event.y)
         if item and item not in self.tree.selection():
             self.tree.selection_set(item)
+            self.tree.focus(item)
+            self._selected_names = (item,)
             self._selected_name = item
+            self._focused_name = item
         self.context_menu.tk_popup(event.x_root, event.y_root)
 
     def _selected_instance(self) -> str | None:

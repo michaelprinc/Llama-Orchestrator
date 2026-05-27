@@ -1,22 +1,22 @@
 {
-  "name": "qwen36_35b_a3b_mtp_iq3xxs_rx6800_cpu_100k",
+  "name": "qwen35_2b_mtp_q4km_rx480",
   "binary": {
-    "binary_id": "1e155a2a-7cbc-4077-affd-19b476f15ef6",
-    "version": "b9297",
+    "binary_id": "3e031465-1bc3-4851-bbc3-42711f7f5b40",
+    "version": "b9286",
     "variant": "win-vulkan-x64",
-    "source_url": "https://github.com/ggml-org/llama.cpp/releases/download/b9297/llama-b9297-bin-win-vulkan-x64.zip",
-    "sha256": "533bfc014a28941b624b70ac177ada2d463e1b64b6ddaf4dfebfe4aef6ef931e"
+    "source_url": "https://github.com/ggml-org/llama.cpp/releases/download/b9286/llama-b9286-bin-win-vulkan-x64.zip",
+    "sha256": "a154901969ab28825dbe4413a5201e231a71c15aa10f73996b67d65464cd985d"
   },
   "model": {
-    "path": "models/Qwen3.6-35B-A3B-UD-IQ3_XXS.gguf",
-    "context_size": 262144,
-    "batch_size": 512,
+    "path": "models/unsloth_Qwen3.5-2B-MTP-GGUF/Qwen3.5-2B-Q4_K_M.gguf",
+    "context_size": 100000,
+    "batch_size": 256,
     "threads": 16
   },
   "server": {
     "host": "127.0.0.1",
-    "port": 8061,
-    "timeout": 900,
+    "port": 8057,
+    "timeout": 600,
     "parallel": 1
   },
   "gpu": {
@@ -36,19 +36,14 @@
     "0",
     "--split-mode",
     "none",
-    "--no-mmap",
+    "--no-mmproj",
+    "--jinja",
+    "--reasoning",
+    "off",
     "--cache-type-k",
     "q4_0",
     "--cache-type-v",
     "q4_0",
-    "--cache-type-k-draft",
-    "q4_0",
-    "--cache-type-v-draft",
-    "q4_0",
-    "--no-mmproj",
-    "--jinja",
-    "--reasoning",
-    "on",
     "--flash-attn",
     "on",
     "--ubatch-size",
@@ -56,19 +51,18 @@
     "--spec-type",
     "draft-mtp",
     "--spec-draft-n-max",
-    "2"
+    "2",
+    "--spec-draft-n-min",
+    "1"
   ],
   "tags": [
-    "qwen36",
-    "35b",
-    "a3b",
+    "qwen35",
+    "2b",
     "mtp",
-    "iq3xxs",
-    "rx6800",
+    "q4km",
+    "rx480",
     "vulkan",
-    "100k",
-    "q4-kv",
-    "b9297"
+    "b9286"
   ],
   "healthcheck": {
     "type": "http",
@@ -82,15 +76,15 @@
     "timeout": 5,
     "retries": 3,
     "retry_delay": 1.0,
-    "start_period": 600,
+    "start_period": 180,
     "backoff_enabled": true,
     "backoff_base": 1.0,
     "backoff_max": 60.0,
     "backoff_jitter": 0.1
   },
   "restart_policy": {
-    "enabled": false,
-    "max_retries": 0,
+    "enabled": true,
+    "max_retries": 5,
     "backoff_multiplier": 2.0,
     "initial_delay": 1.0,
     "max_delay": 300.0

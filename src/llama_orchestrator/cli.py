@@ -127,7 +127,7 @@ def up(
         console.print(Panel(
             f"[red]Instance '{name}' not found.[/red]\n\n"
             "Check that the instance config exists in instances/{name}/config.json",
-            title="❌ Instance Not Found",
+            title="Instance Not Found",
             border_style="red"
         ))
         _raise_exit(ExitCode.INSTANCE_NOT_FOUND)
@@ -139,7 +139,7 @@ def up(
             f"[red]{exe_msg}[/red]\n\n"
             "Please install a binary with 'llama-orch binary install'\n"
             "or ensure llama-server.exe is in the bin/ directory.",
-            title="❌ Executable Not Found",
+            title="Executable Not Found",
             border_style="red"
         ))
         _raise_exit(ExitCode.BINARY_NOT_FOUND)
@@ -158,7 +158,7 @@ def up(
             f"PID: {state.pid}\n"
             f"Status: {state.status.value}\n"
             f"{health_detail}",
-            title="✅ Instance Started",
+            title="Instance Started",
             border_style="green"
         ))
         console.print("\n[dim]Check status with:[/dim] [cyan]llama-orch ps[/cyan]")
@@ -166,7 +166,7 @@ def up(
     except ProcessError as e:
         console.print(Panel(
             f"[red]Failed to start instance:[/red]\n{e.message}",
-            title="❌ Start Failed",
+            title="Start Failed",
             border_style="red"
         ))
         _raise_exit(_process_error_code(e.message, ExitCode.PROCESS_START_FAILED))
@@ -194,13 +194,13 @@ def down(
         console.print(Panel(
             f"[green]Instance '{name}' stopped successfully![/green]\n\n"
             f"Status: {state.status.value}",
-            title="✅ Instance Stopped",
+            title="Instance Stopped",
             border_style="green"
         ))
     except ProcessError as e:
         console.print(Panel(
             f"[red]Failed to stop instance:[/red]\n{e.message}",
-            title="❌ Stop Failed",
+            title="Stop Failed",
             border_style="red"
         ))
         _raise_exit(_process_error_code(e.message, ExitCode.PROCESS_STOP_FAILED))
@@ -234,13 +234,13 @@ def restart(
             f"PID: {state.pid}\n"
             f"Restart count: {state.restart_count}\n"
             f"{health_detail}",
-            title="✅ Instance Restarted",
+            title="Instance Restarted",
             border_style="green"
         ))
     except ProcessError as e:
         console.print(Panel(
             f"[red]Failed to restart instance:[/red]\n{e.message}",
-            title="❌ Restart Failed",
+            title="Restart Failed",
             border_style="red"
         ))
         _raise_exit(_process_error_code(e.message, ExitCode.PROCESS_START_FAILED))
@@ -369,11 +369,11 @@ def health(
             
             # Status styling
             if result.is_healthy:
-                status_text = "[green]● HEALTHY[/green]"
+                status_text = "[green]* HEALTHY[/green]"
             elif result.is_loading:
-                status_text = "[yellow]◐ LOADING[/yellow]"
+                status_text = "[yellow]~ LOADING[/yellow]"
             else:
-                status_text = f"[red]✗ {result.status.value.upper()}[/red]"
+                status_text = f"[red]X {result.status.value.upper()}[/red]"
             
             response_time = f"{result.response_time_ms:.1f}ms" if result.response_time_ms else "-"
             details = result.error_message or ""
@@ -602,7 +602,7 @@ def _build_dashboard_table() -> Table:
             uptime = state.uptime_str
         else:
             pid = "-"
-            status_text = "[dim]○ stopped[/dim]"
+            status_text = "[dim]- stopped[/dim]"
             health_text = "? unknown"
             uptime = "-"
 
@@ -786,7 +786,7 @@ def init(
         f"Model: {model}\n"
         f"Port: {port}\n"
         f"Backend: {backend}" + (f" (device {device}, {layers} layers)" if backend != "cpu" else ""),
-        title="✅ Instance Created",
+        title="Instance Created",
         border_style="green"
     ))
     
@@ -835,7 +835,7 @@ def config_validate(
         except ConfigLoadError as e:
             console.print(Panel(
                 f"[red]Failed to load config:[/red]\n{e.message}",
-                title="❌ Validation Failed",
+                title="Validation Failed",
                 border_style="red"
             ))
             _raise_exit(ExitCode.CONFIG_NOT_FOUND)
@@ -849,11 +849,11 @@ def config_validate(
             console.print(str(issue))
     
     if result.is_valid:
-        console.print("\n[green]✅ Validation passed[/green]")
+        console.print("\n[green]Validation passed[/green]")
         if result.warning_count > 0:
             console.print(f"[yellow]   ({result.warning_count} warnings)[/yellow]")
     else:
-        console.print(f"\n[red]❌ Validation failed ({result.error_count} errors)[/red]")
+        console.print(f"\n[red]Validation failed ({result.error_count} errors)[/red]")
         _raise_exit(ExitCode.CONFIG_INVALID)
 
 
@@ -892,7 +892,7 @@ def config_lint(
     except ConfigLoadError as e:
         console.print(Panel(
             f"[red]Failed to load configs:[/red]\n{e.message}",
-            title="❌ Lint Failed",
+            title="Lint Failed",
             border_style="red"
         ))
         _raise_exit(ExitCode.CONFIG_NOT_FOUND)
@@ -947,11 +947,11 @@ def config_lint(
         
         console.print()
         if result.is_valid:
-            console.print(f"[green]✅ Lint passed[/green] ({len(configs)} instances checked)")
+            console.print(f"[green]Lint passed[/green] ({len(configs)} instances checked)")
             if result.warning_count > 0:
                 console.print(f"[yellow]   {result.warning_count} warnings[/yellow]")
         else:
-            console.print(f"[red]❌ Lint failed ({result.error_count} errors, {result.warning_count} warnings)[/red]")
+            console.print(f"[red]Lint failed ({result.error_count} errors, {result.warning_count} warnings)[/red]")
             _raise_exit(ExitCode.CONFIG_INVALID)
 
 
@@ -998,7 +998,7 @@ def daemon_start(
             "The daemon will monitor all instances and trigger auto-restarts.\n"
             "Use 'llama-orch daemon status' to check status.\n"
             "Use 'llama-orch daemon stop' to stop.",
-            title="✅ Daemon Started",
+            title="Daemon Started",
             border_style="green"
         ))
 
@@ -1023,7 +1023,7 @@ def daemon_stop() -> None:
     if stop_daemon():
         console.print(Panel(
             "[green]Daemon stopped successfully![/green]",
-            title="✅ Daemon Stopped",
+            title="Daemon Stopped",
             border_style="green"
         ))
     else:
@@ -1046,7 +1046,7 @@ def daemon_status() -> None:
     
     if status.running:
         info = f"""
-[green]● Daemon is running[/green]
+[green]* Daemon is running[/green]
 
   PID:                 {status.pid}
   Instances monitored: {status.instances_monitored}
@@ -1054,7 +1054,7 @@ def daemon_status() -> None:
         console.print(Panel(info.strip(), title="Daemon Status", border_style="green"))
     else:
         console.print(Panel(
-            "[dim]○ Daemon is not running[/dim]\n\n"
+            "[dim]- Daemon is not running[/dim]\n\n"
             "Use 'llama-orch daemon start' to start.",
             title="Daemon Status",
             border_style="dim"
@@ -1084,7 +1084,7 @@ def daemon_install(
 
     console.print(Panel(
         f"[green]Windows service '{service_name}' installed successfully.[/green]",
-        title="✅ Service Installed",
+        title="Service Installed",
         border_style="green",
     ))
 
@@ -1109,7 +1109,7 @@ def daemon_uninstall(
 
     console.print(Panel(
         f"[green]Windows service '{service_name}' uninstalled successfully.[/green]",
-        title="✅ Service Removed",
+        title="Service Removed",
         border_style="green",
     ))
 
@@ -1182,13 +1182,13 @@ def binary_install(
             f"  Path:    {binary.path}\n\n"
             f"[dim]Use this UUID in your instance config.json:[/dim]\n"
             f'  "binary": {{"binary_id": "{binary.id}"}}',
-            title="✅ Binary Installed",
+            title="Binary Installed",
             border_style="green"
         ))
     except Exception as e:
         console.print(Panel(
             f"[red]Failed to install binary:[/red]\n{e}",
-            title="❌ Install Failed",
+            title="Install Failed",
             border_style="red"
         ))
         _raise_exit(ExitCode.BINARY_INSTALL_FAILED)
@@ -1371,7 +1371,7 @@ def binary_remove(
         f"  UUID:    {binary.id}\n"
         f"  Version: {binary.version}\n"
         f"  Variant: {binary.variant}",
-        title="✅ Binary Removed",
+        title="Binary Removed",
         border_style="green"
     ))
 

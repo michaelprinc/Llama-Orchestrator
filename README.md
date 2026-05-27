@@ -394,8 +394,9 @@ The GUI supports:
   `Install llama-server` because the installer supports CPU, Vulkan, CUDA,
   HIP/Radeon, and SYCL variants.
 - Opening instance config files, log folders, and the project folder.
-- Choosing visible table columns from the `Columns` menu.
+- Choosing visible table columns from the `Columns` menu, persisted across GUI restarts.
 - Filtering by instance tags and applying batch actions to visible rows.
+- Sorting the table by clicking column headers with stable primary/secondary ordering and a `Reset GUI` button that clears active sorting.
 - Running `Quick benchmark` from the detail bar or row context menu, with the
   compact `Params` menu for endpoint, max tokens, temperature, top-p, top-k,
   repeat penalty, seed, ignore-EOS, and opening the persisted settings file.
@@ -407,8 +408,8 @@ The GUI supports:
 - Editing the `Runtime args` cell inline; saving restarts the instance when it
   is already running.
 - Showing a hideable `Detected GPUs` panel with one device per line, using
-  labels such as `Vulkan0` plus best-effort adapter names learned from
-  llama.cpp stderr.
+  labels such as `Vulkan0` plus adapter names from the current Vulkan loader
+  when available, with llama.cpp stderr as a fallback.
 
 GUI status display intentionally separates engine state from readiness:
 `running + loading` is shown as `loading`, while `running + healthy` is shown
@@ -417,7 +418,8 @@ as `ready`. The underlying runtime status remains `running`.
 Persisted GUI-observed state currently includes the selected benchmark prompt
 and quick benchmark parameters (`state/benchmark_settings.json`) plus manual
 health/benchmark health updates in the runtime state and `health_history`.
-Column visibility, tag filter, and window geometry reset on GUI launch.
+The main table also persists visible columns and primary/secondary sort order in
+`state/gui_settings.json`. Tag filter and window geometry still reset on GUI launch.
 
 ### Runtime Detection and GPU Mapping
 
@@ -436,11 +438,14 @@ Column visibility, tag filter, and window geometry reset on GUI launch.
   make the display cleaner.
 - `Model size` is the resolved GGUF file size shown in base-1024 `GB`, matching
   the project's RAM/VRAM normalization convention.
-- The `Detected GPUs` summary is best-effort and log-driven. It parses llama.cpp
-  stderr inventory lines such as `Vulkan0 : Adapter Name (...)` and active-device
-  lines such as `using device Vulkan1 (Adapter Name)`.
-- If the GPU label is known but stderr has not exposed an adapter name yet, the
-  summary keeps the label and shows `adapter name unavailable`.
+- The `Detected GPUs` summary first probes the current Vulkan loader with
+  `vulkaninfo --summary`, so labels such as `Vulkan0`, `Vulkan1`, and `Vulkan2`
+  follow the active driver ordering instead of stale historical logs.
+- If `vulkaninfo` is unavailable or does not expose a name, the summary falls
+  back to llama.cpp stderr inventory lines such as `Vulkan0 : Adapter Name (...)`
+  and active-device lines such as `using device Vulkan1 (Adapter Name)`.
+- If the GPU label is known but no live or log-derived adapter name is available,
+  the summary keeps the label and shows `adapter name unavailable`.
 - Quick benchmark fallback sampling uses the same effective runtime resolver and
   samples the primary resolved device when a multi-GPU config declares one.
 
