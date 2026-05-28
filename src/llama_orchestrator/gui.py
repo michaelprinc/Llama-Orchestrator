@@ -89,8 +89,12 @@ VULKAN_BINARY_MISSING_MESSAGE = (
     "to download the default variant, or choose another llama-server variant."
 )
 CPU_ACTIVE_GLYPH = "\u2713"
+QUEUE_UNCHECKED_GLYPH = "\u2610"
+QUEUE_CHECKED_GLYPH = "\u2611"
+RUNNING_BENCHMARK_ROW_TAG = "running_benchmark"
 
 ALL_COLUMNS = (
+    "queue",
     "name",
     "status",
     "health",
@@ -110,6 +114,7 @@ ALL_COLUMNS = (
     "uptime",
 )
 COLUMN_HEADINGS = {
+    "queue": "Queue",
     "name": "Name",
     "status": "Status",
     "health": "Health",
@@ -129,6 +134,7 @@ COLUMN_HEADINGS = {
     "uptime": "Uptime",
 }
 COLUMN_WIDTHS = {
+    "queue": 60,
     "name": 150,
     "status": 90,
     "health": 110,
@@ -156,6 +162,62 @@ class TableRow:
     name: str
     values: tuple[str, ...]
     sort_values: dict[str, object]
+
+
+def format_queue_checkbox(checked: bool) -> str:
+    """Render the queue selection column as a checkbox glyph."""
+    return QUEUE_CHECKED_GLYPH if checked else QUEUE_UNCHECKED_GLYPH
+
+
+def ordered_visible_names(selected_names: set[str] | frozenset[str], visible_names: Sequence[str]) -> tuple[str, ...]:
+    """Keep only selected names, preserving the current visible table order."""
+    return tuple(name for name in visible_names if name in selected_names)
+
+
+def format_serial_benchmark_progress(result: BenchmarkResult) -> str:
+    """Summarize a serial benchmark result for the activity log."""
+    if result.status != "ok":
+        return result.error or "unknown error"
+    return (
+        f"TPS={format_metric(result.tokens_per_second)}, "
+        f"latency={format_metric(result.latency_ms, 0)} ms"
+    )
+
+
+def run_serial_benchmark_queue(
+    names: Sequence[str],
+    *,
+    should_stop: Callable[[], bool],
+    set_active_name: Callable[[str | None], None],
+    run_one: Callable[[str], BenchmarkResult],
+    handle_exception: Callable[[str, Exception], None],
+    post_message: Callable[[str], None],
+) -> str:
+    """Run benchmarked rows sequentially while reporting queue progress."""
+    completed = 0
+    total = len(names)
+    for index, name in enumerate(names, start=1):
+        if should_stop():
+            return f"[Serial benchmark] stopped after {completed}/{total} completed."
+
+        set_active_name(name)
+        post_message(f"[Serial benchmark] {index}/{total} running: {name}")
+        try:
+            result = run_one(name)
+        except Exception as exc:
+            handle_exception(name, exc)
+            post_message(f"[Serial benchmark] {index}/{total} failed: {name}: {exc}")
+        else:
+            status = "completed" if result.status == "ok" else "failed"
+            post_message(
+                f"[Serial benchmark] {index}/{total} {status}: {name}: "
+                f"{format_serial_benchmark_progress(result)}"
+            )
+        finally:
+            completed = index
+            set_active_name(None)
+
+    return f"[Serial benchmark] finished {completed}/{total}."
 
 
 def apply_managed_runtime_args(
@@ -392,11 +454,27 @@ class LlamaOrchestratorGui(tk.Tk):
         self._focused_name: str | None = None
         self.benchmark_settings = load_benchmark_settings(self.project_root)
         self.gui_settings: GuiSettings = load_gui_settings(ALL_COLUMNS)
+        if "queue" not in self.gui_settings.visible_columns:
+            self.gui_settings = replace(
+                self.gui_settings,
+                visible_columns=("queue", *self.gui_settings.visible_columns),
+            )
+            save_gui_settings(self.gui_settings)
         self.benchmark_params_menu: tk.Menu | None = None
         self.tag_filter_var = tk.StringVar(value="All tags")
         self.prompt_var = tk.StringVar(value=self.benchmark_settings.prompt_file.name)
         self.show_gpu_inventory_var = tk.BooleanVar(value=True)
         self.gpu_inventory_var = tk.StringVar(value=format_detected_gpu_summary(()))
+        self._queued_benchmark_names: set[str] = set()
+        self._benchmark_active_name: str | None = None
+        self._benchmark_job_lock = threading.Lock()
+        self._benchmark_job_active = False
+        self._benchmark_job_label: str | None = None
+        self._serial_benchmark_stop = threading.Event()
+        self._serial_benchmark_active = False
+        self.quick_benchmark_button: ttk.Button | None = None
+        self.serial_benchmark_button: ttk.Button | None = None
+        self.stop_serial_benchmark_button: ttk.Button | None = None
 
         self._build_widgets()
         self._schedule_message_pump()
@@ -488,12 +566,14 @@ class LlamaOrchestratorGui(tk.Tk):
         self.tree = ttk.Treeview(table_frame, columns=ALL_COLUMNS, show="headings", selectmode="extended")
         for column in ALL_COLUMNS:
             self.tree.column(column, width=COLUMN_WIDTHS[column], anchor=tk.W)
+        self.tree.tag_configure(RUNNING_BENCHMARK_ROW_TAG, background="#fff4cc")
         self._refresh_tree_headings()
 
         y_scroll = ttk.Scrollbar(table_frame, orient=tk.VERTICAL, command=self.tree.yview)
         self.tree.configure(yscrollcommand=y_scroll.set)
         self.tree.grid(row=1, column=0, sticky="nsew")
         y_scroll.grid(row=1, column=1, sticky="ns")
+        self.tree.bind("<Button-1>", self._on_tree_click, add=True)
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
         self.tree.bind("<Double-1>", self._on_tree_double_click)
         self.tree.bind("<Button-3>", self._show_context_menu)
@@ -502,6 +582,7 @@ class LlamaOrchestratorGui(tk.Tk):
 
         self.context_menu = tk.Menu(self, tearoff=False)
         self.context_menu.add_command(label="Quick benchmark", command=self._run_benchmark_selected)
+        self.context_menu.add_command(label="Toggle benchmark queue", command=self._toggle_selected_queue_rows)
         self.context_menu.add_command(label="Clone row", command=self._clone_selected)
         self.context_menu.add_command(label="Copy as CLI command", command=self._copy_cli_command)
         self.context_menu.add_separator()
@@ -509,7 +590,20 @@ class LlamaOrchestratorGui(tk.Tk):
 
         detail_bar = ttk.Frame(table_frame, padding=(0, 8, 0, 0))
         detail_bar.grid(row=2, column=0, sticky="ew")
-        ttk.Button(detail_bar, text="Quick benchmark", command=self._run_benchmark_selected).pack(side=tk.LEFT)
+        self.quick_benchmark_button = ttk.Button(detail_bar, text="Quick benchmark", command=self._run_benchmark_selected)
+        self.quick_benchmark_button.pack(side=tk.LEFT)
+        self.serial_benchmark_button = ttk.Button(
+            detail_bar,
+            text="Serial benchmark",
+            command=self._run_serial_benchmark,
+        )
+        self.serial_benchmark_button.pack(side=tk.LEFT, padx=(6, 0))
+        self.stop_serial_benchmark_button = ttk.Button(
+            detail_bar,
+            text="Stop queue",
+            command=self._stop_serial_benchmark,
+        )
+        self.stop_serial_benchmark_button.pack(side=tk.LEFT, padx=(6, 0))
         params_button = ttk.Menubutton(detail_bar, text=BENCHMARK_PARAMS_MENU_LABEL)
         self.benchmark_params_menu = tk.Menu(params_button, tearoff=False)
         params_button["menu"] = self.benchmark_params_menu
@@ -533,6 +627,7 @@ class LlamaOrchestratorGui(tk.Tk):
         ttk.Label(log_frame, text="Activity").grid(row=0, column=0, sticky="w", pady=(8, 2))
         self.activity = scrolledtext.ScrolledText(log_frame, height=9, wrap=tk.WORD, state=tk.DISABLED)
         self.activity.grid(row=1, column=0, sticky="nsew")
+        self._update_benchmark_controls()
 
     def _auto_refresh(self) -> None:
         self.refresh()
@@ -697,6 +792,7 @@ class LlamaOrchestratorGui(tk.Tk):
                 TableRow(
                     name=name,
                     values=(
+                        format_queue_checkbox(name in self._queued_benchmark_names),
                         name,
                         status,
                         health,
@@ -716,6 +812,7 @@ class LlamaOrchestratorGui(tk.Tk):
                         uptime,
                     ),
                     sort_values={
+                        "queue": name in self._queued_benchmark_names,
                         "name": name,
                         "status": status,
                         "health": health,
@@ -742,7 +839,8 @@ class LlamaOrchestratorGui(tk.Tk):
             self.gui_settings.sort_order,
             lambda current, column: current.sort_values.get(column),
         ):
-            self.tree.insert("", tk.END, iid=row.name, values=row.values)
+            tags = (RUNNING_BENCHMARK_ROW_TAG,) if row.name == self._benchmark_active_name else ()
+            self.tree.insert("", tk.END, iid=row.name, values=row.values, tags=tags)
 
         self.gpu_inventory_var.set(
             format_detected_gpu_summary(collect_detected_gpu_inventory(loaded_configs))
@@ -769,6 +867,7 @@ class LlamaOrchestratorGui(tk.Tk):
         self._selected_names = visible_selection
         self._selected_name = visible_selection[0] if visible_selection else None
         self._focused_name = focus_target
+        self._update_benchmark_controls()
 
         daemon = get_daemon_status()
         if daemon.running:
@@ -796,6 +895,13 @@ class LlamaOrchestratorGui(tk.Tk):
         if display_index < 0 or display_index >= len(columns):
             return None
         return columns[display_index]
+
+    def _on_tree_click(self, event: tk.Event) -> str | None:
+        item = self.tree.identify_row(event.y)
+        if not item or self._tree_column_from_event(event) != "queue":
+            return None
+        self._toggle_queue_name(item)
+        return "break"
 
     def _on_tree_double_click(self, event: tk.Event) -> None:
         item = self.tree.identify_row(event.y)
@@ -830,6 +936,71 @@ class LlamaOrchestratorGui(tk.Tk):
 
     def _selected_instances(self) -> tuple[str, ...]:
         return tuple(str(item) for item in self.tree.selection())
+
+    def _visible_instance_names(self) -> tuple[str, ...]:
+        return tuple(str(item) for item in self.tree.get_children())
+
+    def _ordered_queued_instance_names(self) -> tuple[str, ...]:
+        return ordered_visible_names(self._queued_benchmark_names, self._visible_instance_names())
+
+    def _toggle_queue_name(self, name: str) -> None:
+        if name in self._queued_benchmark_names:
+            self._queued_benchmark_names.remove(name)
+        else:
+            self._queued_benchmark_names.add(name)
+        self.refresh()
+
+    def _set_active_benchmark_name(self, name: str | None) -> None:
+        self._benchmark_active_name = name
+        self._post_message("__REFRESH__")
+
+    def _toggle_selected_queue_rows(self) -> None:
+        names = self._selected_instances()
+        if not names:
+            messagebox.showinfo("No model selected", "Select one or more model instances first.")
+            return
+        should_queue = any(name not in self._queued_benchmark_names for name in names)
+        for name in names:
+            if should_queue:
+                self._queued_benchmark_names.add(name)
+            else:
+                self._queued_benchmark_names.discard(name)
+        self.refresh()
+
+    def _benchmark_job_running(self) -> bool:
+        with self._benchmark_job_lock:
+            return self._benchmark_job_active
+
+    def _begin_benchmark_job(self, label: str) -> bool:
+        with self._benchmark_job_lock:
+            if self._benchmark_job_active:
+                return False
+            self._benchmark_job_active = True
+            self._benchmark_job_label = label
+            return True
+
+    def _finish_benchmark_job(self) -> None:
+        with self._benchmark_job_lock:
+            self._benchmark_job_active = False
+            self._benchmark_job_label = None
+
+    def _update_benchmark_controls(self) -> None:
+        running = self._benchmark_job_running()
+        queued_visible = bool(self._ordered_queued_instance_names())
+        if self.quick_benchmark_button is not None:
+            self.quick_benchmark_button.configure(state=tk.DISABLED if running else tk.NORMAL)
+        if self.serial_benchmark_button is not None:
+            self.serial_benchmark_button.configure(
+                state=tk.DISABLED if running or not queued_visible else tk.NORMAL
+            )
+        if self.stop_serial_benchmark_button is not None:
+            self.stop_serial_benchmark_button.configure(
+                state=(
+                    tk.NORMAL
+                    if self._serial_benchmark_active and not self._serial_benchmark_stop.is_set()
+                    else tk.DISABLED
+                )
+            )
 
     def _run_background(self, label: str, action: Callable[[], str | None]) -> None:
         def worker() -> None:
@@ -877,6 +1048,59 @@ class LlamaOrchestratorGui(tk.Tk):
 
         self._run_background(f"{action_name} {name}", action)
 
+    def _benchmark_instance(self, name: str, settings: BenchmarkSettings) -> BenchmarkResult:
+        config = get_instance_config(name)
+        result = quick_benchmark_instance(config, settings)
+        current_state = list_instances().get(name)
+        if result.status == "ok":
+            persist_instance_health(
+                name,
+                current_state,
+                port=config.server.port,
+                health=HealthStatus.HEALTHY,
+                response_time_ms=result.latency_ms,
+            )
+            return result
+
+        health_result = check_instance_health(name)
+        persist_instance_health(
+            name,
+            current_state,
+            port=config.server.port,
+            health=health_result.to_health_status,
+            error_message=health_result.error_message or result.error or "",
+            response_time_ms=health_result.response_time_ms,
+        )
+        return result
+
+    def _handle_benchmark_exception(self, name: str, exc: Exception) -> None:
+        try:
+            config = get_instance_config(name)
+            port = config.server.port
+        except Exception:
+            port = 0
+        error_message = str(exc)
+        try:
+            health_result = check_instance_health(name)
+        except Exception:
+            persist_instance_health(
+                name,
+                list_instances().get(name),
+                port=port,
+                health=HealthStatus.ERROR,
+                error_message=error_message,
+            )
+            return
+
+        persist_instance_health(
+            name,
+            list_instances().get(name),
+            port=port,
+            health=health_result.to_health_status,
+            error_message=health_result.error_message or error_message,
+            response_time_ms=health_result.response_time_ms,
+        )
+
     def _run_batch(self, action_name: str) -> None:
         names = tuple(str(item) for item in self.tree.get_children())
         if not names:
@@ -904,32 +1128,66 @@ class LlamaOrchestratorGui(tk.Tk):
         name = self._selected_instance()
         if not name:
             return
+        if not self._begin_benchmark_job(f"benchmark {name}"):
+            active_label = self._benchmark_job_label or "Another benchmark"
+            messagebox.showinfo("Benchmark already running", f"{active_label} is already in progress.")
+            return
         self._reload_benchmark_settings()
 
         def action() -> str:
-            config = get_instance_config(name)
-            result = quick_benchmark_instance(config, self.benchmark_settings)
-            if result.status == "ok":
-                persist_instance_health(
-                    name,
-                    list_instances().get(name),
-                    port=config.server.port,
-                    health=HealthStatus.HEALTHY,
-                    response_time_ms=result.latency_ms,
-                )
-            else:
-                health_result = check_instance_health(name)
-                persist_instance_health(
-                    name,
-                    list_instances().get(name),
-                    port=config.server.port,
-                    health=health_result.to_health_status,
-                    error_message=health_result.error_message or result.error or "",
-                    response_time_ms=health_result.response_time_ms,
-                )
-            return format_benchmark_message(result)
+            self._set_active_benchmark_name(name)
+            try:
+                result = self._benchmark_instance(name, self.benchmark_settings)
+                return format_benchmark_message(result)
+            except Exception as exc:
+                self._handle_benchmark_exception(name, exc)
+                raise
+            finally:
+                self._set_active_benchmark_name(None)
+                self._finish_benchmark_job()
 
         self._run_background(f"benchmark {name}", action)
+
+    def _run_serial_benchmark(self) -> None:
+        names = self._ordered_queued_instance_names()
+        if not names:
+            messagebox.showinfo("No queued models", "Check one or more visible model instances first.")
+            return
+        if not self._begin_benchmark_job("Serial benchmark"):
+            active_label = self._benchmark_job_label or "Another benchmark"
+            messagebox.showinfo("Benchmark already running", f"{active_label} is already in progress.")
+            return
+        self._serial_benchmark_active = True
+        self._serial_benchmark_stop.clear()
+        self._update_benchmark_controls()
+
+        def action() -> str:
+            try:
+                return run_serial_benchmark_queue(
+                    names,
+                    should_stop=self._serial_benchmark_stop.is_set,
+                    set_active_name=self._set_active_benchmark_name,
+                    run_one=lambda current: self._benchmark_instance(
+                        current,
+                        load_benchmark_settings(self.project_root),
+                    ),
+                    handle_exception=self._handle_benchmark_exception,
+                    post_message=self._post_message,
+                )
+            finally:
+                self._set_active_benchmark_name(None)
+                self._serial_benchmark_active = False
+                self._serial_benchmark_stop.clear()
+                self._finish_benchmark_job()
+
+        self._run_background("Serial benchmark", action)
+
+    def _stop_serial_benchmark(self) -> None:
+        if not self._serial_benchmark_active:
+            return
+        self._serial_benchmark_stop.set()
+        self._post_message("[Serial benchmark] stop requested.")
+        self._update_benchmark_controls()
 
     def _set_benchmark_settings(self, **changes: int | float | str | bool | Path | None) -> None:
         self.benchmark_settings = replace(self.benchmark_settings, **changes)

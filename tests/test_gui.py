@@ -13,19 +13,25 @@ from llama_orchestrator.gui import (
     CPU_ACTIVE_GLYPH,
     DEFAULT_RUNTIME_ARGS,
     EDIT_BENCHMARK_PROMPT_LABEL,
+    QUEUE_CHECKED_GLYPH,
+    QUEUE_UNCHECKED_GLYPH,
     INSTALL_LLAMA_SERVER_LABEL,
     VULKAN_BINARY_MISSING_MESSAGE,
     apply_managed_runtime_args,
     benchmark_shared_ram_warning,
     derive_display_status_and_health,
+    format_queue_checkbox,
     format_benchmark_memory,
     format_benchmark_message,
+    format_serial_benchmark_progress,
     format_benchmark_settings_summary,
     format_cpu_indicator,
     format_detected_gpu_summary,
     format_model_size_gb,
+    ordered_visible_names,
     parse_tag_string,
     persist_instance_health,
+    run_serial_benchmark_queue,
 )
 
 
@@ -201,9 +207,155 @@ def test_format_benchmark_memory_keeps_legacy_vram_rows_readable() -> None:
 
 def test_gui_columns_include_gpu_cpu_and_model_size() -> None:
     """The main table should expose the new runtime hardware summary columns."""
+    assert COLUMN_HEADINGS["queue"] == "Queue"
     assert COLUMN_HEADINGS["gpu"] == "GPU"
     assert COLUMN_HEADINGS["cpu"] == "CPU"
     assert COLUMN_HEADINGS["model_size"] == "Model size"
+
+
+def test_queue_checkbox_glyphs_render_checked_and_unchecked_states() -> None:
+    """The queue column should look like a checkbox without extra widgets."""
+    assert format_queue_checkbox(False) == QUEUE_UNCHECKED_GLYPH
+    assert format_queue_checkbox(True) == QUEUE_CHECKED_GLYPH
+
+
+def test_ordered_visible_names_preserves_current_table_order() -> None:
+    """Serial benchmark should follow the visible sorted row order."""
+    assert ordered_visible_names({"gamma", "alpha"}, ["beta", "alpha", "gamma"]) == (
+        "alpha",
+        "gamma",
+    )
+
+
+def test_format_serial_benchmark_progress_reports_tps_and_latency() -> None:
+    """Queue progress messages should stay compact and readable."""
+    result = BenchmarkResult(
+        instance_name="demo",
+        timestamp="2026-05-19T12:00:00+0000",
+        config_hash="cfg",
+        prompt_file="default.txt",
+        prompt_sha256="sha",
+        prompt_chars=10,
+        output_tokens=20,
+        tokens_per_second=72.1,
+        latency_ms=364.0,
+        elapsed_ms=1400.0,
+        vram_mb=1024.0,
+        status="ok",
+    )
+
+    assert format_serial_benchmark_progress(result) == "TPS=72.1, latency=364 ms"
+
+
+def test_format_serial_benchmark_progress_uses_error_for_failed_rows() -> None:
+    """Failed queue rows should log the underlying benchmark error."""
+    result = BenchmarkResult(
+        instance_name="demo",
+        timestamp="2026-05-19T12:00:00+0000",
+        config_hash="cfg",
+        prompt_file="default.txt",
+        prompt_sha256="sha",
+        prompt_chars=10,
+        output_tokens=None,
+        tokens_per_second=None,
+        latency_ms=None,
+        elapsed_ms=None,
+        vram_mb=None,
+        status="failed",
+        error="connection refused",
+    )
+
+    assert format_serial_benchmark_progress(result) == "connection refused"
+
+
+def test_run_serial_benchmark_queue_continues_after_exception() -> None:
+    """One failing row should not stop the remaining queued benchmarks."""
+    messages: list[str] = []
+    active_names: list[str | None] = []
+    handled: list[tuple[str, str]] = []
+
+    def run_one(name: str) -> BenchmarkResult:
+        if name == "beta":
+            raise RuntimeError("connection refused")
+        return BenchmarkResult(
+            instance_name=name,
+            timestamp="2026-05-19T12:00:00+0000",
+            config_hash="cfg",
+            prompt_file="default.txt",
+            prompt_sha256="sha",
+            prompt_chars=10,
+            output_tokens=20,
+            tokens_per_second=72.1,
+            latency_ms=364.0,
+            elapsed_ms=1400.0,
+            vram_mb=1024.0,
+            status="ok",
+        )
+
+    result = run_serial_benchmark_queue(
+        ("alpha", "beta", "gamma"),
+        should_stop=lambda: False,
+        set_active_name=active_names.append,
+        run_one=run_one,
+        handle_exception=lambda name, exc: handled.append((name, str(exc))),
+        post_message=messages.append,
+    )
+
+    assert result == "[Serial benchmark] finished 3/3."
+    assert handled == [("beta", "connection refused")]
+    assert messages == [
+        "[Serial benchmark] 1/3 running: alpha",
+        "[Serial benchmark] 1/3 completed: alpha: TPS=72.1, latency=364 ms",
+        "[Serial benchmark] 2/3 running: beta",
+        "[Serial benchmark] 2/3 failed: beta: connection refused",
+        "[Serial benchmark] 3/3 running: gamma",
+        "[Serial benchmark] 3/3 completed: gamma: TPS=72.1, latency=364 ms",
+    ]
+    assert active_names == ["alpha", None, "beta", None, "gamma", None]
+
+
+def test_run_serial_benchmark_queue_stops_before_next_item() -> None:
+    """Stop requests should finish the current item and skip the remaining queue."""
+    messages: list[str] = []
+    active_names: list[str | None] = []
+    completed_names: list[str] = []
+    stop_requested = False
+
+    def run_one(name: str) -> BenchmarkResult:
+        nonlocal stop_requested
+        completed_names.append(name)
+        stop_requested = True
+        return BenchmarkResult(
+            instance_name=name,
+            timestamp="2026-05-19T12:00:00+0000",
+            config_hash="cfg",
+            prompt_file="default.txt",
+            prompt_sha256="sha",
+            prompt_chars=10,
+            output_tokens=20,
+            tokens_per_second=72.1,
+            latency_ms=364.0,
+            elapsed_ms=1400.0,
+            vram_mb=1024.0,
+            status="ok",
+        )
+
+    result = run_serial_benchmark_queue(
+        ("alpha", "beta"),
+        should_stop=lambda: stop_requested,
+        set_active_name=active_names.append,
+        run_one=run_one,
+        handle_exception=lambda _name, _exc: None,
+        post_message=messages.append,
+    )
+
+    assert result == "[Serial benchmark] stopped after 1/2 completed."
+    assert completed_names == ["alpha"]
+    assert messages == [
+        "[Serial benchmark] 1/2 running: alpha",
+        "[Serial benchmark] 1/2 completed: alpha: TPS=72.1, latency=364 ms",
+    ]
+    assert active_names == ["alpha", None]
 
 
 def test_format_model_size_gb_uses_base_1024_display_units() -> None:

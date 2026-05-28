@@ -400,6 +400,9 @@ The GUI supports:
 - Running `Quick benchmark` from the detail bar or row context menu, with the
   compact `Params` menu for endpoint, max tokens, temperature, top-p, top-k,
   repeat penalty, seed, ignore-EOS, and opening the persisted settings file.
+- Marking rows in the `Queue` column and running `Serial benchmark` in current
+  visible table order, one model at a time, with row highlighting, progress
+  logs, and `Stop queue` to stop before the next queued run starts.
 - Selecting and opening the editable benchmark prompt with
   `Edit Benchmark Prompt` and `Open prompt`.
 - Cloning a row with an incremented/suggested port.
@@ -419,7 +422,8 @@ Persisted GUI-observed state currently includes the selected benchmark prompt
 and quick benchmark parameters (`state/benchmark_settings.json`) plus manual
 health/benchmark health updates in the runtime state and `health_history`.
 The main table also persists visible columns and primary/secondary sort order in
-`state/gui_settings.json`. Tag filter and window geometry still reset on GUI launch.
+`state/gui_settings.json`. Serial benchmark queue checkmarks are session-only;
+tag filter and window geometry still reset on GUI launch.
 
 ### Runtime Detection and GPU Mapping
 
