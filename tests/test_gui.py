@@ -13,26 +13,30 @@ from llama_orchestrator.gui import (
     CPU_ACTIVE_GLYPH,
     DEFAULT_RUNTIME_ARGS,
     EDIT_BENCHMARK_PROMPT_LABEL,
+    INSTALL_LLAMA_SERVER_LABEL,
     QUEUE_CHECKED_GLYPH,
     QUEUE_UNCHECKED_GLYPH,
-    INSTALL_LLAMA_SERVER_LABEL,
     VULKAN_BINARY_MISSING_MESSAGE,
     apply_managed_runtime_args,
     benchmark_shared_ram_warning,
     derive_display_status_and_health,
-    format_queue_checkbox,
     format_benchmark_memory,
     format_benchmark_message,
-    format_serial_benchmark_progress,
     format_benchmark_settings_summary,
     format_cpu_indicator,
     format_detected_gpu_summary,
+    format_download_progress,
     format_model_size_gb,
+    format_queue_checkbox,
+    format_serial_benchmark_progress,
+    normalize_model_path_for_config,
     ordered_visible_names,
     parse_tag_string,
     persist_instance_health,
+    resolve_models_directory_input,
     run_serial_benchmark_queue,
 )
+from llama_orchestrator.hf_import import DownloadProgress
 
 
 def test_apply_managed_runtime_args_defaults() -> None:
@@ -388,3 +392,33 @@ def test_format_detected_gpu_summary_lists_each_device_on_its_own_line() -> None
 def test_memory_column_width_matches_expanded_display_text() -> None:
     """The memory column should be wide enough for total/shared benchmark strings."""
     assert COLUMN_WIDTHS["vram"] >= 220
+
+
+def test_normalize_model_path_for_config_prefers_project_relative_paths(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / "llama-orchestrator"
+    model_path = project_root / "models" / "demo.gguf"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(b"gguf")
+    monkeypatch.setattr("llama_orchestrator.gui.get_project_root", lambda: project_root)
+
+    assert normalize_model_path_for_config(model_path) == Path("models/demo.gguf")
+
+
+def test_format_download_progress_reports_downloaded_and_total_bytes() -> None:
+    progress = DownloadProgress(
+        filename="Qwen3-8B-Q4_K_M.gguf",
+        downloaded_bytes=2 * 1024**3,
+        total_bytes=8 * 1024**3,
+    )
+
+    assert format_download_progress(progress) == (
+        "Downloading Qwen3-8B-Q4_K_M.gguf: 2.00 GB / 8.00 GB"
+    )
+
+
+def test_resolve_models_directory_input_anchors_relative_paths_to_project_root(monkeypatch, tmp_path: Path) -> None:
+    project_root = tmp_path / "llama-orchestrator"
+    monkeypatch.setattr("llama_orchestrator.gui.get_project_root", lambda: project_root)
+
+    assert resolve_models_directory_input("models-alt") == project_root / "models-alt"
+    assert resolve_models_directory_input("") == project_root / "models"

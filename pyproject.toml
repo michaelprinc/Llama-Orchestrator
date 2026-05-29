@@ -27,6 +27,8 @@ dependencies = [
     "httpx>=0.25",
     "psutil>=5.9",
     "aiosqlite>=0.19",
+    "huggingface_hub>=0.32",
+    "keyring>=25.6",
 ]
 
 [project.optional-dependencies]

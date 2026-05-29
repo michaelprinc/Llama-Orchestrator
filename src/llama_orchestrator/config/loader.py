@@ -57,6 +57,13 @@ def get_bins_dir() -> Path:
     return bins_dir
 
 
+def get_models_dir() -> Path:
+    """Get the persistent local models directory path."""
+    models_dir = get_project_root() / "models"
+    models_dir.mkdir(exist_ok=True)
+    return models_dir
+
+
 def get_llama_server_path(config: "InstanceConfig | None" = None) -> Path:
     """
     Get the path to llama-server executable.

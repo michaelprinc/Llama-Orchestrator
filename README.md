@@ -387,6 +387,10 @@ The GUI supports:
 - Starting, stopping, restarting, and health-checking selected instances.
 - Starting and stopping the orchestrator daemon.
 - Adding a new GGUF-backed model instance config.
+- Importing GGUF variants directly from Hugging Face inside `Add model`, with
+  repo URL or `owner/repo` normalization, GGUF variant discovery, background
+  download progress, cancel support, existing-file reuse or re-download
+  handling, and Add Model autofill after the selected artifact is ready.
 - Managing these llama-server args for new or selected instances:
   `--no-mmproj --reasoning off --flash-attn auto`.
 - Installing a `llama-server.exe` binary from GitHub releases with
@@ -422,8 +426,12 @@ Persisted GUI-observed state currently includes the selected benchmark prompt
 and quick benchmark parameters (`state/benchmark_settings.json`) plus manual
 health/benchmark health updates in the runtime state and `health_history`.
 The main table also persists visible columns and primary/secondary sort order in
-`state/gui_settings.json`. Serial benchmark queue checkmarks are session-only;
-tag filter and window geometry still reset on GUI launch.
+`state/gui_settings.json`. The Hugging Face import dialog persists the chosen
+local models directory in `state/huggingface_import.json`; any Hugging Face
+read token is stored through the system keyring when available and otherwise is
+kept session-only instead of being written to repo files. Serial benchmark
+queue checkmarks are session-only; tag filter and window geometry still reset
+on GUI launch.
 
 ### Runtime Detection and GPU Mapping
 
