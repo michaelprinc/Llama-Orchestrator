@@ -277,8 +277,10 @@ def test_run_serial_benchmark_queue_continues_after_exception() -> None:
     messages: list[str] = []
     active_names: list[str | None] = []
     handled: list[tuple[str, str]] = []
+    lifecycle: list[tuple[str, str]] = []
 
     def run_one(name: str) -> BenchmarkResult:
+        lifecycle.append(("benchmark", name))
         if name == "beta":
             raise RuntimeError("connection refused")
         return BenchmarkResult(
@@ -300,7 +302,9 @@ def test_run_serial_benchmark_queue_continues_after_exception() -> None:
         ("alpha", "beta", "gamma"),
         should_stop=lambda: False,
         set_active_name=active_names.append,
+        start_one=lambda name: lifecycle.append(("start", name)) or True,
         run_one=run_one,
+        stop_one=lambda name: lifecycle.append(("stop", name)),
         handle_exception=lambda name, exc: handled.append((name, str(exc))),
         post_message=messages.append,
     )
@@ -308,12 +312,35 @@ def test_run_serial_benchmark_queue_continues_after_exception() -> None:
     assert result == "[Serial benchmark] finished 3/3."
     assert handled == [("beta", "connection refused")]
     assert messages == [
+        "[Serial benchmark] 1/3 starting: alpha",
+        "[Serial benchmark] 1/3 started: alpha",
         "[Serial benchmark] 1/3 running: alpha",
         "[Serial benchmark] 1/3 completed: alpha: TPS=72.1, latency=364 ms",
+        "[Serial benchmark] 1/3 stopping: alpha",
+        "[Serial benchmark] 1/3 stopped: alpha",
+        "[Serial benchmark] 2/3 starting: beta",
+        "[Serial benchmark] 2/3 started: beta",
         "[Serial benchmark] 2/3 running: beta",
         "[Serial benchmark] 2/3 failed: beta: connection refused",
+        "[Serial benchmark] 2/3 stopping: beta",
+        "[Serial benchmark] 2/3 stopped: beta",
+        "[Serial benchmark] 3/3 starting: gamma",
+        "[Serial benchmark] 3/3 started: gamma",
         "[Serial benchmark] 3/3 running: gamma",
         "[Serial benchmark] 3/3 completed: gamma: TPS=72.1, latency=364 ms",
+        "[Serial benchmark] 3/3 stopping: gamma",
+        "[Serial benchmark] 3/3 stopped: gamma",
+    ]
+    assert lifecycle == [
+        ("start", "alpha"),
+        ("benchmark", "alpha"),
+        ("stop", "alpha"),
+        ("start", "beta"),
+        ("benchmark", "beta"),
+        ("stop", "beta"),
+        ("start", "gamma"),
+        ("benchmark", "gamma"),
+        ("stop", "gamma"),
     ]
     assert active_names == ["alpha", None, "beta", None, "gamma", None]
 
@@ -348,7 +375,9 @@ def test_run_serial_benchmark_queue_stops_before_next_item() -> None:
         ("alpha", "beta"),
         should_stop=lambda: stop_requested,
         set_active_name=active_names.append,
+        start_one=lambda _name: True,
         run_one=run_one,
+        stop_one=lambda _name: None,
         handle_exception=lambda _name, _exc: None,
         post_message=messages.append,
     )
@@ -356,10 +385,53 @@ def test_run_serial_benchmark_queue_stops_before_next_item() -> None:
     assert result == "[Serial benchmark] stopped after 1/2 completed."
     assert completed_names == ["alpha"]
     assert messages == [
+        "[Serial benchmark] 1/2 starting: alpha",
+        "[Serial benchmark] 1/2 started: alpha",
         "[Serial benchmark] 1/2 running: alpha",
         "[Serial benchmark] 1/2 completed: alpha: TPS=72.1, latency=364 ms",
+        "[Serial benchmark] 1/2 stopping: alpha",
+        "[Serial benchmark] 1/2 stopped: alpha",
     ]
     assert active_names == ["alpha", None]
+
+
+def test_run_serial_benchmark_queue_keeps_preexisting_running_instance_up() -> None:
+    """Rows already running before the queue should not be stopped by cleanup."""
+    messages: list[str] = []
+    stopped: list[str] = []
+
+    result = run_serial_benchmark_queue(
+        ("alpha",),
+        should_stop=lambda: False,
+        set_active_name=lambda _name: None,
+        start_one=lambda _name: False,
+        run_one=lambda name: BenchmarkResult(
+            instance_name=name,
+            timestamp="2026-05-19T12:00:00+0000",
+            config_hash="cfg",
+            prompt_file="default.txt",
+            prompt_sha256="sha",
+            prompt_chars=10,
+            output_tokens=20,
+            tokens_per_second=72.1,
+            latency_ms=364.0,
+            elapsed_ms=1400.0,
+            vram_mb=1024.0,
+            status="ok",
+        ),
+        stop_one=stopped.append,
+        handle_exception=lambda _name, _exc: None,
+        post_message=messages.append,
+    )
+
+    assert result == "[Serial benchmark] finished 1/1."
+    assert stopped == []
+    assert messages == [
+        "[Serial benchmark] 1/1 starting: alpha",
+        "[Serial benchmark] 1/1 already running: alpha",
+        "[Serial benchmark] 1/1 running: alpha",
+        "[Serial benchmark] 1/1 completed: alpha: TPS=72.1, latency=364 ms",
+    ]
 
 
 def test_format_model_size_gb_uses_base_1024_display_units() -> None:

@@ -406,7 +406,8 @@ The GUI supports:
   repeat penalty, seed, ignore-EOS, and opening the persisted settings file.
 - Marking rows in the `Queue` column and running `Serial benchmark` in current
   visible table order, one model at a time, with row highlighting, progress
-  logs, and `Stop queue` to stop before the next queued run starts.
+  logs, automatic start/stop for rows that were not already running, and
+  `Stop queue` to stop before the next queued run starts.
 - Selecting and opening the editable benchmark prompt with
   `Edit Benchmark Prompt` and `Open prompt`.
 - Cloning a row with an incremented/suggested port.

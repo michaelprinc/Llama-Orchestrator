@@ -220,7 +220,9 @@ def run_serial_benchmark_queue(
     *,
     should_stop: Callable[[], bool],
     set_active_name: Callable[[str | None], None],
+    start_one: Callable[[str], bool],
     run_one: Callable[[str], BenchmarkResult],
+    stop_one: Callable[[str], None],
     handle_exception: Callable[[str, Exception], None],
     post_message: Callable[[str], None],
 ) -> str:
@@ -232,8 +234,15 @@ def run_serial_benchmark_queue(
             return f"[Serial benchmark] stopped after {completed}/{total} completed."
 
         set_active_name(name)
-        post_message(f"[Serial benchmark] {index}/{total} running: {name}")
+        should_stop_after_run = False
+        post_message(f"[Serial benchmark] {index}/{total} starting: {name}")
         try:
+            should_stop_after_run = start_one(name)
+            if should_stop_after_run:
+                post_message(f"[Serial benchmark] {index}/{total} started: {name}")
+            else:
+                post_message(f"[Serial benchmark] {index}/{total} already running: {name}")
+            post_message(f"[Serial benchmark] {index}/{total} running: {name}")
             result = run_one(name)
         except Exception as exc:
             handle_exception(name, exc)
@@ -245,6 +254,15 @@ def run_serial_benchmark_queue(
                 f"{format_serial_benchmark_progress(result)}"
             )
         finally:
+            if should_stop_after_run:
+                post_message(f"[Serial benchmark] {index}/{total} stopping: {name}")
+                try:
+                    stop_one(name)
+                except Exception as exc:
+                    handle_exception(name, exc)
+                    post_message(f"[Serial benchmark] {index}/{total} stop failed: {name}: {exc}")
+                else:
+                    post_message(f"[Serial benchmark] {index}/{total} stopped: {name}")
             completed = index
             set_active_name(None)
 
@@ -1152,6 +1170,13 @@ class LlamaOrchestratorGui(tk.Tk):
         )
         return result
 
+    def _start_serial_benchmark_instance(self, name: str) -> bool:
+        state = list_instances().get(name)
+        if state is not None and state.status == InstanceStatus.RUNNING:
+            return False
+        start_instance(name)
+        return True
+
     def _handle_benchmark_exception(self, name: str, exc: Exception) -> None:
         try:
             config = get_instance_config(name)
@@ -1246,10 +1271,12 @@ class LlamaOrchestratorGui(tk.Tk):
                     names,
                     should_stop=self._serial_benchmark_stop.is_set,
                     set_active_name=self._set_active_benchmark_name,
+                    start_one=self._start_serial_benchmark_instance,
                     run_one=lambda current: self._benchmark_instance(
                         current,
                         load_benchmark_settings(self.project_root),
                     ),
+                    stop_one=stop_instance,
                     handle_exception=self._handle_benchmark_exception,
                     post_message=self._post_message,
                 )

@@ -9,7 +9,7 @@
   },
   "model": {
     "path": "models\\Qwen3.6-27B-MTP-UD-Q3_K_XL.gguf",
-    "context_size": 25000,
+    "context_size": 110000,
     "batch_size": 512,
     "threads": 16
   },
@@ -21,7 +21,7 @@
   },
   "gpu": {
     "backend": "vulkan",
-    "device_id": 2,
+    "device_id": 4,
     "layers": 999
   },
   "env": {
@@ -52,7 +52,7 @@
     "--spec-type",
     "draft-mtp",
     "--spec-draft-n-max",
-    "6",
+    "2",
     "--spec-draft-n-min",
     "1"
   ],
