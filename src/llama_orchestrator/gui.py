@@ -40,6 +40,7 @@ from llama_orchestrator.config import (
     discover_instances,
     get_instance_config,
     get_project_root,
+    load_all_instances,
     save_config,
 )
 from llama_orchestrator.daemon import get_daemon_status, start_daemon, stop_daemon
@@ -841,8 +842,8 @@ class LlamaOrchestratorGui(tk.Tk):
             self.tree.delete(item)
 
         states = list_instances()
-        config_names = {name for name, _ in discover_instances()}
-        all_names = sorted(set(states) | config_names)
+        configs = load_all_instances()
+        all_names = sorted(set(states) | set(configs))
         active_tag = self.tag_filter_var.get()
         all_tags: set[str] = set()
         visible_names: set[str] = set()
@@ -853,7 +854,7 @@ class LlamaOrchestratorGui(tk.Tk):
         for name in all_names:
             state = states.get(name)
             try:
-                config = get_instance_config(name)
+                config = configs[name]
                 loaded_configs.append(config)
                 display_name = config.display_name
                 runtime_selection = describe_effective_runtime(config)

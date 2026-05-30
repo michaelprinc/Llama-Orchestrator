@@ -54,13 +54,7 @@
         "--flash-attn",
         "on",
         "--ubatch-size",
-        "256",
-        "--spec-type",
-        "draft-mtp",
-        "--spec-draft-n-max",
-        "2",
-        "--spec-draft-n-min",
-        "1"
+        "256"
     ],
     "parameter_mutability": {
         "static": [

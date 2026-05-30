@@ -441,8 +441,9 @@ def load_all_instances() -> dict[str, InstanceConfig]:
     
     seen_uids: dict[str, Path] = {}
     seen_numbers: dict[str, Path] = {}
-    for name, config_path in discover_instances():
+    for config_path in _iter_config_paths():
         config = load_config(config_path)
+        name = config.name
         if name in instances:
             raise ConfigLoadError(config_path, f"Duplicate instance name '{name}'")
         previous_uid = seen_uids.get(config.instance_uid)

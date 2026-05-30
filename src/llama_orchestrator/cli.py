@@ -278,9 +278,11 @@ def ps(
         llama-orch ps
         llama-orch ps --all
     """
+    from llama_orchestrator.config import load_all_instances
     from llama_orchestrator.engine import InstanceStatus, list_instances
     
     instances = list_instances()
+    configs = load_all_instances()
     
     if not instances:
         console.print("[dim]No instances configured.[/dim]")
@@ -314,14 +316,11 @@ def ps(
         port = "-"
         backend = "-"
         display_name = name
-        try:
-            from llama_orchestrator.config import get_instance_config
-            config = get_instance_config(name)
+        config = configs.get(name)
+        if config is not None:
             port = str(config.server.port)
             backend = config.gpu.backend
             display_name = config.display_name or config.name
-        except Exception:
-            pass
         
         # Status styling
         status_style = {
