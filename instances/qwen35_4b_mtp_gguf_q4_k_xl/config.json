@@ -1,0 +1,121 @@
+{
+    "name": "qwen35_4b_mtp_gguf_q4_k_xl",
+    "binary": {
+        "binary_id": null,
+        "version": "latest",
+        "variant": "win-vulkan-x64",
+        "source_url": null,
+        "sha256": null
+    },
+    "model": {
+        "path": "models\\unsloth__Qwen3.5-4B-MTP-GGUF\\Qwen3.5-4B-UD-Q4_K_XL.gguf",
+        "context_size": 100000,
+        "batch_size": 512,
+        "threads": 16
+    },
+    "server": {
+        "host": "127.0.0.1",
+        "port": 8067,
+        "timeout": 600,
+        "parallel": 1
+    },
+    "gpu": {
+        "backend": "vulkan",
+        "device_id": 2,
+        "layers": 999
+    },
+    "env": {},
+    "args": [
+        "--no-mmproj",
+        "--reasoning",
+        "off",
+        "--flash-attn",
+        "auto"
+    ],
+    "parameter_mutability": {
+        "static": [
+            "name",
+            "binary.binary_id",
+            "binary.version",
+            "binary.variant",
+            "binary.source_url",
+            "binary.sha256",
+            "model.path",
+            "model.context_size",
+            "model.batch_size",
+            "model.threads",
+            "server.host",
+            "server.port",
+            "server.timeout",
+            "server.parallel",
+            "gpu.backend",
+            "gpu.device_id",
+            "gpu.layers",
+            "env",
+            "args",
+            "logs.stdout",
+            "logs.stderr",
+            "logs.max_size_mb",
+            "logs.rotation"
+        ],
+        "dynamic": [
+            "tags",
+            "healthcheck.type",
+            "healthcheck.path",
+            "healthcheck.expected_status",
+            "healthcheck.expected_body",
+            "healthcheck.custom_script",
+            "healthcheck.interval",
+            "healthcheck.timeout",
+            "healthcheck.retries",
+            "healthcheck.retry_delay",
+            "healthcheck.start_period",
+            "healthcheck.backoff_enabled",
+            "healthcheck.backoff_base",
+            "healthcheck.backoff_max",
+            "healthcheck.backoff_jitter",
+            "restart_policy.enabled",
+            "restart_policy.max_retries",
+            "restart_policy.backoff_multiplier",
+            "restart_policy.initial_delay",
+            "restart_policy.max_delay"
+        ]
+    },
+    "tags": [
+        "hf_unsloth_qwen3_5-4b-mtp-gguf",
+        "gguf",
+        "q4_k_xl",
+        "4b"
+    ],
+    "healthcheck": {
+        "type": "http",
+        "path": "/health",
+        "expected_status": [
+            200
+        ],
+        "expected_body": null,
+        "custom_script": null,
+        "interval": 10,
+        "timeout": 5,
+        "retries": 3,
+        "retry_delay": 1.0,
+        "start_period": 60,
+        "backoff_enabled": true,
+        "backoff_base": 1.0,
+        "backoff_max": 60.0,
+        "backoff_jitter": 0.1
+    },
+    "restart_policy": {
+        "enabled": true,
+        "max_retries": 5,
+        "backoff_multiplier": 2.0,
+        "initial_delay": 1.0,
+        "max_delay": 300.0
+    },
+    "logs": {
+        "stdout": "logs/{name}/stdout.log",
+        "stderr": "logs/{name}/stderr.log",
+        "max_size_mb": 100,
+        "rotation": 5
+    }
+}

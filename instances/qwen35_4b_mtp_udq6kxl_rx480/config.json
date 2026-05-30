@@ -51,9 +51,7 @@
     "--spec-type",
     "draft-mtp",
     "--spec-draft-n-max",
-    "2",
-    "--spec-draft-n-min",
-    "1"
+    "2"
   ],
   "tags": [
     "qwen35",
