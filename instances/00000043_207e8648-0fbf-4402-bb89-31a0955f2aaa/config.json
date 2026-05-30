@@ -58,7 +58,7 @@
         "--spec-type",
         "draft-mtp",
         "--spec-draft-n-max",
-        "2"
+        "1"
     ],
     "parameter_mutability": {
         "static": [
