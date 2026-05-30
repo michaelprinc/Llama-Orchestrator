@@ -8,8 +8,12 @@ all configured instances.
 from __future__ import annotations
 
 import json
+import sqlite3
+from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
+from uuid import uuid4
 
 from pydantic import ValidationError
 
@@ -17,6 +21,19 @@ from llama_orchestrator.config.schema import InstanceConfig
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+
+
+CURRENT_SCHEMA_VERSION = "2"
+
+
+def _utc_now_iso() -> str:
+    """Return a stable UTC timestamp for persisted config metadata."""
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _format_instance_no(value: int) -> str:
+    """Format a monotonically increasing sequence number for directory readability."""
+    return f"{value:08d}"
 
 
 class ConfigLoadError(Exception):
@@ -127,7 +144,204 @@ def get_logs_dir() -> Path:
     return logs_dir
 
 
-def load_config(path: Path) -> InstanceConfig:
+def get_instance_catalog_db_path() -> Path:
+    """Return the local SQLite catalog used for instance numbering and sync."""
+    return get_state_dir() / "instance_catalog.sqlite"
+
+
+@contextmanager
+def _get_catalog_connection() -> Iterator[sqlite3.Connection]:
+    """Yield an initialized catalog database connection."""
+    db_path = get_instance_catalog_db_path()
+    conn = sqlite3.connect(str(db_path), timeout=10.0)
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS instances (
+                instance_uid TEXT PRIMARY KEY,
+                instance_no TEXT NOT NULL UNIQUE,
+                name TEXT NOT NULL UNIQUE,
+                display_name TEXT NOT NULL,
+                dir_path TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                schema_version TEXT NOT NULL,
+                sort_order INTEGER
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS instance_no_sequence (
+                next_val INTEGER NOT NULL DEFAULT 1
+            )
+            """
+        )
+        row = conn.execute("SELECT COUNT(*) FROM instance_no_sequence").fetchone()
+        if row is not None and int(row[0]) == 0:
+            conn.execute("INSERT INTO instance_no_sequence (next_val) VALUES (1)")
+        conn.commit()
+        yield conn
+    finally:
+        conn.close()
+
+
+def _allocate_instance_no() -> str:
+    """Allocate the next local instance number from the SQLite sequence."""
+    with _get_catalog_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        row = conn.execute("SELECT next_val FROM instance_no_sequence").fetchone()
+        next_val = int(row[0]) if row is not None else 1
+        conn.execute("UPDATE instance_no_sequence SET next_val = ?", (next_val + 1,))
+        conn.commit()
+    return _format_instance_no(next_val)
+
+
+def _write_config_file(path: Path, data: dict) -> None:
+    """Persist config data with consistent formatting."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4, ensure_ascii=False)
+
+
+def _is_managed_instance_config_path(path: Path) -> bool:
+    """Return whether a path belongs to the managed instances tree."""
+    if path.name != "config.json":
+        return False
+    try:
+        path.resolve().relative_to(get_instances_dir().resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _sync_instance_catalog(config: InstanceConfig, path: Path) -> None:
+    """Mirror persisted instance identity metadata into the local catalog."""
+    if config.instance_no is None:
+        raise ConfigLoadError(path, "instance_no must be assigned before catalog sync")
+    with _get_catalog_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO instances (
+                instance_uid, instance_no, name, display_name, dir_path,
+                created_at, updated_at, schema_version, sort_order
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(instance_uid) DO UPDATE SET
+                instance_no = excluded.instance_no,
+                name = excluded.name,
+                display_name = excluded.display_name,
+                dir_path = excluded.dir_path,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at,
+                schema_version = excluded.schema_version,
+                sort_order = excluded.sort_order
+            """,
+            (
+                config.instance_uid,
+                config.instance_no,
+                config.name,
+                config.display_name or config.name,
+                str(path.parent),
+                config.created_at,
+                config.updated_at,
+                config.schema_version,
+                config.sort_order,
+            ),
+        )
+        conn.commit()
+
+
+def _prepare_loaded_config(
+    config: InstanceConfig,
+    raw_data: dict,
+    path: Path,
+    *,
+    persist_backfill: bool = True,
+) -> InstanceConfig:
+    """Apply lazy metadata backfill for legacy configs and track source path."""
+    changed = False
+    now = _utc_now_iso()
+    managed_path = _is_managed_instance_config_path(path)
+
+    if managed_path and "schema_version" not in raw_data:
+        config.schema_version = CURRENT_SCHEMA_VERSION
+        changed = True
+    if managed_path and "instance_uid" not in raw_data:
+        config.instance_uid = str(uuid4())
+        changed = True
+    if managed_path and ("instance_no" not in raw_data or not config.instance_no):
+        config.instance_no = _allocate_instance_no()
+        changed = True
+    if managed_path and ("display_name" not in raw_data or not config.display_name):
+        config.display_name = raw_data.get("name") or path.parent.name
+        changed = True
+    if managed_path and "created_at" not in raw_data:
+        config.created_at = now
+        changed = True
+    if managed_path and "updated_at" not in raw_data:
+        config.updated_at = now
+        changed = True
+
+    config.set_source_path(path)
+
+    if changed and persist_backfill:
+        _write_config_file(path, config.model_dump(mode="json"))
+
+    if managed_path:
+        _sync_instance_catalog(config, path)
+    return config
+
+
+def _iter_config_paths() -> Iterator[Path]:
+    """Yield all config.json files under the instances directory."""
+    instances_dir = get_instances_dir()
+    if not instances_dir.exists():
+        return
+    for instance_dir in sorted(instances_dir.iterdir()):
+        if not instance_dir.is_dir():
+            continue
+        config_path = instance_dir / "config.json"
+        if config_path.exists():
+            yield config_path
+
+
+def resolve_instance_selector(token: str) -> Path:
+    """Resolve a selector token to the canonical config path.
+
+    Resolution precedence is instance_uid, instance_no, immutable alias `name`,
+    then unique display_name.
+    """
+    uid_matches: list[Path] = []
+    no_matches: list[Path] = []
+    name_matches: list[Path] = []
+    display_matches: list[Path] = []
+
+    for config_path in _iter_config_paths():
+        config = load_config(config_path)
+        if config.instance_uid == token:
+            uid_matches.append(config_path)
+        if config.instance_no == token:
+            no_matches.append(config_path)
+        if config.name == token:
+            name_matches.append(config_path)
+        if config.display_name == token:
+            display_matches.append(config_path)
+
+    for matches, label in (
+        (uid_matches, "instance_uid"),
+        (no_matches, "instance_no"),
+        (name_matches, "name"),
+        (display_matches, "display_name"),
+    ):
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            raise ConfigLoadError(get_instances_dir(), f"Ambiguous selector '{token}' matched multiple {label} values")
+
+    raise ConfigLoadError(get_instances_dir(), f"Instance '{token}' not found")
+
+
+def load_config(path: Path, *, persist_backfill: bool = True) -> InstanceConfig:
     """
     Load an instance configuration from a JSON file.
     
@@ -170,7 +384,7 @@ def load_config(path: Path) -> InstanceConfig:
             path, f"Validation failed:\n{error_str}", e
         ) from e
     
-    return config
+    return _prepare_loaded_config(config, data, path, persist_backfill=persist_backfill)
 
 
 def load_config_from_dict(data: dict, name: str = "inline") -> InstanceConfig:
@@ -208,18 +422,9 @@ def discover_instances() -> Iterator[tuple[str, Path]]:
     Yields:
         Tuples of (instance_name, config_path) for each found instance
     """
-    instances_dir = get_instances_dir()
-    
-    if not instances_dir.exists():
-        return
-    
-    for instance_dir in sorted(instances_dir.iterdir()):
-        if not instance_dir.is_dir():
-            continue
-        
-        config_path = instance_dir / "config.json"
-        if config_path.exists():
-            yield instance_dir.name, config_path
+    for config_path in _iter_config_paths():
+        config = load_config(config_path)
+        yield config.name, config_path
 
 
 def load_all_instances() -> dict[str, InstanceConfig]:
@@ -234,15 +439,22 @@ def load_all_instances() -> dict[str, InstanceConfig]:
     """
     instances: dict[str, InstanceConfig] = {}
     
+    seen_uids: dict[str, Path] = {}
+    seen_numbers: dict[str, Path] = {}
     for name, config_path in discover_instances():
         config = load_config(config_path)
-        # Ensure the name in config matches the directory name
-        if config.name != name:
-            raise ConfigLoadError(
-                config_path,
-                f"Instance name '{config.name}' in config does not match "
-                f"directory name '{name}'"
-            )
+        if name in instances:
+            raise ConfigLoadError(config_path, f"Duplicate instance name '{name}'")
+        previous_uid = seen_uids.get(config.instance_uid)
+        if previous_uid is not None:
+            raise ConfigLoadError(config_path, f"Duplicate instance_uid '{config.instance_uid}' also found in {previous_uid}")
+        if config.instance_no is None:
+            raise ConfigLoadError(config_path, "instance_no was not assigned during load")
+        previous_no = seen_numbers.get(config.instance_no)
+        if previous_no is not None:
+            raise ConfigLoadError(config_path, f"Duplicate instance_no '{config.instance_no}' also found in {previous_no}")
+        seen_uids[config.instance_uid] = config_path
+        seen_numbers[config.instance_no] = config_path
         instances[name] = config
     
     return instances
@@ -261,15 +473,15 @@ def get_instance_config(name: str) -> InstanceConfig:
     Raises:
         ConfigLoadError: If instance not found or config invalid
     """
-    instances_dir = get_instances_dir()
-    config_path = instances_dir / name / "config.json"
-    
-    if not config_path.exists():
+    try:
+        config_path = resolve_instance_selector(name)
+    except ConfigLoadError as exc:
         raise ConfigLoadError(
-            config_path,
-            f"Instance '{name}' not found. Use 'llama-orch init {name}' to create it."
-        )
-    
+            exc.path,
+            f"Instance '{name}' not found. Use 'llama-orch init {name}' to create it.",
+            exc,
+        ) from exc
+
     return load_config(config_path)
 
 
@@ -285,15 +497,29 @@ def save_config(config: InstanceConfig, path: Path | None = None) -> Path:
         Path where config was saved
     """
     if path is None:
-        instances_dir = get_instances_dir()
-        instance_dir = instances_dir / config.name
-        instance_dir.mkdir(parents=True, exist_ok=True)
-        path = instance_dir / "config.json"
-    
-    # Serialize with nice formatting
+        if config.source_path is not None:
+            path = config.source_path
+        else:
+            instances_dir = get_instances_dir()
+            if config.instance_no is None:
+                config.instance_no = _allocate_instance_no()
+            path = instances_dir / config.instance_dir_name / "config.json"
+
+    managed_path = _is_managed_instance_config_path(path)
+    if managed_path and config.instance_no is None:
+        config.instance_no = _allocate_instance_no()
+
+    if not config.display_name:
+        config.display_name = config.name
+    if not config.created_at:
+        config.created_at = _utc_now_iso()
+    config.schema_version = CURRENT_SCHEMA_VERSION
+    config.updated_at = _utc_now_iso()
+
     data = config.model_dump(mode="json")
-    
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4, ensure_ascii=False)
-    
+    _write_config_file(path, data)
+    config.set_source_path(path)
+    if managed_path:
+        _sync_instance_catalog(config, path)
+
     return path

@@ -18,7 +18,11 @@ def test_logs_supports_both_streams(tmp_path: Path) -> None:
     (log_dir / "stdout.log").write_text("out-1\nout-2\n", encoding="utf-8")
     (log_dir / "stderr.log").write_text("err-1\nerr-2\n", encoding="utf-8")
 
-    with patch("llama_orchestrator.config.get_instance_config", return_value=MagicMock()), \
+    config = MagicMock()
+    config.name = instance_name
+    config.display_name = instance_name
+
+    with patch("llama_orchestrator.cli._resolve_instance_token", return_value=(instance_name, config)), \
          patch("llama_orchestrator.config.get_logs_dir", return_value=tmp_path), \
          patch("llama_orchestrator.engine.detach.get_logs_dir", return_value=tmp_path):
         result = runner.invoke(app, ["logs", instance_name, "--stream", "both", "--tail", "2"])
@@ -35,7 +39,11 @@ def test_logs_stderr_flag_maps_to_stderr_stream(tmp_path: Path) -> None:
     (log_dir / "stdout.log").write_text("out-only\n", encoding="utf-8")
     (log_dir / "stderr.log").write_text("err-only\n", encoding="utf-8")
 
-    with patch("llama_orchestrator.config.get_instance_config", return_value=MagicMock()), \
+    config = MagicMock()
+    config.name = instance_name
+    config.display_name = instance_name
+
+    with patch("llama_orchestrator.cli._resolve_instance_token", return_value=(instance_name, config)), \
          patch("llama_orchestrator.config.get_logs_dir", return_value=tmp_path), \
          patch("llama_orchestrator.engine.detach.get_logs_dir", return_value=tmp_path):
         result = runner.invoke(app, ["logs", instance_name, "--stderr", "--tail", "1"])
@@ -43,3 +51,21 @@ def test_logs_stderr_flag_maps_to_stderr_stream(tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert "err-only" in result.stdout
     assert "out-only" not in result.stdout
+
+
+def test_logs_accepts_display_name_selector(tmp_path: Path) -> None:
+    instance_name = "test-instance"
+    log_dir = tmp_path / instance_name
+    log_dir.mkdir(parents=True)
+    (log_dir / "stdout.log").write_text("line-1\n", encoding="utf-8")
+    config = MagicMock()
+    config.name = instance_name
+    config.display_name = "Friendly name"
+
+    with patch("llama_orchestrator.cli._resolve_instance_token", return_value=(instance_name, config)), \
+         patch("llama_orchestrator.config.get_logs_dir", return_value=tmp_path), \
+         patch("llama_orchestrator.engine.detach.get_logs_dir", return_value=tmp_path):
+        result = runner.invoke(app, ["logs", "Friendly name", "--tail", "1"])
+
+    assert result.exit_code == 0
+    assert "Friendly name" in result.stdout

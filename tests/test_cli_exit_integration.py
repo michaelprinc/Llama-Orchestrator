@@ -1,5 +1,7 @@
 """CLI integration tests for detach routing, exit codes, and daemon service commands."""
 
+from pathlib import Path
+
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
@@ -30,8 +32,10 @@ def test_up_missing_instance_returns_instance_not_found() -> None:
 
 def test_up_passes_detach_flag_to_engine() -> None:
     config = MagicMock()
+    config.name = "test"
+    config.display_name = "Test"
 
-    with patch("llama_orchestrator.config.get_instance_config", return_value=config), \
+    with patch("llama_orchestrator.cli._resolve_instance_token", return_value=("test", config)), \
          patch("llama_orchestrator.engine.validate_executable", return_value=(True, "")), \
          patch("llama_orchestrator.engine.start_instance", return_value=_running_state()) as mock_start_instance:
         result = runner.invoke(app, ["up", "test", "--no-detach"])
@@ -54,6 +58,32 @@ def test_config_validate_invalid_returns_standard_code() -> None:
         result = runner.invoke(app, ["config", "validate"])
 
     assert result.exit_code == int(ExitCode.CONFIG_INVALID)
+
+
+def test_describe_accepts_selector_and_uses_display_name_in_title() -> None:
+    config = MagicMock()
+    config.name = "test"
+    config.display_name = "Friendly name"
+    config.instance_uid = "550e8400-e29b-41d4-a716-446655440000"
+    config.instance_no = "00000001"
+    config.source_path = Path("instances/00000001_550e8400-e29b-41d4-a716-446655440000/config.json")
+    config.model.path = Path("models/test.gguf")
+    config.model.context_size = 4096
+    config.model.batch_size = 512
+    config.model.threads = 8
+    config.server.port = 8001
+    config.server.host = "127.0.0.1"
+    config.gpu.backend = "cpu"
+    config.gpu.device_id = 0
+    config.gpu.layers = 0
+    config.logs.stdout = "logs/{name}/stdout.log"
+    config.logs.stderr = "logs/{name}/stderr.log"
+
+    with patch("llama_orchestrator.cli._resolve_instance_token", return_value=("test", config)):
+        result = runner.invoke(app, ["describe", "Friendly name"])
+
+    assert result.exit_code == 0
+    assert "Friendly name" in result.stdout
 
 
 def test_daemon_install_calls_windows_service_helper() -> None:

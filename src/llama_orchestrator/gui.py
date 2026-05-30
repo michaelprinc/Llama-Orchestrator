@@ -205,6 +205,37 @@ def ordered_visible_names(selected_names: set[str] | frozenset[str], visible_nam
     return tuple(name for name in visible_names if name in selected_names)
 
 
+def resolve_instance_config_path(config: InstanceConfig, project_root: Path) -> Path:
+    """Resolve the on-disk config path for an instance regardless of directory layout."""
+    if config.source_path is not None:
+        return config.source_path
+    return project_root / "instances" / config.instance_dir_name / "config.json"
+
+
+def resolve_instance_config_dir(config: InstanceConfig, project_root: Path) -> Path:
+    """Resolve the folder containing an instance config."""
+    return resolve_instance_config_path(config, project_root).parent
+
+
+def instance_alias_exists(name: str) -> bool:
+    """Check whether an immutable instance alias is already present."""
+    return any(existing_name == name for existing_name, _ in discover_instances())
+
+
+def update_instance_display_name(name: str, display_name: str) -> InstanceConfig:
+    """Persist a new display name without changing the immutable instance alias."""
+    normalized = display_name.strip()
+    if not normalized:
+        raise ValueError("Display name cannot be blank.")
+
+    config = get_instance_config(name)
+    updated = config.model_copy(update={"display_name": normalized})
+    if config.source_path is not None:
+        updated.set_source_path(config.source_path)
+    save_config(updated)
+    return updated
+
+
 def format_serial_benchmark_progress(result: BenchmarkResult) -> str:
     """Summarize a serial benchmark result for the activity log."""
     if result.status != "ok":
@@ -681,9 +712,11 @@ class LlamaOrchestratorGui(tk.Tk):
         self.context_menu.add_command(label="Quick benchmark", command=self._run_benchmark_selected)
         self.context_menu.add_command(label="Toggle benchmark queue", command=self._toggle_selected_queue_rows)
         self.context_menu.add_command(label="Clone row", command=self._clone_selected)
+        self.context_menu.add_command(label="Rename display name", command=self._rename_display_name)
         self.context_menu.add_command(label="Copy as CLI command", command=self._copy_cli_command)
         self.context_menu.add_separator()
         self.context_menu.add_command(label="Open config", command=self._open_config)
+        self.context_menu.add_command(label="Open config folder", command=self._open_config_folder)
 
         detail_bar = ttk.Frame(table_frame, padding=(0, 8, 0, 0))
         detail_bar.grid(row=2, column=0, sticky="ew")
@@ -707,9 +740,11 @@ class LlamaOrchestratorGui(tk.Tk):
         params_button.pack(side=tk.LEFT, padx=(4, 6))
         self._refresh_benchmark_params_menu()
         ttk.Button(detail_bar, text="Clone row", command=self._clone_selected).pack(side=tk.LEFT, padx=6)
+        ttk.Button(detail_bar, text="Rename", command=self._rename_display_name).pack(side=tk.LEFT)
         ttk.Button(detail_bar, text="Diff selected", command=self._diff_selected).pack(side=tk.LEFT)
         ttk.Button(detail_bar, text="Copy CLI", command=self._copy_cli_command).pack(side=tk.LEFT, padx=6)
         ttk.Button(detail_bar, text="Open config", command=self._open_config).pack(side=tk.LEFT)
+        ttk.Button(detail_bar, text="Open config folder", command=self._open_config_folder).pack(side=tk.LEFT, padx=6)
         ttk.Button(detail_bar, text="Open logs", command=self._open_logs).pack(side=tk.LEFT, padx=6)
         ttk.Button(detail_bar, text="Open project", command=self._open_project).pack(side=tk.LEFT, padx=6)
         ttk.Button(detail_bar, text="Open prompt", command=self._open_prompt_file).pack(side=tk.LEFT)
@@ -820,6 +855,7 @@ class LlamaOrchestratorGui(tk.Tk):
             try:
                 config = get_instance_config(name)
                 loaded_configs.append(config)
+                display_name = config.display_name
                 runtime_selection = describe_effective_runtime(config)
                 port = str(config.server.port)
                 backend = config.gpu.backend
@@ -840,6 +876,7 @@ class LlamaOrchestratorGui(tk.Tk):
                 sort_model_size: object = model_size_value
                 sort_args: object = tuple(config.args)
             except Exception:
+                display_name = name
                 port = "-"
                 backend = "-"
                 gpu = "-"
@@ -890,7 +927,7 @@ class LlamaOrchestratorGui(tk.Tk):
                     name=name,
                     values=(
                         format_queue_checkbox(name in self._queued_benchmark_names),
-                        name,
+                        display_name,
                         status,
                         health,
                         pid,
@@ -910,7 +947,7 @@ class LlamaOrchestratorGui(tk.Tk):
                     ),
                     sort_values={
                         "queue": name in self._queued_benchmark_names,
-                        "name": name,
+                        "name": (display_name.casefold(), name.casefold()),
                         "status": status,
                         "health": health,
                         "pid": state.pid if state and state.pid else None,
@@ -1581,8 +1618,7 @@ class LlamaOrchestratorGui(tk.Tk):
         if not requested:
             return
         new_name = requested.strip().lower()
-        target = self.project_root / "instances" / new_name / "config.json"
-        if target.exists():
+        if instance_alias_exists(new_name):
             messagebox.showerror("Clone failed", f"Instance '{new_name}' already exists.")
             return
 
@@ -1687,6 +1723,34 @@ class LlamaOrchestratorGui(tk.Tk):
         self.clipboard_append(command)
         self._post_message(f"Copied llama.cpp CLI command for {name}.")
 
+    def _rename_display_name(self) -> None:
+        name = self._selected_instance()
+        if not name:
+            return
+        try:
+            config = get_instance_config(name)
+        except Exception as exc:
+            messagebox.showerror("Rename failed", str(exc))
+            return
+
+        requested = simpledialog.askstring(
+            "Rename display name",
+            "Display name:",
+            initialvalue=config.display_name,
+            parent=self,
+        )
+        if requested is None:
+            return
+
+        try:
+            updated = update_instance_display_name(name, requested)
+        except Exception as exc:
+            messagebox.showerror("Rename failed", str(exc))
+            return
+
+        self._post_message(f"Updated display name for {name} to {updated.display_name}.")
+        self.refresh()
+
     def _start_daemon(self) -> None:
         def action() -> str:
             status = get_daemon_status()
@@ -1712,7 +1776,22 @@ class LlamaOrchestratorGui(tk.Tk):
         name = self._selected_instance()
         if not name:
             return
-        path = self.project_root / "instances" / name / "config.json"
+        try:
+            path = resolve_instance_config_path(get_instance_config(name), self.project_root)
+        except Exception as exc:
+            messagebox.showerror("Open failed", str(exc))
+            return
+        self._open_path(path)
+
+    def _open_config_folder(self) -> None:
+        name = self._selected_instance()
+        if not name:
+            return
+        try:
+            path = resolve_instance_config_dir(get_instance_config(name), self.project_root)
+        except Exception as exc:
+            messagebox.showerror("Open failed", str(exc))
+            return
         self._open_path(path)
 
     def _open_logs(self) -> None:
@@ -1956,8 +2035,7 @@ class AddModelDialog(tk.Toplevel):
                 ),
                 tags=parse_tag_string(self.tags_var.get()),
             )
-            target = get_project_root() / "instances" / config.name / "config.json"
-            if target.exists():
+            if instance_alias_exists(config.name):
                 raise ValueError(f"Instance '{config.name}' already exists")
             save_config(config)
         except Exception as exc:

@@ -7,6 +7,7 @@ from llama_orchestrator.config.loader import (
     discover_instances,
     get_bin_dir,
     get_bins_dir,
+    get_instance_catalog_db_path,
     get_instance_config,
     get_instances_dir,
     get_llama_server_path,
@@ -16,6 +17,7 @@ from llama_orchestrator.config.loader import (
     get_state_dir,
     load_all_instances,
     load_config,
+    resolve_instance_selector,
     save_config,
 )
 from llama_orchestrator.config.schema import (
@@ -63,12 +65,14 @@ __all__ = [
     "discover_instances",
     "get_project_root",
     "get_instances_dir",
+    "get_instance_catalog_db_path",
     "get_bin_dir",
     "get_bins_dir",
     "get_models_dir",
     "get_llama_server_path",
     "get_state_dir",
     "get_logs_dir",
+    "resolve_instance_selector",
     # Validator
     "ValidationResult",
     "ValidationIssue",

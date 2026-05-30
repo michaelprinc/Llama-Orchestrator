@@ -82,6 +82,9 @@ class BenchmarkResult:
     draft_tokens: int | None = None
     draft_tokens_accepted: int | None = None
     draft_acceptance_rate: float | None = None
+    instance_uid: str | None = None
+    instance_no: str | None = None
+    display_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -356,6 +359,9 @@ def init_benchmark_db(db_path: Path | None = None) -> Path:
             row[1] for row in conn.execute("PRAGMA table_info(benchmarks)").fetchall()
         }
         for column_name in (
+            "instance_uid",
+            "instance_no",
+            "display_name",
             "dedicated_vram_mb",
             "shared_ram_mb",
             "total_gpu_memory_mb",
@@ -375,6 +381,8 @@ def init_benchmark_db(db_path: Path | None = None) -> Path:
             if column_name not in existing_columns:
                 if column_name in {"artifact_file", "speculative_mode"}:
                     column_type = "TEXT"
+                elif column_name in {"instance_uid", "instance_no", "display_name"}:
+                    column_type = "TEXT"
                 elif column_name in {
                     "prompt_tokens",
                     "tokens_cached",
@@ -389,7 +397,22 @@ def init_benchmark_db(db_path: Path | None = None) -> Path:
             "CREATE INDEX IF NOT EXISTS idx_benchmarks_instance_time "
             "ON benchmarks(instance_name, timestamp)"
         )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_benchmarks_uid_time "
+            "ON benchmarks(instance_uid, timestamp)"
+        )
     return path
+
+
+def _resolve_benchmark_identity(instance_name: str) -> tuple[str | None, str | None, str]:
+    """Best-effort resolve persisted identity metadata for benchmark rows."""
+    try:
+        from llama_orchestrator.config import get_instance_config
+
+        config = get_instance_config(instance_name)
+        return config.instance_uid, config.instance_no, config.display_name or config.name
+    except Exception:
+        return None, None, instance_name
 
 
 def record_benchmark_result(
@@ -398,11 +421,21 @@ def record_benchmark_result(
 ) -> None:
     """Append a benchmark result to SQLite history."""
     path = init_benchmark_db(db_path)
+    instance_uid, instance_no, display_name = (
+        result.instance_uid,
+        result.instance_no,
+        result.display_name,
+    )
+    if instance_uid is None or display_name is None:
+        resolved_uid, resolved_no, resolved_display_name = _resolve_benchmark_identity(result.instance_name)
+        instance_uid = instance_uid or resolved_uid
+        instance_no = instance_no or resolved_no
+        display_name = display_name or resolved_display_name
     with sqlite3.connect(path) as conn:
         conn.execute(
             """
             INSERT INTO benchmarks (
-                timestamp, instance_name, config_hash, prompt_file, prompt_sha256,
+                timestamp, instance_name, instance_uid, instance_no, display_name, config_hash, prompt_file, prompt_sha256,
                 prompt_chars, output_tokens, tokens_per_second, latency_ms,
                 elapsed_ms, vram_mb, dedicated_vram_mb, shared_ram_mb,
                 total_gpu_memory_mb, prompt_tokens, tokens_cached, cache_hit_rate,
@@ -410,11 +443,14 @@ def record_benchmark_result(
                 end_to_end_tokens_per_second, speculative_mode, draft_tokens,
                 draft_tokens_accepted, draft_acceptance_rate, status, error,
                 artifact_file
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 result.timestamp,
                 result.instance_name,
+                instance_uid,
+                instance_no,
+                display_name,
                 result.config_hash,
                 result.prompt_file,
                 result.prompt_sha256,
@@ -475,6 +511,9 @@ def latest_benchmark_results(db_path: Path | None = None) -> dict[str, Benchmark
 
         results[row_data["instance_name"]] = BenchmarkResult(
             instance_name=row_data["instance_name"],
+            instance_uid=row_data.get("instance_uid"),
+            instance_no=row_data.get("instance_no"),
+            display_name=row_data.get("display_name"),
             timestamp=row_data["timestamp"],
             config_hash=row_data["config_hash"],
             prompt_file=row_data["prompt_file"],
@@ -505,6 +544,24 @@ def latest_benchmark_results(db_path: Path | None = None) -> dict[str, Benchmark
         )
 
     return results
+
+
+def sync_benchmark_instance_identity(rows: list[dict[str, str]], db_path: Path | None = None) -> None:
+    """Backfill additive instance identity columns for benchmark history rows."""
+    if not rows:
+        return
+    path = init_benchmark_db(db_path)
+    with sqlite3.connect(path) as conn:
+        for row in rows:
+            conn.execute(
+                """
+                UPDATE benchmarks
+                SET instance_uid = ?, instance_no = ?, display_name = ?
+                WHERE instance_name = ?
+                """,
+                (row["instance_uid"], row["instance_no"], row["display_name"], row["name"]),
+            )
+        conn.commit()
 
 
 def _sample_windows_gpu_process_memory(pid: int) -> GpuMemorySample | None:

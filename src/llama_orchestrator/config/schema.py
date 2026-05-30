@@ -7,11 +7,17 @@ Uses Pydantic v2 for validation and serialization.
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Optional
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
+from pydantic import BaseModel, Field, HttpUrl, PrivateAttr, field_validator, model_validator
+
+
+def _utc_now_iso() -> str:
+    """Return a stable UTC timestamp for persisted config metadata."""
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 KNOWN_PARAMETER_PATHS: tuple[str, ...] = (
@@ -366,7 +372,14 @@ class InstanceConfig(BaseModel):
     If not set, the system falls back to the legacy bin/ directory.
     """
     
-    name: str = Field(..., min_length=1, max_length=64, description="Unique instance name")
+    name: str = Field(..., min_length=1, max_length=64, description="Immutable legacy selector alias")
+    schema_version: str = Field(default="2", description="Persisted config schema version")
+    instance_uid: str = Field(default_factory=lambda: str(uuid4()), description="Stable UUID4 identity")
+    instance_no: str | None = Field(default=None, description="Local 8-digit sequence number")
+    display_name: str | None = Field(default=None, description="User-facing display label")
+    created_at: str = Field(default_factory=_utc_now_iso, description="Creation timestamp in UTC")
+    updated_at: str = Field(default_factory=_utc_now_iso, description="Last update timestamp in UTC")
+    sort_order: int | None = Field(default=None, description="Optional GUI sort override")
     binary: Optional[BinaryConfig] = Field(
         default=None,
         description="Binary version configuration. UUID joins to bins/registry.json"
@@ -384,6 +397,7 @@ class InstanceConfig(BaseModel):
     healthcheck: HealthcheckConfig = Field(default_factory=HealthcheckConfig)
     restart_policy: RestartPolicy = Field(default_factory=RestartPolicy)
     logs: LogsConfig = Field(default_factory=LogsConfig)
+    _source_path: Path | None = PrivateAttr(default=None)
     
     @field_validator("name")
     @classmethod
@@ -396,6 +410,61 @@ class InstanceConfig(BaseModel):
                 f"numbers, hyphens, and underscores. Got: {v}"
             )
         return v
+
+    @field_validator("schema_version")
+    @classmethod
+    def validate_schema_version(cls, v: str) -> str:
+        """Require a non-empty schema version string."""
+        value = v.strip()
+        if not value:
+            raise ValueError("schema_version must not be empty")
+        return value
+
+    @field_validator("instance_uid")
+    @classmethod
+    def validate_instance_uid(cls, v: str) -> str:
+        """Validate that instance_uid is a UUID4 string."""
+        try:
+            parsed = UUID(v)
+        except ValueError as exc:
+            raise ValueError("instance_uid must be a valid UUID") from exc
+        if parsed.version != 4:
+            raise ValueError("instance_uid must be a UUID4 value")
+        return str(parsed)
+
+    @field_validator("instance_no")
+    @classmethod
+    def validate_instance_no(cls, v: str | None) -> str | None:
+        """Validate the optional local sequence number format."""
+        if v is None:
+            return None
+        if not re.match(r"^\d{8}$", v):
+            raise ValueError("instance_no must contain exactly 8 digits")
+        return v
+
+    @field_validator("display_name")
+    @classmethod
+    def validate_display_name(cls, v: str | None) -> str | None:
+        """Normalize the optional user-facing display name."""
+        if v is None:
+            return None
+        value = v.strip()
+        if not value:
+            raise ValueError("display_name must not be empty")
+        return value
+
+    @field_validator("created_at", "updated_at")
+    @classmethod
+    def validate_timestamp(cls, v: str) -> str:
+        """Validate persisted UTC timestamp strings."""
+        value = v.strip()
+        if not value:
+            raise ValueError("timestamp must not be empty")
+        try:
+            datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError("timestamp must be a valid ISO-8601 value") from exc
+        return value
 
     @field_validator("tags")
     @classmethod
@@ -416,6 +485,13 @@ class InstanceConfig(BaseModel):
                 normalized.append(clean)
                 seen.add(clean)
         return normalized
+
+    @model_validator(mode="after")
+    def apply_identity_defaults(self) -> "InstanceConfig":
+        """Fill additive identity metadata for legacy configs."""
+        if not self.display_name:
+            self.display_name = self.name
+        return self
     
     def get_env_vars(self) -> dict[str, str]:
         """Get environment variables including GPU settings."""
@@ -432,6 +508,22 @@ class InstanceConfig(BaseModel):
         stdout_path = Path(self.logs.stdout.format(name=self.name))
         stderr_path = Path(self.logs.stderr.format(name=self.name))
         return stdout_path, stderr_path
+
+    @property
+    def instance_dir_name(self) -> str:
+        """Return the canonical immutable instance directory name when available."""
+        if self.instance_no:
+            return f"{self.instance_no}_{self.instance_uid}"
+        return self.name
+
+    @property
+    def source_path(self) -> Path | None:
+        """Return the config file path where this model was loaded from."""
+        return self._source_path
+
+    def set_source_path(self, path: Path | None) -> None:
+        """Track the on-disk source path for non-destructive save-back behavior."""
+        self._source_path = path
 
 
 # =============================================================================

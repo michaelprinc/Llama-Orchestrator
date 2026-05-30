@@ -183,6 +183,9 @@ class TestInstanceConfig:
             model=ModelConfig(path=Path("test.gguf")),
         )
         assert config.name == "test-instance"
+        assert config.display_name == "test-instance"
+        assert config.schema_version == "2"
+        assert config.instance_no is None
         assert config.parameter_mutability.static == list(DEFAULT_STATIC_PARAMETER_PATHS)
         assert config.parameter_mutability.dynamic == list(DEFAULT_DYNAMIC_PARAMETER_PATHS)
     
@@ -246,6 +249,33 @@ class TestInstanceConfig:
         stdout, stderr = config.get_log_paths()
         assert "mymodel" in str(stdout)
         assert "mymodel" in str(stderr)
+
+    def test_instance_dir_name_uses_identity_when_instance_no_available(self) -> None:
+        """Test canonical directory names use instance number and UUID."""
+        config = InstanceConfig(
+            name="mymodel",
+            instance_no="00000042",
+            model=ModelConfig(path=Path("test.gguf")),
+        )
+        assert config.instance_dir_name == f"00000042_{config.instance_uid}"
+
+    def test_invalid_instance_no_is_rejected(self) -> None:
+        """Test invalid instance number format is rejected."""
+        with pytest.raises(ValidationError):
+            InstanceConfig(
+                name="test",
+                instance_no="42",
+                model=ModelConfig(path=Path("test.gguf")),
+            )
+
+    def test_invalid_display_name_is_rejected(self) -> None:
+        """Test blank display names are rejected."""
+        with pytest.raises(ValidationError):
+            InstanceConfig(
+                name="test",
+                display_name="   ",
+                model=ModelConfig(path=Path("test.gguf")),
+            )
 
 
 class TestParameterMutabilityConfig:

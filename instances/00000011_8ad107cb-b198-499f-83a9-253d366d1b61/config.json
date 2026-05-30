@@ -1,0 +1,129 @@
+{
+    "name": "gemma3_270m_it_igpu_q4_k_m",
+    "schema_version": "2",
+    "instance_uid": "8ad107cb-b198-499f-83a9-253d366d1b61",
+    "instance_no": "00000011",
+    "display_name": "gemma3_270m_it_igpu_q4_k_m",
+    "created_at": "2026-05-30T19:14:19Z",
+    "updated_at": "2026-05-30T19:19:32Z",
+    "sort_order": null,
+    "binary": {
+        "binary_id": "67b04bdb-8759-4fd6-872c-6311bfade8ce",
+        "version": "b9071",
+        "variant": "win-vulkan-x64",
+        "source_url": "https://github.com/ggml-org/llama.cpp/releases/download/b9071/llama-b9071-bin-win-vulkan-x64.zip",
+        "sha256": null
+    },
+    "model": {
+        "path": "models\\gemma-3-270m-q4_k_m.gguf",
+        "context_size": 8192,
+        "batch_size": 512,
+        "threads": 8
+    },
+    "server": {
+        "host": "127.0.0.1",
+        "port": 8019,
+        "timeout": 600,
+        "parallel": 1
+    },
+    "gpu": {
+        "backend": "vulkan",
+        "device_id": 0,
+        "layers": 999
+    },
+    "env": {},
+    "args": [
+        "--parallel",
+        "1",
+        "--device",
+        "Vulkan0",
+        "--main-gpu",
+        "0",
+        "--cache-type-k",
+        "q4_0",
+        "--cache-type-v",
+        "q4_0",
+        "--no-mmproj"
+    ],
+    "parameter_mutability": {
+        "static": [
+            "name",
+            "binary.binary_id",
+            "binary.version",
+            "binary.variant",
+            "binary.source_url",
+            "binary.sha256",
+            "model.path",
+            "model.context_size",
+            "model.batch_size",
+            "model.threads",
+            "server.host",
+            "server.port",
+            "server.timeout",
+            "server.parallel",
+            "gpu.backend",
+            "gpu.device_id",
+            "gpu.layers",
+            "env",
+            "args",
+            "logs.stdout",
+            "logs.stderr",
+            "logs.max_size_mb",
+            "logs.rotation"
+        ],
+        "dynamic": [
+            "tags",
+            "healthcheck.type",
+            "healthcheck.path",
+            "healthcheck.expected_status",
+            "healthcheck.expected_body",
+            "healthcheck.custom_script",
+            "healthcheck.interval",
+            "healthcheck.timeout",
+            "healthcheck.retries",
+            "healthcheck.retry_delay",
+            "healthcheck.start_period",
+            "healthcheck.backoff_enabled",
+            "healthcheck.backoff_base",
+            "healthcheck.backoff_max",
+            "healthcheck.backoff_jitter",
+            "restart_policy.enabled",
+            "restart_policy.max_retries",
+            "restart_policy.backoff_multiplier",
+            "restart_policy.initial_delay",
+            "restart_policy.max_delay"
+        ]
+    },
+    "tags": [],
+    "healthcheck": {
+        "type": "http",
+        "path": "/health",
+        "expected_status": [
+            200
+        ],
+        "expected_body": null,
+        "custom_script": null,
+        "interval": 10,
+        "timeout": 5,
+        "retries": 3,
+        "retry_delay": 1.0,
+        "start_period": 60,
+        "backoff_enabled": true,
+        "backoff_base": 1.0,
+        "backoff_max": 60.0,
+        "backoff_jitter": 0.1
+    },
+    "restart_policy": {
+        "enabled": true,
+        "max_retries": 5,
+        "backoff_multiplier": 2.0,
+        "initial_delay": 1.0,
+        "max_delay": 300.0
+    },
+    "logs": {
+        "stdout": "logs/{name}/stdout.log",
+        "stderr": "logs/{name}/stderr.log",
+        "max_size_mb": 100,
+        "rotation": 5
+    }
+}

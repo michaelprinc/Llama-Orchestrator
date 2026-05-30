@@ -77,6 +77,9 @@ class InstanceDescription:
     
     # Basic info
     name: str
+    display_name: str | None = None
+    instance_uid: str | None = None
+    instance_no: str | None = None
     config_path: Path | None = None
     
     # Configuration
@@ -126,6 +129,9 @@ class InstanceDescription:
         """Convert to dictionary for JSON output."""
         return {
             "name": self.name,
+            "display_name": self.display_name,
+            "instance_uid": self.instance_uid,
+            "instance_no": self.instance_no,
             "config_path": str(self.config_path) if self.config_path else None,
             "configuration": {
                 "model_path": self.model_path,
@@ -247,7 +253,13 @@ def build_description(
     
     # Fill in config info
     if config:
-        desc.config_path = Path(f"instances/{name}/config.json")
+        desc.display_name = config.display_name or config.name
+        desc.instance_uid = config.instance_uid
+        desc.instance_no = config.instance_no
+        if config.source_path is not None:
+            desc.config_path = config.source_path
+        else:
+            desc.config_path = Path(f"instances/{config.instance_dir_name}/config.json")
         desc.model_path = str(config.model.path)
         desc.context_size = config.model.context_size
         desc.batch_size = config.model.batch_size
@@ -368,6 +380,11 @@ def format_description_rich(desc: InstanceDescription) -> str:
     
     # Configuration section
     lines.append("[bold cyan]Configuration[/bold cyan]")
+    lines.append(f"  Display name: {desc.display_name or desc.name}")
+    if desc.instance_no:
+        lines.append(f"  Instance no:  {desc.instance_no}")
+    if desc.instance_uid:
+        lines.append(f"  Instance UID: {desc.instance_uid}")
     lines.append(f"  Model:        {desc.model_path or '-'}")
     lines.append(f"  Context:      {desc.context_size}")
     lines.append(f"  Batch size:   {desc.batch_size}")
@@ -443,7 +460,7 @@ def format_description_rich(desc: InstanceDescription) -> str:
     
     # Paths section
     lines.append("[bold cyan]Paths[/bold cyan]")
-    lines.append(f"  Config:       instances/{desc.name}/config.json")
+    lines.append(f"  Config:       {desc.config_path or Path(f'instances/{desc.name}/config.json')}")
     lines.append(f"  Stdout:       {desc.stdout_log}")
     lines.append(f"  Stderr:       {desc.stderr_log}")
     lines.append(f"  State DB:     {desc.state_db_path}")

@@ -4,6 +4,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from llama_orchestrator.benchmark import BenchmarkResult, BenchmarkSettings
+from llama_orchestrator.config import InstanceConfig, ModelConfig
 from llama_orchestrator.engine.detection import DetectedGpu
 from llama_orchestrator.engine.state import HealthStatus, InstanceState, InstanceStatus
 from llama_orchestrator.gui import (
@@ -33,8 +34,12 @@ from llama_orchestrator.gui import (
     ordered_visible_names,
     parse_tag_string,
     persist_instance_health,
+    resolve_instance_config_dir,
+    resolve_instance_config_path,
     resolve_models_directory_input,
     run_serial_benchmark_queue,
+    instance_alias_exists,
+    update_instance_display_name,
 )
 from llama_orchestrator.hf_import import DownloadProgress
 
@@ -474,6 +479,53 @@ def test_normalize_model_path_for_config_prefers_project_relative_paths(monkeypa
     monkeypatch.setattr("llama_orchestrator.gui.get_project_root", lambda: project_root)
 
     assert normalize_model_path_for_config(model_path) == Path("models/demo.gguf")
+
+
+def test_resolve_instance_config_path_prefers_loaded_source_path(tmp_path: Path) -> None:
+    project_root = tmp_path / "llama-orchestrator"
+    source_path = project_root / "instances" / "legacy-demo" / "config.json"
+    config = InstanceConfig(name="demo", model=ModelConfig(path=Path("models/demo.gguf")))
+    config.set_source_path(source_path)
+
+    assert resolve_instance_config_path(config, project_root) == source_path
+    assert resolve_instance_config_dir(config, project_root) == source_path.parent
+
+
+def test_resolve_instance_config_path_falls_back_to_immutable_directory_name(tmp_path: Path) -> None:
+    project_root = tmp_path / "llama-orchestrator"
+    config = InstanceConfig(
+        name="demo",
+        instance_uid="123e4567-e89b-42d3-a456-426614174000",
+        instance_no="00000042",
+        model=ModelConfig(path=Path("models/demo.gguf")),
+    )
+
+    assert resolve_instance_config_path(config, project_root) == (
+        project_root / "instances" / "00000042_123e4567-e89b-42d3-a456-426614174000" / "config.json"
+    )
+
+
+def test_instance_alias_exists_uses_discovered_aliases() -> None:
+    with patch(
+        "llama_orchestrator.gui.discover_instances",
+        return_value=(("alpha", Path("instances/a/config.json")), ("beta", Path("instances/b/config.json"))),
+    ):
+        assert instance_alias_exists("beta") is True
+        assert instance_alias_exists("gamma") is False
+
+
+def test_update_instance_display_name_preserves_source_path() -> None:
+    config = InstanceConfig(name="demo", model=ModelConfig(path=Path("models/demo.gguf")))
+    config.set_source_path(Path("instances/legacy-demo/config.json"))
+
+    with patch("llama_orchestrator.gui.get_instance_config", return_value=config), \
+         patch("llama_orchestrator.gui.save_config") as mock_save_config:
+        updated = update_instance_display_name("demo", "Demo Label")
+
+    saved = mock_save_config.call_args.args[0]
+    assert updated.display_name == "Demo Label"
+    assert saved.display_name == "Demo Label"
+    assert saved.source_path == Path("instances/legacy-demo/config.json")
 
 
 def test_format_download_progress_reports_downloaded_and_total_bytes() -> None:

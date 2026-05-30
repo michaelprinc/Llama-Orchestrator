@@ -54,6 +54,14 @@ app.add_typer(binary_app, name="binary")
 console = Console()
 
 
+def _resolve_instance_token(token: str):
+    """Resolve any supported selector token to the immutable alias-backed config."""
+    from llama_orchestrator.config import get_instance_config
+
+    config = get_instance_config(token)
+    return config.name, config
+
+
 def _raise_exit(code: ExitCode) -> None:
     """Raise a Typer exit with a standard exit code."""
     raise typer.Exit(int(code))
@@ -110,7 +118,6 @@ def up(
     Example:
         llama-orch up gpt-oss
     """
-    from llama_orchestrator.config import get_instance_config
     from llama_orchestrator.engine import (
         ProcessError,
         build_command,
@@ -122,7 +129,7 @@ def up(
     
     # Load config first for UUID-aware binary resolution
     try:
-        config = get_instance_config(name)
+        resolved_name, config = _resolve_instance_token(name)
     except FileNotFoundError:
         console.print(Panel(
             f"[red]Instance '{name}' not found.[/red]\n\n"
@@ -144,17 +151,17 @@ def up(
         ))
         _raise_exit(ExitCode.BINARY_NOT_FOUND)
     
-    console.print(f"[green]Starting instance:[/green] {name}")
+    console.print(f"[green]Starting instance:[/green] {config.display_name}")
     
     try:
-        state = start_instance(name, detach=detach)
+        state = start_instance(resolved_name, detach=detach)
         health_detail = f"Health: {state.health.value}"
         if state.health.value == "healthy":
             health_detail += " (ready)"
         elif state.health.value == "loading":
             health_detail += " (still loading)"
         console.print(Panel(
-            f"[green]Instance '{name}' started successfully![/green]\n\n"
+            f"[green]Instance '{config.display_name}' started successfully![/green]\n\n"
             f"PID: {state.pid}\n"
             f"Status: {state.status.value}\n"
             f"{health_detail}",
@@ -162,7 +169,7 @@ def up(
             border_style="green"
         ))
         console.print("\n[dim]Check status with:[/dim] [cyan]llama-orch ps[/cyan]")
-        console.print("[dim]View logs with:[/dim] [cyan]llama-orch logs " + name + "[/cyan]")
+        console.print("[dim]View logs with:[/dim] [cyan]llama-orch logs " + resolved_name + "[/cyan]")
     except ProcessError as e:
         console.print(Panel(
             f"[red]Failed to start instance:[/red]\n{e.message}",
@@ -187,12 +194,18 @@ def down(
     from llama_orchestrator.engine import ProcessError, stop_instance
     from rich.panel import Panel
     
-    console.print(f"[red]Stopping instance:[/red] {name}")
+    try:
+        resolved_name, config = _resolve_instance_token(name)
+    except FileNotFoundError:
+        console.print(f"[red]Instance '{name}' not found.[/red]")
+        _raise_exit(ExitCode.INSTANCE_NOT_FOUND)
+
+    console.print(f"[red]Stopping instance:[/red] {config.display_name}")
     
     try:
-        state = stop_instance(name, force=force)
+        state = stop_instance(resolved_name, force=force)
         console.print(Panel(
-            f"[green]Instance '{name}' stopped successfully![/green]\n\n"
+            f"[green]Instance '{config.display_name}' stopped successfully![/green]\n\n"
             f"Status: {state.status.value}",
             title="Instance Stopped",
             border_style="green"
@@ -220,17 +233,23 @@ def restart(
     from llama_orchestrator.engine import ProcessError, restart_instance
     from rich.panel import Panel
     
-    console.print(f"[blue]Restarting instance:[/blue] {name}")
+    try:
+        resolved_name, config = _resolve_instance_token(name)
+    except FileNotFoundError:
+        console.print(f"[red]Instance '{name}' not found.[/red]")
+        _raise_exit(ExitCode.INSTANCE_NOT_FOUND)
+
+    console.print(f"[blue]Restarting instance:[/blue] {config.display_name}")
     
     try:
-        state = restart_instance(name, force=force)
+        state = restart_instance(resolved_name, force=force)
         health_detail = f"Health: {state.health.value}"
         if state.health.value == "healthy":
             health_detail += " (ready)"
         elif state.health.value == "loading":
             health_detail += " (still loading)"
         console.print(Panel(
-            f"[green]Instance '{name}' restarted successfully![/green]\n\n"
+            f"[green]Instance '{config.display_name}' restarted successfully![/green]\n\n"
             f"PID: {state.pid}\n"
             f"Restart count: {state.restart_count}\n"
             f"{health_detail}",
@@ -282,6 +301,7 @@ def ps(
     table = Table(title="llama-orchestrator Instances")
     
     table.add_column("Name", style="cyan", no_wrap=True)
+    table.add_column("Alias", style="dim", no_wrap=True)
     table.add_column("PID", style="magenta")
     table.add_column("Port", style="green")
     table.add_column("Backend", style="yellow")
@@ -293,11 +313,13 @@ def ps(
         # Try to get config for port/backend info
         port = "-"
         backend = "-"
+        display_name = name
         try:
             from llama_orchestrator.config import get_instance_config
             config = get_instance_config(name)
             port = str(config.server.port)
             backend = config.gpu.backend
+            display_name = config.display_name or config.name
         except Exception:
             pass
         
@@ -314,6 +336,7 @@ def ps(
         health_text = f"{state.health_symbol} {state.health.value}"
         
         table.add_row(
+            display_name,
             name,
             str(state.pid) if state.pid else "-",
             port,
@@ -365,7 +388,8 @@ def health(
     
     for inst_name in instances_to_check:
         try:
-            result = check_instance_health(inst_name)
+            resolved_name, config = _resolve_instance_token(inst_name)
+            result = check_instance_health(resolved_name)
             
             # Status styling
             if result.is_healthy:
@@ -381,7 +405,7 @@ def health(
             if result.slots_idle is not None:
                 details = f"Slots: {result.slots_idle} idle, {result.slots_processing} busy"
             
-            table.add_row(inst_name, status_text, response_time, details)
+            table.add_row(config.display_name or resolved_name, status_text, response_time, details)
             
         except FileNotFoundError:
             table.add_row(inst_name, "[dim]NOT FOUND[/dim]", "-", "Config missing")
@@ -408,11 +432,11 @@ def logs(
         llama-orch logs gpt-oss --stream both
     """
     import time
-    from llama_orchestrator.config import get_instance_config, get_logs_dir
+    from llama_orchestrator.config import get_logs_dir
     from llama_orchestrator.engine.detach import get_latest_logs
     
     try:
-        config = get_instance_config(name)
+        resolved_name, config = _resolve_instance_token(name)
     except FileNotFoundError:
         console.print(f"[red]Instance '{name}' not found.[/red]")
         _raise_exit(ExitCode.INSTANCE_NOT_FOUND)
@@ -429,7 +453,7 @@ def logs(
     stream_names = ["stdout", "stderr"] if selected_stream == "both" else [selected_stream]
     
     # Determine log file path
-    logs_dir = get_logs_dir() / name
+    logs_dir = get_logs_dir() / resolved_name
 
     def get_active_log_file(log_type: str) -> Path | None:
         fixed = logs_dir / f"{log_type}.log"
@@ -448,7 +472,7 @@ def logs(
         console.print("[dim]Instance may not have been started yet.[/dim]")
         _raise_exit(ExitCode.CONFIG_NOT_FOUND)
 
-    console.print(f"[dim]Showing {selected_stream} logs for instance '{name}'[/dim]")
+    console.print(f"[dim]Showing {selected_stream} logs for instance '{config.display_name or resolved_name}'[/dim]")
     for log_type in stream_names:
         if active_files[log_type] is not None:
             console.print(f"[dim]{log_type}: {active_files[log_type]}[/dim]")
@@ -465,7 +489,7 @@ def logs(
         console.print("[dim]Following log output (Ctrl+C to stop)...[/dim]\n")
 
         try:
-            latest_logs = get_latest_logs(name, tail)
+            latest_logs = get_latest_logs(resolved_name, tail)
             for log_type in stream_names:
                 for line in latest_logs.get(log_type, []):
                     print_log_line(log_type, line)
@@ -496,7 +520,7 @@ def logs(
         except KeyboardInterrupt:
             console.print("\n[dim]Stopped following logs.[/dim]")
     else:
-        latest_logs = get_latest_logs(name, tail)
+        latest_logs = get_latest_logs(resolved_name, tail)
 
         if not any(latest_logs.get(log_type) for log_type in stream_names):
             console.print("[dim]Log file is empty.[/dim]")
@@ -518,17 +542,16 @@ def describe(
         llama-orch describe gpt-oss
         llama-orch describe gpt-oss --json
     """
-    from llama_orchestrator.config import get_instance_config
     from llama_orchestrator.cli_describe import build_description, format_description_rich
     from rich.panel import Panel
     
     try:
-        config = get_instance_config(name)
+        resolved_name, config = _resolve_instance_token(name)
     except FileNotFoundError:
         console.print(f"[red]Instance '{name}' not found.[/red]")
         _raise_exit(ExitCode.INSTANCE_NOT_FOUND)
     
-    description = build_description(name, config=config)
+    description = build_description(resolved_name, config=config)
     
     if output_json:
         import json
@@ -538,7 +561,7 @@ def describe(
         console.print(
             Panel(
                 format_description_rich(description),
-                title=f"Instance: {name}",
+                title=f"Instance: {config.display_name or resolved_name}",
                 border_style="blue",
             )
         )
@@ -580,10 +603,12 @@ def _build_dashboard_table() -> Table:
             port = str(config.server.port)
             backend = config.gpu.backend
             model = config.model.path.name[:30]
+            display_name = config.display_name or config.name
         except Exception:
             port = "-"
             backend = "-"
             model = "-"
+            display_name = name
 
         # State info
         if state:
@@ -607,7 +632,7 @@ def _build_dashboard_table() -> Table:
             uptime = "-"
 
         table.add_row(
-            name,
+            display_name,
             pid,
             port,
             backend,
@@ -728,24 +753,17 @@ def init(
         llama-orch init gpt-oss --model ../models/gpt-oss.gguf --port 8001
         llama-orch init my-model -m models/model.gguf -p 8002 -b vulkan -d 1 -l 30
     """
-    from llama_orchestrator.config import (
-        GpuConfig,
-        InstanceConfig,
-        ModelConfig,
-        ServerConfig,
-        get_instances_dir,
-        save_config,
-    )
+    from llama_orchestrator.config import GpuConfig, InstanceConfig, ModelConfig, ServerConfig, get_instance_config, save_config
     from rich.panel import Panel
-    
-    instances_dir = get_instances_dir()
-    instance_dir = instances_dir / name
-    config_path = instance_dir / "config.json"
-    
-    # Check if already exists
-    if config_path.exists() and not force:
+
+    try:
+        existing = get_instance_config(name)
+    except Exception:
+        existing = None
+
+    if existing is not None and not force:
         console.print(f"[red]Instance '{name}' already exists.[/red]")
-        console.print(f"Use --force to overwrite, or choose a different name.")
+        console.print("Use --force to overwrite, or choose a different name.")
         _raise_exit(ExitCode.INSTANCE_ALREADY_EXISTS)
     
     # Validate backend
@@ -778,6 +796,8 @@ def init(
         _raise_exit(ExitCode.CONFIG_INVALID)
     
     # Save config
+    if existing is not None and force:
+        config.set_source_path(existing.source_path)
     saved_path = save_config(config)
     
     console.print(Panel(
@@ -785,6 +805,7 @@ def init(
         f"Config: {saved_path}\n"
         f"Model: {model}\n"
         f"Port: {port}\n"
+        f"Directory: {saved_path.parent.name}\n"
         f"Backend: {backend}" + (f" (device {device}, {layers} layers)" if backend != "cpu" else ""),
         title="Instance Created",
         border_style="green"
@@ -953,6 +974,27 @@ def config_lint(
         else:
             console.print(f"[red]Lint failed ({result.error_count} errors, {result.warning_count} warnings)[/red]")
             _raise_exit(ExitCode.CONFIG_INVALID)
+
+
+@config_app.command("migrate-instances")
+def config_migrate_instances(
+    apply: Annotated[bool, typer.Option("--apply", help="Apply directory and SQLite migration changes")] = False,
+) -> None:
+    """Preview or apply the instance identity migration."""
+    from llama_orchestrator.config.migration import migrate_instances
+
+    summary = migrate_instances(apply=apply)
+    mode = "Applied" if apply else "Preview"
+    console.print(f"[bold]{mode} instance migration[/bold]")
+    console.print(f"Total: {summary.total}  Changed: {summary.changed}  Skipped: {summary.skipped}")
+    for record in summary.records:
+        action = "migrate" if record.changed else "keep"
+        console.print(
+            f"- [{action}] {record.name} -> {record.target_config_path.parent.name} "
+            f"({record.display_name})"
+        )
+        if record.backup_path is not None:
+            console.print(f"  backup: {record.backup_path}")
 
 
 # =============================================================================

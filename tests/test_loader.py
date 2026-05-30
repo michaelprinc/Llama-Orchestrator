@@ -12,14 +12,17 @@ from llama_orchestrator.config import (
     ConfigLoadError,
     InstanceConfig,
     ModelConfig,
+    load_all_instances,
     load_config,
     save_config,
 )
 from llama_orchestrator.config.loader import (
     discover_instances,
     get_instances_dir,
+    get_instance_catalog_db_path,
     get_project_root,
     load_config_from_dict,
+    resolve_instance_selector,
 )
 
 
@@ -105,6 +108,27 @@ class TestLoadConfig:
         assert "server.host" in config.parameter_mutability.static
         assert "healthcheck.interval" in config.parameter_mutability.dynamic
 
+    def test_load_legacy_config_backfills_identity_metadata(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that legacy configs receive persisted identity metadata on load."""
+        monkeypatch.setattr("llama_orchestrator.config.loader.get_project_root", lambda: tmp_path)
+        config_path = tmp_path / "instances" / "legacy-name" / "config.json"
+        config_path.parent.mkdir(parents=True)
+        config_path.write_text(json.dumps({
+            "name": "legacy-name",
+            "model": {"path": "models/test.gguf"},
+        }), encoding="utf-8")
+
+        config = load_config(config_path)
+
+        assert config.instance_no is not None
+        assert config.display_name == "legacy-name"
+        assert config.schema_version == "2"
+        saved = json.loads(config_path.read_text(encoding="utf-8"))
+        assert saved["instance_uid"] == config.instance_uid
+        assert saved["instance_no"] == config.instance_no
+        assert saved["display_name"] == "legacy-name"
+        assert get_instance_catalog_db_path().exists()
+
 
 class TestLoadConfigFromDict:
     """Tests for load_config_from_dict function."""
@@ -148,6 +172,38 @@ class TestSaveConfig:
         assert "parameter_mutability" in data
         assert "server.host" in data["parameter_mutability"]["static"]
 
+    def test_save_new_config_uses_immutable_directory_name(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test that newly created configs default to the immutable directory layout."""
+        monkeypatch.setattr("llama_orchestrator.config.loader.get_project_root", lambda: tmp_path)
+        config = InstanceConfig(
+            name="test",
+            model=ModelConfig(path=Path("test.gguf")),
+        )
+
+        saved_path = save_config(config)
+
+        assert saved_path.parent.name == config.instance_dir_name
+        assert saved_path.parent.parent == tmp_path / "instances"
+        assert config.instance_no is not None
+
+    def test_save_loaded_legacy_config_preserves_existing_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test ordinary save-back does not rename a legacy directory."""
+        monkeypatch.setattr("llama_orchestrator.config.loader.get_project_root", lambda: tmp_path)
+        legacy_path = tmp_path / "instances" / "legacy-name" / "config.json"
+        legacy_path.parent.mkdir(parents=True)
+        legacy_path.write_text(json.dumps({
+            "name": "legacy-name",
+            "model": {"path": "models/test.gguf"},
+        }), encoding="utf-8")
+
+        config = load_config(legacy_path)
+        config.display_name = "Friendly legacy"
+        saved_path = save_config(config)
+
+        assert saved_path == legacy_path
+        saved = json.loads(saved_path.read_text(encoding="utf-8"))
+        assert saved["display_name"] == "Friendly legacy"
+
 
 class TestDiscoverInstances:
     """Tests for discover_instances function."""
@@ -184,6 +240,10 @@ class TestDiscoverInstances:
             "llama_orchestrator.config.loader.get_instances_dir",
             lambda: instances_dir
         )
+        monkeypatch.setattr(
+            "llama_orchestrator.config.loader.get_project_root",
+            lambda: tmp_path
+        )
         
         result = list(discover_instances())
         
@@ -191,6 +251,22 @@ class TestDiscoverInstances:
         names = [r[0] for r in result]
         assert "instance-a" in names
         assert "instance-b" in names
+
+    def test_resolve_instance_selector_accepts_uid_no_and_display_name(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Test selector resolution precedence for migrated configs."""
+        monkeypatch.setattr("llama_orchestrator.config.loader.get_project_root", lambda: tmp_path)
+        instances_dir = tmp_path / "instances"
+        for name, display_name in (("instance-a", "Alpha"), ("instance-b", "Beta")):
+            config = InstanceConfig(name=name, display_name=display_name, model=ModelConfig(path=Path("test.gguf")))
+            save_config(config, instances_dir / config.instance_dir_name / "config.json")
+
+        configs = load_all_instances()
+        alpha = configs["instance-a"]
+
+        assert resolve_instance_selector(alpha.instance_uid).name == "config.json"
+        assert resolve_instance_selector(alpha.instance_no or "").name == "config.json"
+        assert resolve_instance_selector("instance-a").name == "config.json"
+        assert resolve_instance_selector("Alpha").name == "config.json"
 
 
 class TestProjectPaths:

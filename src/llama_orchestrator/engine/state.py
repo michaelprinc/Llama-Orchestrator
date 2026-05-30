@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Schema version for migration tracking
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class InstanceStatus(Enum):
@@ -142,10 +142,35 @@ def get_db_path() -> Path:
     return get_state_dir() / "state.sqlite"
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, definition: str) -> None:
+    """Add a column when it does not exist yet."""
+    table_exists = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table,),
+    ).fetchone()
+    if table_exists is None:
+        return
+    columns = {row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()}
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
+def _resolve_identity_fields(name: str) -> tuple[str | None, str | None, str]:
+    """Best-effort resolve config identity metadata for persisted runtime rows."""
+    try:
+        from llama_orchestrator.config import get_instance_config
+
+        config = get_instance_config(name)
+        return config.instance_uid, config.instance_no, config.display_name or config.name
+    except Exception:
+        return None, None, name
+
+
 @contextmanager
 def get_db_connection() -> Iterator[sqlite3.Connection]:
     """Get a database connection with proper cleanup."""
     db_path = get_db_path()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), timeout=10.0)
     conn.row_factory = sqlite3.Row
     
@@ -172,6 +197,9 @@ def init_db() -> None:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS instances (
                 name TEXT PRIMARY KEY,
+                instance_uid TEXT,
+                instance_no TEXT,
+                display_name TEXT,
                 pid INTEGER,
                 status TEXT NOT NULL DEFAULT 'stopped',
                 health TEXT NOT NULL DEFAULT 'unknown',
@@ -188,6 +216,9 @@ def init_db() -> None:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS runtime (
                 name TEXT PRIMARY KEY,
+                instance_uid TEXT,
+                instance_no TEXT,
+                display_name TEXT,
                 pid INTEGER,
                 port INTEGER,
                 cmdline TEXT NOT NULL DEFAULT '',
@@ -209,6 +240,7 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 ts REAL NOT NULL DEFAULT (strftime('%s', 'now')),
                 instance_name TEXT,
+                instance_uid TEXT,
                 level TEXT NOT NULL DEFAULT 'info',
                 event_type TEXT NOT NULL,
                 message TEXT NOT NULL,
@@ -231,6 +263,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS health_history (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 instance_name TEXT NOT NULL,
+                instance_uid TEXT,
                 health TEXT NOT NULL,
                 response_time_ms REAL,
                 error_message TEXT,
@@ -238,11 +271,24 @@ def init_db() -> None:
                 FOREIGN KEY (instance_name) REFERENCES instances(name) ON DELETE CASCADE
             )
         """)
+
+        _ensure_column(conn, "instances", "instance_uid", "TEXT")
+        _ensure_column(conn, "instances", "instance_no", "TEXT")
+        _ensure_column(conn, "instances", "display_name", "TEXT")
+        _ensure_column(conn, "runtime", "instance_uid", "TEXT")
+        _ensure_column(conn, "runtime", "instance_no", "TEXT")
+        _ensure_column(conn, "runtime", "display_name", "TEXT")
+        _ensure_column(conn, "events", "instance_uid", "TEXT")
+        _ensure_column(conn, "health_history", "instance_uid", "TEXT")
         
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_health_history_instance 
             ON health_history(instance_name, checked_at DESC)
         """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_instances_uid ON instances(instance_uid)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_runtime_uid ON runtime(instance_uid)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_events_uid ON events(instance_uid, ts DESC)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_health_history_uid ON health_history(instance_uid, checked_at DESC)")
         
         # V2: Schema info table
         conn.execute("""
@@ -315,6 +361,8 @@ def _migrate_schema(conn: sqlite3.Connection, from_version: int, to_version: int
     
     if from_version < 2 and to_version >= 2:
         _migrate_v1_to_v2(conn)
+    if from_version < 3 and to_version >= 3:
+        _migrate_v2_to_v3(conn)
 
 
 def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
@@ -347,15 +395,33 @@ def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
+    """Migrate from V2 to V3 schema by adding identity columns."""
+    logger.info("Migrating V2 -> V3: Adding instance identity columns")
+    _ensure_column(conn, "instances", "instance_uid", "TEXT")
+    _ensure_column(conn, "instances", "instance_no", "TEXT")
+    _ensure_column(conn, "instances", "display_name", "TEXT")
+    _ensure_column(conn, "runtime", "instance_uid", "TEXT")
+    _ensure_column(conn, "runtime", "instance_no", "TEXT")
+    _ensure_column(conn, "runtime", "display_name", "TEXT")
+    _ensure_column(conn, "events", "instance_uid", "TEXT")
+    _ensure_column(conn, "health_history", "instance_uid", "TEXT")
+    conn.commit()
+
+
 def save_state(state: InstanceState) -> None:
     """Save instance state to database."""
+    instance_uid, instance_no, display_name = _resolve_identity_fields(state.name)
     with get_db_connection() as conn:
         conn.execute("""
             INSERT INTO instances (
-                name, pid, status, health, start_time, 
+                name, instance_uid, instance_no, display_name, pid, status, health, start_time, 
                 last_health_check, restart_count, config_hash, error_message, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(name) DO UPDATE SET
+                instance_uid = excluded.instance_uid,
+                instance_no = excluded.instance_no,
+                display_name = excluded.display_name,
                 pid = excluded.pid,
                 status = excluded.status,
                 health = excluded.health,
@@ -367,6 +433,9 @@ def save_state(state: InstanceState) -> None:
                 updated_at = excluded.updated_at
         """, (
             state.name,
+            instance_uid,
+            instance_no,
+            display_name,
             state.pid,
             state.status.value,
             state.health.value,
@@ -441,11 +510,12 @@ def record_health_check(
     error_message: str = "",
 ) -> None:
     """Record a health check result."""
+    instance_uid, _, _ = _resolve_identity_fields(name)
     with get_db_connection() as conn:
         conn.execute("""
-            INSERT INTO health_history (instance_name, health, response_time_ms, error_message)
-            VALUES (?, ?, ?, ?)
-        """, (name, health.value, response_time_ms, error_message))
+            INSERT INTO health_history (instance_name, instance_uid, health, response_time_ms, error_message)
+            VALUES (?, ?, ?, ?, ?)
+        """, (name, instance_uid, health.value, response_time_ms, error_message))
         
         # Also update the main instance state
         conn.execute("""
@@ -478,14 +548,18 @@ def get_health_history(name: str, limit: int = 10) -> list[dict]:
 
 def save_runtime(runtime: RuntimeState) -> None:
     """Save runtime state to V2 runtime table."""
+    instance_uid, instance_no, display_name = _resolve_identity_fields(runtime.name)
     with get_db_connection() as conn:
         conn.execute("""
             INSERT INTO runtime (
-                name, pid, port, cmdline, binary_version, status, health,
+                name, instance_uid, instance_no, display_name, pid, port, cmdline, binary_version, status, health,
                 started_at, last_seen_at, last_health_ok_at, restart_attempts,
                 last_exit_code, last_error
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(name) DO UPDATE SET
+                instance_uid = excluded.instance_uid,
+                instance_no = excluded.instance_no,
+                display_name = excluded.display_name,
                 pid = excluded.pid,
                 port = excluded.port,
                 cmdline = excluded.cmdline,
@@ -500,6 +574,9 @@ def save_runtime(runtime: RuntimeState) -> None:
                 last_error = excluded.last_error
         """, (
             runtime.name,
+            instance_uid,
+            instance_no,
+            display_name,
             runtime.pid,
             runtime.port,
             runtime.cmdline,
@@ -613,12 +690,16 @@ def log_event(
     Returns:
         Event ID
     """
+    instance_uid = None
+    if instance_name is not None:
+        instance_uid, _, _ = _resolve_identity_fields(instance_name)
     with get_db_connection() as conn:
         cursor = conn.execute("""
-            INSERT INTO events (instance_name, level, event_type, message, meta_json)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO events (instance_name, instance_uid, level, event_type, message, meta_json)
+            VALUES (?, ?, ?, ?, ?, ?)
         """, (
             instance_name,
+            instance_uid,
             level,
             event_type,
             message,
@@ -701,6 +782,32 @@ def cleanup_old_events(retention_days: int = 7) -> int:
 def get_schema_version() -> int:
     """Get current database schema version."""
     return _get_schema_version_from_file()
+
+
+def sync_state_instance_identity(rows: list[dict[str, str]]) -> None:
+    """Backfill additive instance identity columns for persisted state rows."""
+    if not rows:
+        return
+    init_db()
+    with get_db_connection() as conn:
+        for row in rows:
+            conn.execute(
+                "UPDATE instances SET instance_uid = ?, instance_no = ?, display_name = ? WHERE name = ?",
+                (row["instance_uid"], row["instance_no"], row["display_name"], row["name"]),
+            )
+            conn.execute(
+                "UPDATE runtime SET instance_uid = ?, instance_no = ?, display_name = ? WHERE name = ?",
+                (row["instance_uid"], row["instance_no"], row["display_name"], row["name"]),
+            )
+            conn.execute(
+                "UPDATE events SET instance_uid = ? WHERE instance_name = ?",
+                (row["instance_uid"], row["name"]),
+            )
+            conn.execute(
+                "UPDATE health_history SET instance_uid = ? WHERE instance_name = ?",
+                (row["instance_uid"], row["name"]),
+            )
+        conn.commit()
 
 
 # Initialize database on module import
