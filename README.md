@@ -138,7 +138,7 @@ llama-orch down gpt-oss
 | `llama-orch ps` | List all instances |
 | `llama-orch health <name>` | Check instance health |
 | `llama-orch logs <name>` | View stdout, stderr, or merged logs |
-| `llama-orch describe <name>` | Show config, runtime, memory, events, and health history |
+| `llama-orch describe <name>` | Show config, runtime, estimated fit, events, and health history |
 | `llama-orch dashboard` | Live TUI dashboard with recent events panel |
 | `llama-orch gui` | Windows desktop GUI for model management |
 | `llama-orch config validate` | Validate configuration |
@@ -158,6 +158,7 @@ llama-orch down gpt-oss
 
 - `llama-orch up <name> --no-detach` keeps the server attached to the current terminal.
 - `llama-orch logs <name> --stream both` shows merged stdout and stderr output.
+- `llama-orch describe <name>` now includes an `Estimated Memory Fit` section derived from GGUF metadata, effective llama.cpp flags, and any previously logged device inventory. It is advisory and intentionally separate from measured benchmark memory; multi-slot (`--parallel > 1`) instances are reported conservatively as `unknown` unless the estimate already clearly exceeds dedicated VRAM.
 - `llama-orch dashboard --events-for <name>` filters the recent-events panel to one instance.
 - `llama-orch binary remove <uuid>` prompts before deleting the binary directory; use `--force` only for scripted cleanup.
 - Commands return standard exit codes for automation: `2` usage, `10-19` config, `20-39` instance/process, `50-69` binary/daemon.
@@ -417,7 +418,9 @@ The GUI supports:
   is already running.
 - Showing a hideable `Detected GPUs` panel with one device per line, using
   labels such as `Vulkan0` plus adapter names from the current Vulkan loader
-  when available, with llama.cpp stderr as a fallback.
+  when available, with llama.cpp stderr as a fallback. Adapter aliases can be
+  edited from this panel and are shown in the table `GPU` column in place of
+  volatile labels such as `Vulkan0`.
 
 GUI status display intentionally separates engine state from readiness:
 `running + loading` is shown as `loading`, while `running + healthy` is shown
@@ -459,6 +462,10 @@ on GUI launch.
   and active-device lines such as `using device Vulkan1 (Adapter Name)`.
 - If the GPU label is known but no live or log-derived adapter name is available,
   the summary keeps the label and shows `adapter name unavailable`.
+- GPU aliases persist in `state/gpu_aliases.json` keyed by adapter name, not by
+  `VulkanN` label. When driver ordering changes after a reboot, the GUI reapplies
+  the alias to whichever current `VulkanN` label reports that adapter name.
+  Alias values are limited to 10 characters to fit the fixed-width alias button.
 - Quick benchmark fallback sampling uses the same effective runtime resolver and
   samples the primary resolved device when a multi-GPU config declares one.
 
@@ -492,6 +499,12 @@ falls back to parsing the instance `stderr.log`. The fallback prioritizes
 logged Vulkan model buffer size and can estimate `total - free` for the
 configured device. Shared RAM is left unknown in these fallback paths rather
 than guessed, so missing split memory data is reported neutrally.
+
+Measured benchmark memory remains distinct from the config-derived estimate shown
+by `llama-orch describe`. The benchmark path reports observed runtime memory,
+while the describe estimate is a preflight heuristic based on model metadata,
+effective runtime flags, and an optional dedicated-VRAM budget inferred from
+prior device inventory lines.
 
 Historical benchmark rows that only stored `vram_mb` remain readable. The GUI
 derives total memory from the legacy value and omits the shared RAM warning

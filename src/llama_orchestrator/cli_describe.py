@@ -16,7 +16,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from llama_orchestrator.config import get_state_dir
+from llama_orchestrator.config import get_project_root, get_state_dir
+from llama_orchestrator.memory_fit import MemoryFitEstimate, estimate_instance_memory
 
 if TYPE_CHECKING:
     from llama_orchestrator.config import InstanceConfig
@@ -71,17 +72,31 @@ def _get_numeric_attr(obj: object, *names: str, default: int = 0) -> int:
     return default
 
 
+def _memory_estimate_note(estimate: MemoryFitEstimate) -> str | None:
+    """Prefer uncertainty-driving detail over the first generic rationale line."""
+    if estimate.classification == "unknown":
+        for reason in estimate.reasons:
+            lowered = reason.lower()
+            if "budget" in lowered or "unknown" in lowered or "parallel" in lowered or "incomplete" in lowered:
+                return reason
+    if estimate.unsupported_inputs:
+        return f"Unsupported inputs: {', '.join(estimate.unsupported_inputs)}"
+    if estimate.reasons:
+        return estimate.reasons[0]
+    return None
+
+
 @dataclass
 class InstanceDescription:
     """Complete description of an instance."""
-    
+
     # Basic info
     name: str
     display_name: str | None = None
     instance_uid: str | None = None
     instance_no: str | None = None
     config_path: Path | None = None
-    
+
     # Configuration
     model_path: str | None = None
     context_size: int = 0
@@ -93,7 +108,8 @@ class InstanceDescription:
     gpu_device: int = 0
     gpu_layers: int = 0
     effective_command: str | None = None
-    
+    memory_estimate: MemoryFitEstimate | None = None
+
     # Runtime state (V2)
     pid: int | None = None
     status: str = "unknown"
@@ -103,28 +119,28 @@ class InstanceDescription:
     restart_count: int = 0
     memory_percent: float | None = None
     memory_rss_mb: float | None = None
-    
+
     # V2 specific
     config_hash: str | None = None
     binary_version: str | None = None
     last_health_check: datetime | None = None
     last_health_latency_ms: float | None = None
-    
+
     # Process validation
     process_valid: bool = False
     process_exists: bool = False
     process_cmdline: str | None = None
-    
+
     # Events (recent)
     recent_events: list[dict] = field(default_factory=list)
     health_history: list[dict] = field(default_factory=list)
-    
+
     # Paths
     stdout_log: str = ""
     stderr_log: str = ""
     state_db_path: str = ""
     lock_file_path: str = ""
-    
+
     def to_dict(self) -> dict[str, Any]:
         """Convert to dictionary for JSON output."""
         return {
@@ -146,6 +162,7 @@ class InstanceDescription:
                     "layers": self.gpu_layers,
                 },
                 "effective_command": self.effective_command,
+                "memory_estimate": self.memory_estimate.to_dict() if self.memory_estimate else None,
             },
             "runtime": {
                 "pid": self.pid,
@@ -175,18 +192,18 @@ class InstanceDescription:
                 "lock_file": self.lock_file_path,
             },
         }
-    
+
     @property
     def uptime_str(self) -> str:
         """Get human-readable uptime string."""
         if self.uptime_seconds <= 0:
             return "-"
-        
+
         seconds = int(self.uptime_seconds)
         days, seconds = divmod(seconds, 86400)
         hours, seconds = divmod(seconds, 3600)
         minutes, seconds = divmod(seconds, 60)
-        
+
         parts = []
         if days:
             parts.append(f"{days}d")
@@ -196,9 +213,9 @@ class InstanceDescription:
             parts.append(f"{minutes}m")
         if seconds or not parts:
             parts.append(f"{seconds}s")
-        
+
         return " ".join(parts[:2])  # Show at most 2 units
-    
+
     @property
     def status_color(self) -> str:
         """Get Rich color for status."""
@@ -211,7 +228,7 @@ class InstanceDescription:
             "unknown": "dim",
         }
         return colors.get(self.status.lower(), "dim")
-    
+
     @property
     def health_color(self) -> str:
         """Get Rich color for health."""
@@ -226,31 +243,31 @@ class InstanceDescription:
 
 def build_description(
     name: str,
-    config: "InstanceConfig | None" = None,
-    runtime: "RuntimeState | None" = None,
+    config: InstanceConfig | None = None,
+    runtime: RuntimeState | None = None,
     include_events: bool = True,
     event_limit: int = 10,
 ) -> InstanceDescription:
     """
     Build a complete instance description.
-    
+
     Args:
         name: Instance name
         config: Instance configuration (optional)
         runtime: Runtime state from V2 DB (optional)
         include_events: Whether to include recent events
         event_limit: Maximum number of events to include
-        
+
     Returns:
         InstanceDescription with all available information
     """
-    from llama_orchestrator.engine.command import build_command
+    from llama_orchestrator.engine.command import build_command, format_command
     from llama_orchestrator.engine.process import get_process_info
     from llama_orchestrator.engine.state import get_health_history, get_recent_events, load_runtime
     from llama_orchestrator.engine.validator import validate_process
-    
+
     desc = InstanceDescription(name=name)
-    
+
     # Fill in config info
     if config:
         desc.display_name = config.display_name or config.name
@@ -269,20 +286,33 @@ def build_description(
         desc.gpu_backend = config.gpu.backend
         desc.gpu_device = config.gpu.device_id
         desc.gpu_layers = config.gpu.layers
+        built_command: list[str] | None = None
         try:
-            desc.effective_command = " ".join(build_command(config))
+            built_command = build_command(config)
+            desc.effective_command = format_command(built_command)
         except Exception as e:
             logger.debug(f"Could not build effective command for {name}: {e}")
         desc.stdout_log = config.logs.stdout.format(name=name)
         desc.stderr_log = config.logs.stderr.format(name=name)
-    
+        try:
+            stderr_log = Path(desc.stderr_log)
+            if not stderr_log.is_absolute():
+                stderr_log = get_project_root() / stderr_log
+            desc.memory_estimate = estimate_instance_memory(
+                config,
+                effective_command=built_command,
+                stderr_log=stderr_log,
+            )
+        except Exception as e:
+            logger.debug(f"Could not estimate memory fit for {name}: {e}")
+
     # Get or use provided runtime state
     if runtime is None:
         try:
             runtime = load_runtime(name)
         except Exception as e:
             logger.debug(f"Could not load runtime for {name}: {e}")
-    
+
     if runtime:
         desc.pid = runtime.pid
         desc.status = _enum_or_value(getattr(runtime, "status", None))
@@ -295,11 +325,11 @@ def build_description(
             getattr(runtime, "last_seen_at", getattr(runtime, "last_health_check", None))
         )
         desc.last_health_latency_ms = getattr(runtime, "last_health_latency_ms", None)
-        
+
         # Calculate uptime
         if desc.started_at:
             desc.uptime_seconds = (datetime.now() - desc.started_at).total_seconds()
-        
+
         # Validate process
         if runtime.pid:
             try:
@@ -327,7 +357,7 @@ def build_description(
                         desc.memory_rss_mb = float(memory_rss) / (1024 * 1024)
             except Exception as e:
                 logger.debug(f"Could not gather process memory info: {e}")
-    
+
     # Get recent events
     if include_events:
         try:
@@ -358,26 +388,26 @@ def build_description(
             ]
         except Exception as e:
             logger.debug(f"Could not get health history: {e}")
-    
+
     # Set paths
     desc.state_db_path = str(get_state_dir() / "state.sqlite")
     desc.lock_file_path = f"state/{name}.lock"
-    
+
     return desc
 
 
 def format_description_rich(desc: InstanceDescription) -> str:
     """
     Format instance description for Rich panel output.
-    
+
     Args:
         desc: Instance description
-        
+
     Returns:
         Formatted string for Rich panel
     """
     lines = []
-    
+
     # Configuration section
     lines.append("[bold cyan]Configuration[/bold cyan]")
     lines.append(f"  Display name: {desc.display_name or desc.name}")
@@ -399,7 +429,27 @@ def format_description_rich(desc: InstanceDescription) -> str:
     if desc.effective_command:
         lines.append(f"  Command:      {desc.effective_command}")
     lines.append("")
-    
+
+    if desc.memory_estimate:
+        estimate = desc.memory_estimate
+        lines.append("[bold cyan]Estimated Memory Fit[/bold cyan]")
+        lines.append(f"  Class:        {estimate.classification}")
+        lines.append(f"  Confidence:   {estimate.confidence}")
+        if estimate.estimated_total_required_mb is not None:
+            lines.append(f"  Required:     {estimate.estimated_total_required_mb:.1f} MiB")
+        if estimate.estimated_model_resident_mb is not None:
+            lines.append(f"  Model:        {estimate.estimated_model_resident_mb:.1f} MiB")
+        if estimate.estimated_kv_cache_mb is not None:
+            lines.append(f"  KV Cache:     {estimate.estimated_kv_cache_mb:.1f} MiB")
+        if estimate.budget_mb_used is not None:
+            lines.append(f"  Budget:       {estimate.budget_mb_used:.1f} MiB")
+        if estimate.estimated_shared_ram_mb_lower_bound is not None and estimate.estimated_shared_ram_mb_lower_bound > 0:
+            lines.append(f"  Shared RAM:   >={estimate.estimated_shared_ram_mb_lower_bound:.1f} MiB")
+        note = _memory_estimate_note(estimate)
+        if note:
+            lines.append(f"  Note:         {note}")
+        lines.append("")
+
     # Runtime section
     lines.append("[bold cyan]Runtime Status[/bold cyan]")
     lines.append(f"  Status:       [{desc.status_color}]{desc.status}[/{desc.status_color}]")
@@ -413,7 +463,7 @@ def format_description_rich(desc: InstanceDescription) -> str:
             memory_details += f" ({desc.memory_percent:.1f}%)"
         lines.append(f"  Memory:       {memory_details}")
     lines.append("")
-    
+
     # V2 Runtime Details
     if desc.config_hash or desc.binary_version:
         lines.append("[bold cyan]Runtime Details (V2)[/bold cyan]")
@@ -423,10 +473,10 @@ def format_description_rich(desc: InstanceDescription) -> str:
             lines.append(f"  Binary:       {desc.binary_version}")
         if desc.last_health_check:
             lines.append(f"  Last Check:   {desc.last_health_check.strftime('%H:%M:%S')}")
-        if desc.last_health_latency_ms:
+        if desc.last_health_latency_ms is not None:
             lines.append(f"  Latency:      {desc.last_health_latency_ms:.1f}ms")
         lines.append("")
-    
+
     # Process validation
     if desc.pid:
         lines.append("[bold cyan]Process Validation[/bold cyan]")
@@ -438,7 +488,7 @@ def format_description_rich(desc: InstanceDescription) -> str:
             cmdline_short = desc.process_cmdline[:60] + "..." if len(desc.process_cmdline) > 60 else desc.process_cmdline
             lines.append(f"  Cmdline:      {cmdline_short}")
         lines.append("")
-    
+
     # Recent events
     if desc.recent_events:
         lines.append("[bold cyan]Recent Events[/bold cyan]")
@@ -457,12 +507,12 @@ def format_description_rich(desc: InstanceDescription) -> str:
             latency = f" ({response_time:.1f}ms)" if isinstance(response_time, int | float) else ""
             lines.append(f"  [{checked_at}] {entry.get('health', 'unknown')}{latency}")
         lines.append("")
-    
+
     # Paths section
     lines.append("[bold cyan]Paths[/bold cyan]")
     lines.append(f"  Config:       {desc.config_path or Path(f'instances/{desc.name}/config.json')}")
     lines.append(f"  Stdout:       {desc.stdout_log}")
     lines.append(f"  Stderr:       {desc.stderr_log}")
     lines.append(f"  State DB:     {desc.state_db_path}")
-    
+
     return "\n".join(lines)

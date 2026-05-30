@@ -29,7 +29,11 @@ from llama_orchestrator.gui import (
     format_download_progress,
     format_model_size_gb,
     format_queue_checkbox,
+    format_runtime_gpu_display,
     format_serial_benchmark_progress,
+    instance_alias_exists,
+    load_gpu_aliases,
+    normalize_gpu_alias,
     normalize_model_path_for_config,
     ordered_visible_names,
     parse_tag_string,
@@ -38,7 +42,7 @@ from llama_orchestrator.gui import (
     resolve_instance_config_path,
     resolve_models_directory_input,
     run_serial_benchmark_queue,
-    instance_alias_exists,
+    save_gpu_aliases,
     update_instance_display_name,
 )
 from llama_orchestrator.hf_import import DownloadProgress
@@ -464,6 +468,78 @@ def test_format_detected_gpu_summary_lists_each_device_on_its_own_line() -> None
         "Vulkan0 - AMD Radeon(TM) Graphics\n"
         "Vulkan1 - adapter name unavailable"
     )
+
+
+def test_format_detected_gpu_summary_shows_alias_next_to_adapter_name() -> None:
+    """Detected GPU rows should expose aliases without replacing adapter names."""
+    summary = format_detected_gpu_summary(
+        [
+            DetectedGpu(label="Vulkan0", name="AMD Radeon(TM) Graphics"),
+            DetectedGpu(label="Vulkan1", name="AMD Radeon RX 6800"),
+        ],
+        {"AMD Radeon RX 6800": "RX6800"},
+    )
+
+    assert summary == (
+        "Vulkan0 - AMD Radeon(TM) Graphics\n"
+        "Vulkan1 [RX6800] - AMD Radeon RX 6800"
+    )
+
+
+def test_format_runtime_gpu_display_uses_alias_by_adapter_name_not_vulkan_label() -> None:
+    """Aliases should follow adapter names even when Vulkan labels are reordered."""
+    aliases = {
+        "AMD Radeon(TM) Graphics": "iGPU",
+        "AMD Radeon RX 6800": "RX6800",
+    }
+    before_reboot = [
+        DetectedGpu(label="Vulkan0", name="AMD Radeon(TM) Graphics"),
+        DetectedGpu(label="Vulkan1", name="AMD Radeon RX 6800"),
+    ]
+    after_reboot = [
+        DetectedGpu(label="Vulkan0", name="AMD Radeon RX 6800"),
+        DetectedGpu(label="Vulkan1", name="AMD Radeon(TM) Graphics"),
+    ]
+
+    assert format_runtime_gpu_display(("Vulkan1",), before_reboot, aliases) == "RX6800"
+    assert format_runtime_gpu_display(("Vulkan0",), after_reboot, aliases) == "RX6800"
+    assert format_runtime_gpu_display(("Vulkan1",), after_reboot, aliases) == "iGPU"
+
+
+def test_format_runtime_gpu_display_falls_back_to_vulkan_label_without_alias() -> None:
+    """Rows should remain readable when the adapter name or alias is unavailable."""
+    assert format_runtime_gpu_display(
+        ("Vulkan0", "Vulkan1"),
+        [DetectedGpu(label="Vulkan0", name="AMD Radeon RX 6800")],
+        {},
+    ) == "Vulkan0, Vulkan1"
+
+
+def test_gpu_alias_persistence_clamps_to_valid_entries(monkeypatch, tmp_path: Path) -> None:
+    """Persisted aliases are keyed by adapter names and ignore blank values."""
+    monkeypatch.setattr("llama_orchestrator.gui.get_state_dir", lambda: tmp_path)
+
+    saved_path = save_gpu_aliases(
+        {
+            "AMD Radeon RX 6800": "RX6800",
+            "AMD Radeon(TM) Graphics": "",
+        }
+    )
+
+    assert saved_path == tmp_path / "gpu_aliases.json"
+    assert load_gpu_aliases() == {"AMD Radeon RX 6800": "RX6800"}
+
+
+def test_normalize_gpu_alias_enforces_ten_character_limit() -> None:
+    """Alias values should fit the fixed-width GUI alias button."""
+    assert normalize_gpu_alias("  RX 6800  ") == "RX 6800"
+
+    try:
+        normalize_gpu_alias("12345678901")
+    except ValueError as exc:
+        assert "10 characters" in str(exc)
+    else:
+        raise AssertionError("Expected ValueError for a too-long GPU alias")
 
 
 def test_memory_column_width_matches_expanded_display_text() -> None:

@@ -8,6 +8,7 @@ management surface works on Windows without adding runtime dependencies.
 from __future__ import annotations
 
 import difflib
+import json
 import os
 import queue
 import shlex
@@ -40,6 +41,7 @@ from llama_orchestrator.config import (
     discover_instances,
     get_instance_config,
     get_project_root,
+    get_state_dir,
     load_all_instances,
     save_config,
 )
@@ -112,6 +114,8 @@ CPU_ACTIVE_GLYPH = "\u2713"
 QUEUE_UNCHECKED_GLYPH = "\u2610"
 QUEUE_CHECKED_GLYPH = "\u2611"
 RUNNING_BENCHMARK_ROW_TAG = "running_benchmark"
+GPU_ALIAS_MAX_LENGTH = 10
+GPU_ALIAS_BUTTON_WIDTH = GPU_ALIAS_MAX_LENGTH
 
 ALL_COLUMNS = (
     "queue",
@@ -412,15 +416,104 @@ def format_cpu_indicator(cpu_active: bool) -> str:
     return CPU_ACTIVE_GLYPH if cpu_active else ""
 
 
-def format_detected_gpu_summary(gpus: Sequence[DetectedGpu]) -> str:
+def normalize_gpu_alias(value: str) -> str:
+    """Normalize an adapter alias and enforce the GUI display limit."""
+    normalized = " ".join(value.strip().split())
+    if len(normalized) > GPU_ALIAS_MAX_LENGTH:
+        raise ValueError(f"GPU alias must be at most {GPU_ALIAS_MAX_LENGTH} characters.")
+    return normalized
+
+
+def get_gpu_aliases_path() -> Path:
+    """Return the persisted adapter-name alias mapping path."""
+    return get_state_dir() / "gpu_aliases.json"
+
+
+def load_gpu_aliases() -> dict[str, str]:
+    """Load GPU aliases keyed by detected adapter name."""
+    path = get_gpu_aliases_path()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+    raw_aliases = data.get("aliases") if isinstance(data, dict) else None
+    if not isinstance(raw_aliases, dict):
+        raw_aliases = data if isinstance(data, dict) else {}
+
+    aliases: dict[str, str] = {}
+    for raw_name, raw_alias in raw_aliases.items():
+        name = str(raw_name).strip()
+        if not name:
+            continue
+        try:
+            alias = normalize_gpu_alias(str(raw_alias))
+        except ValueError:
+            alias = str(raw_alias).strip()[:GPU_ALIAS_MAX_LENGTH]
+        if alias:
+            aliases[name] = alias
+    return aliases
+
+
+def save_gpu_aliases(aliases: dict[str, str]) -> Path:
+    """Persist GPU aliases keyed by adapter name."""
+    cleaned: dict[str, str] = {}
+    for raw_name, raw_alias in aliases.items():
+        name = raw_name.strip()
+        if not name:
+            continue
+        alias = normalize_gpu_alias(raw_alias)
+        if alias:
+            cleaned[name] = alias
+
+    path = get_gpu_aliases_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps({"aliases": dict(sorted(cleaned.items()))}, indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return path
+
+
+def gpu_alias_for_label(
+    label: str,
+    gpus: Sequence[DetectedGpu],
+    aliases: dict[str, str],
+) -> str | None:
+    """Resolve a display alias for the current GPU label through the adapter name."""
+    for gpu in gpus:
+        if gpu.label == label and gpu.name:
+            return aliases.get(gpu.name)
+    return None
+
+
+def format_runtime_gpu_display(
+    labels: Sequence[str],
+    gpus: Sequence[DetectedGpu],
+    aliases: dict[str, str],
+) -> str:
+    """Render runtime GPU labels, replacing known adapter names with aliases."""
+    if not labels:
+        return "-"
+    return ", ".join(gpu_alias_for_label(label, gpus, aliases) or label for label in labels)
+
+
+def format_detected_gpu_summary(gpus: Sequence[DetectedGpu], aliases: dict[str, str] | None = None) -> str:
     """Format a multiline GPU inventory summary for the toolbar panel."""
     if not gpus:
         return (
             "No GPU mapping detected yet. Start or benchmark a GPU-backed instance "
             "to capture VulkanN adapter names."
         )
+    aliases = aliases or {}
     return "\n".join(
-        f"{gpu.label} - {gpu.name}" if gpu.name else f"{gpu.label} - adapter name unavailable"
+        (
+            f"{gpu.label} [{alias}] - {gpu.name}"
+            if gpu.name and (alias := aliases.get(gpu.name))
+            else f"{gpu.label} - {gpu.name}"
+            if gpu.name
+            else f"{gpu.label} - adapter name unavailable"
+        )
         for gpu in gpus
     )
 
@@ -594,6 +687,8 @@ class LlamaOrchestratorGui(tk.Tk):
         self.prompt_var = tk.StringVar(value=self.benchmark_settings.prompt_file.name)
         self.show_gpu_inventory_var = tk.BooleanVar(value=True)
         self.gpu_inventory_var = tk.StringVar(value=format_detected_gpu_summary(()))
+        self.gpu_aliases = load_gpu_aliases()
+        self._detected_gpus: tuple[DetectedGpu, ...] = ()
         self._queued_benchmark_names: set[str] = set()
         self._benchmark_active_name: str | None = None
         self._benchmark_job_lock = threading.Lock()
@@ -686,11 +781,9 @@ class LlamaOrchestratorGui(tk.Tk):
         self.gpu_inventory_frame = ttk.LabelFrame(table_frame, text="Detected GPUs", padding=(8, 6))
         self.gpu_inventory_frame.columnconfigure(0, weight=1)
         self.gpu_inventory_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
-        ttk.Label(
-            self.gpu_inventory_frame,
-            textvariable=self.gpu_inventory_var,
-            justify=tk.LEFT,
-        ).grid(row=0, column=0, sticky="w")
+        self.gpu_inventory_rows = ttk.Frame(self.gpu_inventory_frame)
+        self.gpu_inventory_rows.columnconfigure(2, weight=1)
+        self.gpu_inventory_rows.grid(row=0, column=0, sticky="ew")
 
         self.tree = ttk.Treeview(table_frame, columns=ALL_COLUMNS, show="headings", selectmode="extended")
         for column in ALL_COLUMNS:
@@ -806,6 +899,71 @@ class LlamaOrchestratorGui(tk.Tk):
         else:
             self.gpu_inventory_frame.grid_remove()
 
+    def _render_gpu_inventory(self, gpus: Sequence[DetectedGpu]) -> None:
+        for child in self.gpu_inventory_rows.winfo_children():
+            child.destroy()
+
+        if not gpus:
+            ttk.Label(
+                self.gpu_inventory_rows,
+                text=self.gpu_inventory_var.get(),
+                justify=tk.LEFT,
+            ).grid(row=0, column=0, columnspan=3, sticky="w")
+            return
+
+        ttk.Label(self.gpu_inventory_rows, text="Device").grid(row=0, column=0, sticky="w")
+        ttk.Label(self.gpu_inventory_rows, text="Alias").grid(row=0, column=1, sticky="w", padx=(8, 8))
+        ttk.Label(self.gpu_inventory_rows, text="Adapter").grid(row=0, column=2, sticky="w")
+
+        for row_index, gpu in enumerate(gpus, start=1):
+            ttk.Label(self.gpu_inventory_rows, text=gpu.label).grid(row=row_index, column=0, sticky="w")
+            alias = self.gpu_aliases.get(gpu.name or "", "")
+            alias_button = ttk.Button(
+                self.gpu_inventory_rows,
+                text=alias or "-",
+                width=GPU_ALIAS_BUTTON_WIDTH,
+                command=lambda adapter_name=gpu.name: self._edit_gpu_alias(adapter_name),
+            )
+            if not gpu.name:
+                alias_button.configure(state=tk.DISABLED)
+            alias_button.grid(row=row_index, column=1, sticky="w", padx=(8, 8), pady=(2, 0))
+            ttk.Label(
+                self.gpu_inventory_rows,
+                text=gpu.name or "adapter name unavailable",
+            ).grid(row=row_index, column=2, sticky="w", pady=(2, 0))
+
+    def _edit_gpu_alias(self, adapter_name: str | None) -> None:
+        if not adapter_name:
+            return
+        current = self.gpu_aliases.get(adapter_name, "")
+        value = simpledialog.askstring(
+            "GPU alias",
+            f"Alias for {adapter_name}\nMaximum {GPU_ALIAS_MAX_LENGTH} characters. Blank clears alias.",
+            initialvalue=current,
+            parent=self,
+        )
+        if value is None:
+            return
+        try:
+            alias = normalize_gpu_alias(value)
+        except ValueError as exc:
+            messagebox.showerror("Invalid GPU alias", str(exc), parent=self)
+            return
+
+        if alias:
+            self.gpu_aliases[adapter_name] = alias
+        else:
+            self.gpu_aliases.pop(adapter_name, None)
+
+        try:
+            save_gpu_aliases(self.gpu_aliases)
+        except Exception as exc:
+            messagebox.showerror("Save GPU alias failed", str(exc), parent=self)
+            return
+
+        self._post_message(f"Saved GPU alias for {adapter_name}: {alias or 'cleared'}.")
+        self.refresh()
+
     def _schedule_message_pump(self) -> None:
         self._pump_messages()
         self.after(250, self._schedule_message_pump)
@@ -843,24 +1001,28 @@ class LlamaOrchestratorGui(tk.Tk):
 
         states = list_instances()
         configs = load_all_instances()
+        detected_gpus = collect_detected_gpu_inventory(configs.values())
+        self._detected_gpus = tuple(detected_gpus)
         all_names = sorted(set(states) | set(configs))
         active_tag = self.tag_filter_var.get()
         all_tags: set[str] = set()
         visible_names: set[str] = set()
         latest_results = latest_benchmark_results()
-        loaded_configs: list[InstanceConfig] = []
         rows: list[TableRow] = []
 
         for name in all_names:
             state = states.get(name)
             try:
                 config = configs[name]
-                loaded_configs.append(config)
                 display_name = config.display_name
                 runtime_selection = describe_effective_runtime(config)
                 port = str(config.server.port)
                 backend = config.gpu.backend
-                gpu = runtime_selection.gpu_display
+                gpu = format_runtime_gpu_display(
+                    runtime_selection.gpu_labels if runtime_selection.gpu_active else (),
+                    detected_gpus,
+                    self.gpu_aliases,
+                )
                 cpu = format_cpu_indicator(runtime_selection.cpu_active)
                 cpu_active = runtime_selection.cpu_active
                 tags = ", ".join(config.tags) if config.tags else "-"
@@ -977,9 +1139,8 @@ class LlamaOrchestratorGui(tk.Tk):
             tags = (RUNNING_BENCHMARK_ROW_TAG,) if row.name == self._benchmark_active_name else ()
             self.tree.insert("", tk.END, iid=row.name, values=row.values, tags=tags)
 
-        self.gpu_inventory_var.set(
-            format_detected_gpu_summary(collect_detected_gpu_inventory(loaded_configs))
-        )
+        self.gpu_inventory_var.set(format_detected_gpu_summary(detected_gpus, self.gpu_aliases))
+        self._render_gpu_inventory(detected_gpus)
 
         filter_values = ("All tags", *sorted(all_tags))
         self.tag_filter.configure(values=filter_values)

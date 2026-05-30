@@ -10,6 +10,7 @@ from llama_orchestrator.cli_describe import (
     build_description,
     format_description_rich,
 )
+from llama_orchestrator.memory_fit import MemoryFitEstimate
 
 
 class TestInstanceDescription:
@@ -37,6 +38,11 @@ class TestInstanceDescription:
             pid=12345,
             memory_percent=10.5,
             memory_rss_mb=256.0,
+            memory_estimate=MemoryFitEstimate(
+                classification="unknown",
+                confidence="low",
+                estimated_total_required_mb=1024.0,
+            ),
         )
 
         result = desc.to_dict()
@@ -47,6 +53,7 @@ class TestInstanceDescription:
         assert result["runtime"]["pid"] == 12345
         assert result["runtime"]["memory_percent"] == 10.5
         assert result["runtime"]["memory_rss_mb"] == 256.0
+        assert result["configuration"]["memory_estimate"]["classification"] == "unknown"
 
     def test_uptime_str_zero(self):
         """Test uptime string when zero."""
@@ -122,11 +129,17 @@ class TestBuildDescription:
     @patch("llama_orchestrator.engine.state.load_runtime")
     @patch("llama_orchestrator.engine.state.get_recent_events")
     @patch("llama_orchestrator.engine.command.build_command")
-    def test_build_with_config(self, mock_build_command, mock_events, mock_load_runtime):
+    @patch("llama_orchestrator.cli_describe.estimate_instance_memory")
+    def test_build_with_config(self, mock_estimate, mock_build_command, mock_events, mock_load_runtime):
         """Test building description with config."""
         mock_load_runtime.return_value = None
         mock_events.return_value = []
         mock_build_command.return_value = ["llama-server", "--port", "8080"]
+        mock_estimate.return_value = MemoryFitEstimate(
+            classification="fits_dedicated_vram",
+            confidence="medium",
+            estimated_total_required_mb=4096.0,
+        )
 
         config = MagicMock()
         config.model.path = "/path/to/model.gguf"
@@ -148,6 +161,8 @@ class TestBuildDescription:
         assert desc.port == 8080
         assert desc.gpu_backend == "vulkan"
         assert desc.effective_command == "llama-server --port 8080"
+        assert desc.memory_estimate is not None
+        assert desc.memory_estimate.classification == "fits_dedicated_vram"
 
     @patch("llama_orchestrator.engine.process.get_process_info")
     @patch("llama_orchestrator.engine.validator.validate_process")
@@ -269,6 +284,21 @@ class TestFormatDescriptionRich:
         assert "Config Hash" in output
         assert "Binary" in output
 
+    def test_format_with_zero_latency(self):
+        """Zero-valued latency should still be rendered."""
+        desc = InstanceDescription(
+            name="test",
+            config_hash="abc123def456",
+            binary_version="b1234",
+            last_health_check=datetime.now(),
+            last_health_latency_ms=0.0,
+        )
+
+        output = format_description_rich(desc)
+
+        assert "Latency:" in output
+        assert "0.0ms" in output
+
     def test_format_with_process_validation(self):
         """Test formatting with process validation."""
         desc = InstanceDescription(
@@ -341,6 +371,48 @@ class TestFormatDescriptionRich:
         assert "512.0 MiB" in output
         assert "Health History" in output
         assert "healthy" in output
+
+    def test_format_with_estimated_memory_fit(self):
+        """Test that estimated fit output is clearly labeled and rendered."""
+        desc = InstanceDescription(
+            name="test",
+            memory_estimate=MemoryFitEstimate(
+                classification="likely_shared_ram",
+                confidence="medium",
+                estimated_total_required_mb=10240.0,
+                estimated_model_resident_mb=8192.0,
+                estimated_kv_cache_mb=1536.0,
+                budget_mb_used=8192.0,
+                estimated_shared_ram_mb_lower_bound=2048.0,
+                reasons=("Dedicated VRAM budget was inferred from prior llama.cpp device inventory log lines.",),
+            ),
+        )
+
+        output = format_description_rich(desc)
+
+        assert "Estimated Memory Fit" in output
+        assert "likely_shared_ram" in output
+        assert "10240.0 MiB" in output
+        assert ">=2048.0 MiB" in output
+
+    def test_format_with_unknown_estimate_prefers_uncertainty_note(self):
+        """Unknown estimates should surface the missing-budget or ambiguity reason first."""
+        desc = InstanceDescription(
+            name="test",
+            memory_estimate=MemoryFitEstimate(
+                classification="unknown",
+                confidence="low",
+                estimated_total_required_mb=4096.0,
+                reasons=(
+                    "Model residency uses GGUF block_count=32 with gpu_layers=999.",
+                    "Dedicated VRAM budget is unavailable, so fit classification remains unknown.",
+                ),
+            ),
+        )
+
+        output = format_description_rich(desc)
+
+        assert "Dedicated VRAM budget is unavailable" in output
 
 
 class TestDescribeIntegration:

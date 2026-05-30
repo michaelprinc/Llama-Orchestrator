@@ -12,6 +12,7 @@ def test_dashboard_layout_includes_recent_events_panel() -> None:
     mock_state.status.value = "running"
     mock_state.health.value = "healthy"
     mock_config = MagicMock()
+    mock_config.display_name = "alpha"
     mock_config.server.port = 8001
     mock_config.gpu.backend = "cpu"
     mock_config.model.path.name = "model.gguf"
