@@ -48,10 +48,7 @@
         "q4_0",
         "--cache-type-v",
         "q4_0",
-        "--cache-type-k-draft",
-        "q4_0",
-        "--cache-type-v-draft",
-        "q4_0",
+        
         "--no-mmproj",
         "--jinja",
         "--reasoning",
@@ -59,11 +56,7 @@
         "--flash-attn",
         "on",
         "--ubatch-size",
-        "256",
-        "--spec-type",
-        "draft-mtp",
-        "--spec-draft-n-max",
-        "2"
+        "256"
     ],
     "parameter_mutability": {
         "static": [
