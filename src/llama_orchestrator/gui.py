@@ -816,6 +816,8 @@ class LlamaOrchestratorGui(tk.Tk):
         self.context_menu.add_command(label="Rename display name", command=self._rename_display_name)
         self.context_menu.add_command(label="Copy as CLI command", command=self._copy_cli_command)
         self.context_menu.add_separator()
+        self.context_menu.add_command(label="Export config to VS Code", command=self._export_config_to_vscode)
+        self.context_menu.add_separator()
         self.context_menu.add_command(label="Open config", command=self._open_config)
         self.context_menu.add_command(label="Open config folder", command=self._open_config_folder)
 
@@ -1957,6 +1959,126 @@ class LlamaOrchestratorGui(tk.Tk):
             raise RuntimeError("Daemon did not stop cleanly")
 
         self._run_background("stop daemon", action)
+
+    def _export_config_to_vscode(self) -> None:
+        """Export the selected instance's configuration as a VS Code-compatible JSON file."""
+        name = self._selected_instance()
+        if not name:
+            return
+
+        try:
+            config = get_instance_config(name)
+        except Exception as exc:
+            messagebox.showerror("Export failed", f"Could not load config for {name}: {exc}")
+            return
+
+        # Build the export dict matching VS Code config.json schema
+        export_data = {
+            "name": config.name,
+            "schema_version": config.schema_version,
+            "instance_uid": config.instance_uid,
+            "display_name": config.display_name,
+            "created_at": config.created_at,
+            "updated_at": config.updated_at,
+        }
+
+        # Binary config
+        if config.binary is not None:
+            export_data["binary"] = {
+                "binary_id": str(config.binary.binary_id) if config.binary.binary_id else None,
+                "version": config.binary.version,
+                "variant": config.binary.variant,
+                "source_url": str(config.binary.source_url) if config.binary.source_url else None,
+                "sha256": config.binary.sha256,
+            }
+
+        # Model config
+        export_data["model"] = {
+            "path": str(config.model.path),
+            "context_size": config.model.context_size,
+            "batch_size": config.model.batch_size,
+            "threads": config.model.threads,
+        }
+
+        # Server config
+        export_data["server"] = {
+            "host": config.server.host,
+            "port": config.server.port,
+            "timeout": config.server.timeout,
+            "parallel": config.server.parallel,
+        }
+
+        # GPU config
+        export_data["gpu"] = {
+            "backend": config.gpu.backend,
+            "device_id": config.gpu.device_id,
+            "layers": config.gpu.layers,
+        }
+
+        # Environment variables
+        export_data["env"] = config.env
+
+        # CLI args
+        export_data["args"] = config.args
+
+        # Tags
+        export_data["tags"] = config.tags
+
+        # Healthcheck
+        export_data["healthcheck"] = {
+            "type": config.healthcheck.type,
+            "path": config.healthcheck.path,
+            "expected_status": config.healthcheck.expected_status,
+            "expected_body": config.healthcheck.expected_body,
+            "custom_script": config.healthcheck.custom_script,
+            "interval": config.healthcheck.interval,
+            "timeout": config.healthcheck.timeout,
+            "retries": config.healthcheck.retries,
+            "retry_delay": config.healthcheck.retry_delay,
+            "start_period": config.healthcheck.start_period,
+            "backoff_enabled": config.healthcheck.backoff_enabled,
+            "backoff_base": config.healthcheck.backoff_base,
+            "backoff_max": config.healthcheck.backoff_max,
+            "backoff_jitter": config.healthcheck.backoff_jitter,
+        }
+
+        # Restart policy
+        export_data["restart_policy"] = {
+            "enabled": config.restart_policy.enabled,
+            "max_retries": config.restart_policy.max_retries,
+            "backoff_multiplier": config.restart_policy.backoff_multiplier,
+            "initial_delay": config.restart_policy.initial_delay,
+            "max_delay": config.restart_policy.max_delay,
+        }
+
+        # Logs config
+        export_data["logs"] = {
+            "stdout": config.logs.stdout,
+            "stderr": config.logs.stderr,
+            "max_size_mb": config.logs.max_size_mb,
+            "rotation": config.logs.rotation,
+        }
+
+        # Open file dialog for save location
+        default_filename = f"{name}_config.json"
+        save_path = filedialog.asksaveasfilename(
+            title=f"Export config for '{name}'",
+            defaultextension=".json",
+            filetypes=[("JSON files", "*.json"), ("All files", "*.*")],
+            initialfile=default_filename,
+            initialdir=str(self.project_root),
+        )
+
+        if not save_path:
+            self._post_message(f"Export cancelled for {name}.")
+            return
+
+        try:
+            with open(save_path, "w", encoding="utf-8") as f:
+                json.dump(export_data, f, indent=4, ensure_ascii=False)
+            self._post_message(f"Exported config for {name} to {save_path}.")
+        except OSError as exc:
+            messagebox.showerror("Export failed", f"Could not save file: {exc}")
 
     def _open_config(self) -> None:
         name = self._selected_instance()

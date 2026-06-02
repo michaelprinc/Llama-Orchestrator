@@ -1,11 +1,11 @@
 {
-    "name": "qwen36_35b_a3b_mtp_iq3xxs_rx6800_cpu_100k",
+    "name": "qwen36_35b_a3b_mtp_iq3xxs_rx6800_cache_mtp_256k",
     "schema_version": "2",
-    "instance_uid": "6cdc3929-f235-48ed-84c4-481e59709350",
-    "instance_no": "00000056",
-    "display_name": "qwen36_35b_a3b_mtp_iq3xxs_rx6800_cpu_100k",
-    "created_at": "2026-05-30T19:14:20Z",
-    "updated_at": "2026-05-30T19:19:32Z",
+    "instance_uid": "3fd6ee81-3def-4e1e-a849-7b3955169693",
+    "instance_no": "00000066",
+    "display_name": "qwen36_35b_a3b_mtp_iq3xxs_rx6800_cache_mtp_256k",
+    "created_at": "2026-06-02T20:45:00Z",
+    "updated_at": "2026-06-02T20:45:00Z",
     "sort_order": null,
     "binary": {
         "binary_id": "1e155a2a-7cbc-4077-affd-19b476f15ef6",
@@ -22,7 +22,7 @@
     },
     "server": {
         "host": "127.0.0.1",
-        "port": 8061,
+        "port": 8068,
         "timeout": 900,
         "parallel": 1
     },
@@ -48,6 +48,20 @@
         "q4_0",
         "--cache-type-v",
         "q4_0",
+        "--cache-type-k-draft",
+        "q4_0",
+        "--cache-type-v-draft",
+        "q4_0",
+        "--cache-reuse",
+        "128",
+        "--ctx-checkpoints",
+        "32",
+        "--checkpoint-every-n-tokens",
+        "4096",
+        "--cache-ram",
+        "4096",
+        "--kv-unified",
+        "--cache-idle-slots",
         "--no-mmproj",
         "--jinja",
         "--reasoning",
@@ -55,7 +69,14 @@
         "--flash-attn",
         "on",
         "--ubatch-size",
-        "256"
+        "256",
+        "--spec-type",
+        "draft-mtp",
+        "--spec-draft-n-max",
+        "2",
+        "--spec-draft-n-min",
+        "1",
+        "--metrics"
     ],
     "parameter_mutability": {
         "static": [
@@ -114,9 +135,15 @@
         "iq3xxs",
         "rx6800",
         "vulkan",
-        "100k",
+        "256k",
         "q4-kv",
-        "b9297"
+        "cache-reuse",
+        "cache-ram",
+        "checkpoints",
+        "draft-mtp",
+        "metrics",
+        "b9297",
+        "test-config"
     ],
     "healthcheck": {
         "type": "http",
