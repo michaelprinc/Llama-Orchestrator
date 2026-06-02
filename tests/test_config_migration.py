@@ -108,3 +108,22 @@ def test_config_migrate_instances_cli_previews_without_apply(tmp_path: Path, mon
     assert result.exit_code == 0
     assert "Preview instance migration" in result.stdout
     assert "legacy-preview" in result.stdout
+
+
+def test_config_migrate_model_metadata_cli_previews_without_apply(tmp_path: Path, monkeypatch) -> None:
+    _patch_temp_root(monkeypatch, tmp_path)
+    instance_dir = tmp_path / "instances" / "legacy-preview"
+    instance_dir.mkdir(parents=True)
+    model_path = tmp_path / "models" / "demo.gguf"
+    model_path.parent.mkdir(parents=True)
+    model_path.write_bytes(b"GGUF")
+    (instance_dir / "config.json").write_text(
+        json.dumps({"name": "legacy-preview", "model": {"path": "models/demo.gguf"}}),
+        encoding="utf-8",
+    )
+
+    result = runner.invoke(app, ["config", "migrate-model-metadata"])
+
+    assert result.exit_code == 0
+    assert "Preview model metadata migration" in result.stdout
+    assert "legacy-preview" in result.stdout

@@ -129,7 +129,7 @@ def test_model_name_and_tags_include_repo_quant_and_size() -> None:
     tags = build_model_tags("Qwen/Qwen3-8B-GGUF", "Qwen3-8B-Q4_K_M.gguf", "Q4_K_M")
 
     assert name == "Qwen3 8B GGUF Q4_K_M"
-    assert tags == ["hf:Qwen/Qwen3-8B-GGUF", "gguf", "q4_k_m", "8b"]
+    assert tags == ["hf", "hf_repo__qwen__qwen3-8b-gguf", "gguf", "q4_k_m", "8b"]
     assert infer_model_size_tag("Qwen/Qwen3-8B-GGUF") == "8b"
 
 
@@ -146,4 +146,4 @@ def test_build_add_model_prefill_returns_name_absolute_path_and_tags(tmp_path: P
 
     assert name == "Qwen3 8B GGUF Q4_K_M"
     assert model_path == str(selection.local_path.resolve())
-    assert tags == ["hf:Qwen/Qwen3-8B-GGUF", "gguf", "q4_k_m", "8b"]
+    assert tags == ["hf", "hf_repo__qwen__qwen3-8b-gguf", "gguf", "q4_k_m", "8b"]

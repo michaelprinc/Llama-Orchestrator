@@ -14,6 +14,7 @@ from llama_orchestrator.config import (
     GpuConfig,
     HealthcheckConfig,
     InstanceConfig,
+    ModelMetadata,
     ModelConfig,
     ParameterMutabilityConfig,
     RestartPolicy,
@@ -259,6 +260,21 @@ class TestInstanceConfig:
         )
         assert config.instance_dir_name == f"00000042_{config.instance_uid}"
 
+    def test_model_metadata_is_optional_and_valid_when_present(self) -> None:
+        """model_metadata must remain additive and optional for compatibility."""
+        without_metadata = InstanceConfig(
+            name="meta-optional",
+            model=ModelConfig(path=Path("test.gguf")),
+        )
+        assert without_metadata.model_metadata is None
+
+        with_metadata = InstanceConfig(
+            name="meta-present",
+            model=ModelConfig(path=Path("test.gguf")),
+            model_metadata=ModelMetadata(),
+        )
+        assert with_metadata.model_metadata is not None
+
     def test_invalid_instance_no_is_rejected(self) -> None:
         """Test invalid instance number format is rejected."""
         with pytest.raises(ValidationError):
@@ -288,6 +304,19 @@ class TestParameterMutabilityConfig:
         assert set(config.static).isdisjoint(config.dynamic)
         assert "server.host" in config.static
         assert "healthcheck.interval" in config.dynamic
+
+    def test_legacy_classification_backfills_new_default_paths(self) -> None:
+        """Older persisted classifications should load after schema additions."""
+        config = ParameterMutabilityConfig(
+            static=list(DEFAULT_STATIC_PARAMETER_PATHS),
+            dynamic=[
+                path
+                for path in DEFAULT_DYNAMIC_PARAMETER_PATHS
+                if path != "model_metadata"
+            ],
+        )
+
+        assert "model_metadata" in config.dynamic
 
     def test_overlap_is_rejected(self) -> None:
         """Test that a path cannot be classified as both static and dynamic."""

@@ -996,6 +996,78 @@ def config_migrate_instances(
             console.print(f"  backup: {record.backup_path}")
 
 
+@config_app.command("migrate-model-metadata")
+def config_migrate_model_metadata(
+    apply: Annotated[bool, typer.Option("--apply", help="Write updated model_metadata into profile configs")] = False,
+    include_sha256: Annotated[
+        bool,
+        typer.Option("--include-sha256", help="Compute local SHA-256 for artifact verification metadata"),
+    ] = False,
+    fetch_hf_license: Annotated[
+        bool,
+        typer.Option("--fetch-hf-license", help="Fetch license metadata from Hugging Face when hf: tags are present"),
+    ] = False,
+    hf_token: Annotated[
+        Optional[str],
+        typer.Option("--hf-token", help="Optional Hugging Face token for license metadata refresh"),
+    ] = None,
+) -> None:
+    """Preview or apply additive model metadata updates for all instance profiles."""
+
+    from llama_orchestrator.config.migration import migrate_model_metadata
+
+    summary = migrate_model_metadata(
+        apply=apply,
+        include_sha256=include_sha256,
+        fetch_hf_license=fetch_hf_license,
+        hf_token=hf_token,
+    )
+    mode = "Applied" if apply else "Preview"
+    console.print(f"[bold]{mode} model metadata migration[/bold]")
+    console.print(f"Total: {summary.total}  Changed: {summary.changed}  Skipped: {summary.skipped}")
+    for record in summary.records:
+        action = "update" if record.changed else "skip"
+        console.print(
+            f"- [{action}] {record.name} ({record.display_name}) reason={record.reason}"
+        )
+        if record.backup_path is not None:
+            console.print(f"  backup: {record.backup_path}")
+
+
+@config_app.command("export-model-metadata")
+def config_export_model_metadata(
+    output: Annotated[Path, typer.Argument(help="Output JSON path")],
+) -> None:
+    """Export model metadata payload for transfer between installations."""
+
+    from llama_orchestrator.config.migration import export_model_metadata
+
+    export_path = export_model_metadata(output)
+    console.print(f"[green]Exported model metadata:[/green] {export_path}")
+
+
+@config_app.command("import-model-metadata")
+def config_import_model_metadata(
+    input_path: Annotated[Path, typer.Argument(help="Input JSON path")],
+    apply: Annotated[bool, typer.Option("--apply", help="Write imported metadata to profiles")] = False,
+) -> None:
+    """Preview or apply model metadata import while preserving user metadata."""
+
+    from llama_orchestrator.config.migration import import_model_metadata
+
+    summary = import_model_metadata(input_path, apply=apply)
+    mode = "Applied" if apply else "Preview"
+    console.print(f"[bold]{mode} model metadata import[/bold]")
+    console.print(f"Total: {summary.total}  Changed: {summary.changed}  Skipped: {summary.skipped}")
+    for record in summary.records:
+        action = "update" if record.changed else "skip"
+        console.print(
+            f"- [{action}] {record.name} ({record.display_name}) reason={record.reason}"
+        )
+        if record.backup_path is not None:
+            console.print(f"  backup: {record.backup_path}")
+
+
 # =============================================================================
 # Daemon Commands
 # =============================================================================

@@ -98,6 +98,7 @@ from llama_orchestrator.hf_import import (
     plan_download_target,
     save_import_settings,
 )
+from llama_orchestrator.model_metadata import build_model_metadata
 
 DEFAULT_RUNTIME_ARGS = ["--no-mmproj", "--reasoning", "off", "--flash-attn", "auto"]
 MANAGED_VALUE_ARGS = {"--reasoning", "--flash-attn"}
@@ -133,6 +134,8 @@ ALL_COLUMNS = (
     "vram",
     "prompt",
     "model_size",
+    "quantization",
+    "architecture",
     "model",
     "args",
     "uptime",
@@ -153,6 +156,8 @@ COLUMN_HEADINGS = {
     "vram": "Memory MB",
     "prompt": "Prompt file",
     "model_size": "Model size",
+    "quantization": "Quant",
+    "architecture": "Arch",
     "model": "Model",
     "args": "Runtime args",
     "uptime": "Uptime",
@@ -173,6 +178,8 @@ COLUMN_WIDTHS = {
     "vram": 260,
     "prompt": 140,
     "model_size": 90,
+    "quantization": 100,
+    "architecture": 90,
     "model": 280,
     "args": 260,
     "uptime": 90,
@@ -1030,6 +1037,13 @@ class LlamaOrchestratorGui(tk.Tk):
                 model = str(config.model.path)
                 model_size_value = resolve_model_size_gb(config)
                 model_size = format_model_size_gb(model_size_value)
+                quantization = "-"
+                architecture = "-"
+                if config.model_metadata is not None:
+                    if config.model_metadata.quantization.name:
+                        quantization = config.model_metadata.quantization.name
+                    if config.model_metadata.identity.architecture:
+                        architecture = config.model_metadata.identity.architecture
                 runtime_args = " ".join(config.args) if config.args else "-"
                 sort_tags: object = tuple(config.tags)
                 sort_port: object = config.server.port
@@ -1037,6 +1051,8 @@ class LlamaOrchestratorGui(tk.Tk):
                 sort_gpu: object = gpu
                 sort_model: object = model
                 sort_model_size: object = model_size_value
+                sort_quantization: object = quantization if quantization != "-" else None
+                sort_architecture: object = architecture if architecture != "-" else None
                 sort_args: object = tuple(config.args)
             except Exception:
                 display_name = name
@@ -1048,6 +1064,8 @@ class LlamaOrchestratorGui(tk.Tk):
                 tags = "-"
                 model = "-"
                 model_size = "-"
+                quantization = "-"
+                architecture = "-"
                 runtime_args = "-"
                 sort_tags = ()
                 sort_port = None
@@ -1055,6 +1073,8 @@ class LlamaOrchestratorGui(tk.Tk):
                 sort_gpu = None
                 sort_model = None
                 sort_model_size = None
+                sort_quantization = None
+                sort_architecture = None
                 sort_args = ()
 
             if active_tag != "All tags" and active_tag not in {tag.strip() for tag in tags.split(",")}:
@@ -1104,6 +1124,8 @@ class LlamaOrchestratorGui(tk.Tk):
                         vram,
                         prompt,
                         model_size,
+                        quantization,
+                        architecture,
                         model,
                         runtime_args,
                         uptime,
@@ -1124,6 +1146,8 @@ class LlamaOrchestratorGui(tk.Tk):
                         "vram": total_memory,
                         "prompt": benchmark.prompt_file if benchmark else None,
                         "model_size": sort_model_size,
+                        "quantization": sort_quantization,
+                        "architecture": sort_architecture,
                         "model": sort_model,
                         "args": sort_args,
                         "uptime": uptime_value,
@@ -2073,6 +2097,7 @@ class AddModelDialog(tk.Toplevel):
         self.no_mmproj_var = tk.BooleanVar(value=True)
         self.reasoning_var = tk.StringVar(value="off")
         self.flash_attn_var = tk.StringVar(value="auto")
+        self._hf_selection: ImportedModelSelection | None = None
 
         self._build()
         self.name_entry.focus_set()
@@ -2165,6 +2190,7 @@ class AddModelDialog(tk.Toplevel):
         name, model_path, tags = build_add_model_prefill(selection)
         self.name_var.set(name)
         self.model_var.set(model_path)
+        self._hf_selection = selection
         merged_tags = parse_tag_string(
             " ".join([self.tags_var.get().strip(), *tags]).strip()
         )
@@ -2197,6 +2223,11 @@ class AddModelDialog(tk.Toplevel):
                 ),
                 tags=parse_tag_string(self.tags_var.get()),
             )
+            try:
+                config.model_metadata = build_model_metadata(config, imported_selection=self._hf_selection)
+            except Exception:
+                # Metadata must stay optional and never block profile creation.
+                config.model_metadata = None
             if instance_alias_exists(config.name):
                 raise ValueError(f"Instance '{config.name}' already exists")
             save_config(config)

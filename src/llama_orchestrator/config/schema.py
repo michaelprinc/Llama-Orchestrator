@@ -9,7 +9,7 @@ from __future__ import annotations
 import re
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Literal, Optional
+from typing import Any, Literal, Optional
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, HttpUrl, PrivateAttr, field_validator, model_validator
@@ -41,6 +41,7 @@ KNOWN_PARAMETER_PATHS: tuple[str, ...] = (
     "env",
     "args",
     "tags",
+    "model_metadata",
     "healthcheck.type",
     "healthcheck.path",
     "healthcheck.expected_status",
@@ -94,6 +95,7 @@ DEFAULT_STATIC_PARAMETER_PATHS: tuple[str, ...] = (
 
 DEFAULT_DYNAMIC_PARAMETER_PATHS: tuple[str, ...] = (
     "tags",
+    "model_metadata",
     "healthcheck.type",
     "healthcheck.path",
     "healthcheck.expected_status",
@@ -127,6 +129,35 @@ class ParameterMutabilityConfig(BaseModel):
         default_factory=lambda: list(DEFAULT_DYNAMIC_PARAMETER_PATHS),
         description="Parameters that the control plane may apply without replacing the llama.cpp process",
     )
+
+    @model_validator(mode="before")
+    @classmethod
+    def backfill_default_path_classifications(cls, data: object) -> object:
+        """Backfill newly introduced default paths for older persisted configs."""
+        if not isinstance(data, dict):
+            return data
+
+        values = dict(data)
+        static = list(values.get("static") or [])
+        dynamic = list(values.get("dynamic") or [])
+        classified = {
+            path.strip()
+            for path in [*static, *dynamic]
+            if isinstance(path, str) and path.strip()
+        }
+
+        for path in DEFAULT_STATIC_PARAMETER_PATHS:
+            if path not in classified:
+                static.append(path)
+                classified.add(path)
+        for path in DEFAULT_DYNAMIC_PARAMETER_PATHS:
+            if path not in classified:
+                dynamic.append(path)
+                classified.add(path)
+
+        values["static"] = static
+        values["dynamic"] = dynamic
+        return values
 
     @field_validator("static", "dynamic")
     @classmethod
@@ -362,6 +393,149 @@ class LogsConfig(BaseModel):
     rotation: int = Field(default=5, ge=1, le=100, description="Number of rotated files to keep")
 
 
+class ModelMetadataIdentity(BaseModel):
+    """Artifact identity metadata."""
+
+    display_name: str = ""
+    family: str = ""
+    publisher: str = ""
+    architecture: str = ""
+    parameter_count_total: int | None = None
+    parameter_count_active: int | None = None
+
+
+class ModelMetadataSource(BaseModel):
+    """Artifact provenance metadata."""
+
+    hub: str = ""
+    repo_id: str = ""
+    revision: str = ""
+    commit_hash: str = ""
+    filename: str = ""
+    url: str = ""
+    fetched_at: str = ""
+
+
+class ModelMetadataArtifact(BaseModel):
+    """Physical artifact metadata for GGUF files."""
+
+    format: str = "gguf"
+    remote_size_bytes: int | None = None
+    local_size_bytes: int | None = None
+    etag: str | None = None
+    sha256_expected: str | None = None
+    sha256_actual: str | None = None
+    verification_status: str | None = None
+
+
+class ModelMetadataQuantization(BaseModel):
+    """Quantization metadata."""
+
+    name: str = ""
+    family: str = ""
+    variant: str = ""
+    nominal_bits: float | None = None
+    imatrix: bool | None = None
+
+
+class ModelMetadataLicense(BaseModel):
+    """License metadata."""
+
+    id: str = ""
+    source: str = ""
+    verified_at: str = ""
+
+
+class ModelMetadataContext(BaseModel):
+    """Native context metadata."""
+
+    native_context_length: int | None = None
+    recommended_min_context_length: int | None = None
+    source: str = ""
+
+
+class ModelMetadataCapabilities(BaseModel):
+    """Model capability metadata for filtering and discovery."""
+
+    text_generation: bool = True
+    reasoning: bool | None = None
+    tool_use: bool | None = None
+    multilingual: bool | None = None
+    vision_declared: bool | None = None
+    vision_requires_mmproj: bool | None = None
+
+
+class ModelMetadataSpeculativeDecoding(BaseModel):
+    """Speculative decoding compatibility metadata."""
+
+    builtin_mtp: dict[str, Any] = Field(default_factory=dict)
+    external_draft: dict[str, Any] = Field(default_factory=dict)
+    dflash: dict[str, Any] = Field(default_factory=dict)
+
+
+class ModelMetadataGgufExtracted(BaseModel):
+    """GGUF-derived metadata (source of truth when available)."""
+
+    n_layers: int | None = None
+    n_embd: int | None = None
+    n_attention_heads: int | None = None
+    n_kv_heads: int | None = None
+    head_dim_k: int | None = None
+    head_dim_v: int | None = None
+    rope_scaling: str | None = None
+    tokenizer_model: str | None = None
+    chat_template: str | None = None
+    n_experts: int | None = None
+    n_experts_used: int | None = None
+
+
+class ModelMetadataDerived(BaseModel):
+    """Calculated metadata that should not be manually edited."""
+
+    formula_version: str = "kv_cache_v1_gqa"
+    memory_model: dict[str, Any] = Field(default_factory=dict)
+
+
+class ModelMetadataUserMetadata(BaseModel):
+    """User-owned metadata that must survive refreshes."""
+
+    notes: str = ""
+    rating: float | None = None
+    favorite: bool = False
+    tags: list[str] = Field(default_factory=list)
+
+
+class ModelMetadata(BaseModel):
+    """Top-level artifact metadata container."""
+
+    identity: ModelMetadataIdentity = Field(default_factory=ModelMetadataIdentity)
+    source: ModelMetadataSource = Field(default_factory=ModelMetadataSource)
+    artifact: ModelMetadataArtifact = Field(default_factory=ModelMetadataArtifact)
+    quantization: ModelMetadataQuantization = Field(default_factory=ModelMetadataQuantization)
+    license: ModelMetadataLicense = Field(default_factory=ModelMetadataLicense)
+    context: ModelMetadataContext = Field(default_factory=ModelMetadataContext)
+    capabilities: ModelMetadataCapabilities = Field(default_factory=ModelMetadataCapabilities)
+    speculative_decoding: ModelMetadataSpeculativeDecoding = Field(default_factory=ModelMetadataSpeculativeDecoding)
+    gguf_extracted: ModelMetadataGgufExtracted = Field(default_factory=ModelMetadataGgufExtracted)
+    derived: ModelMetadataDerived = Field(default_factory=ModelMetadataDerived)
+    user_metadata: ModelMetadataUserMetadata = Field(default_factory=ModelMetadataUserMetadata)
+
+    @field_validator("user_metadata")
+    @classmethod
+    def normalize_user_metadata_tags(cls, value: ModelMetadataUserMetadata) -> ModelMetadataUserMetadata:
+        """Normalize user metadata tags for deterministic serialization."""
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for tag in value.tags:
+            clean = tag.strip().lower()
+            if not clean or clean in seen:
+                continue
+            normalized.append(clean)
+            seen.add(clean)
+        value.tags = normalized
+        return value
+
+
 class InstanceConfig(BaseModel):
     """
     Complete configuration for a llama.cpp server instance.
@@ -392,6 +566,10 @@ class InstanceConfig(BaseModel):
     parameter_mutability: ParameterMutabilityConfig = Field(
         default_factory=ParameterMutabilityConfig,
         description="Explicit split of persisted parameters into restart-required and runtime-tunable groups",
+    )
+    model_metadata: ModelMetadata | None = Field(
+        default=None,
+        description="Optional additive artifact metadata independent from runtime configuration",
     )
     tags: list[str] = Field(default_factory=list, description="User labels for filtering and batch operations")
     healthcheck: HealthcheckConfig = Field(default_factory=HealthcheckConfig)

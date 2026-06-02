@@ -58,6 +58,11 @@ class GgufModelMetadata:
     attention_head_count_kv: int | None = None
     attention_key_length: int | None = None
     attention_value_length: int | None = None
+    rope_scaling: str | None = None
+    tokenizer_model: str | None = None
+    chat_template: str | None = None
+    expert_count: int | None = None
+    expert_used_count: int | None = None
     file_type: int | None = None
 
 
@@ -130,6 +135,11 @@ def load_gguf_metadata(model_path: Path) -> GgufModelMetadata | None:
         attention_head_count_kv=_as_int(prefixed("attention.head_count_kv")),
         attention_key_length=_as_int(prefixed("attention.key_length")),
         attention_value_length=_as_int(prefixed("attention.value_length")),
+        rope_scaling=_as_string(prefixed("rope.scaling.type")) or _as_string(prefixed("rope.scaling")),
+        tokenizer_model=_as_string(values.get("tokenizer.ggml.model")),
+        chat_template=_as_string(values.get("tokenizer.chat_template")),
+        expert_count=_as_int(prefixed("expert_count")),
+        expert_used_count=_as_int(prefixed("expert_used_count")),
         file_type=_as_int(values.get("general.file_type")),
     )
 

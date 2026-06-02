@@ -224,6 +224,8 @@ def test_gui_columns_include_gpu_cpu_and_model_size() -> None:
     assert COLUMN_HEADINGS["gpu"] == "GPU"
     assert COLUMN_HEADINGS["cpu"] == "CPU"
     assert COLUMN_HEADINGS["model_size"] == "Model size"
+    assert COLUMN_HEADINGS["quantization"] == "Quant"
+    assert COLUMN_HEADINGS["architecture"] == "Arch"
 
 
 def test_queue_checkbox_glyphs_render_checked_and_unchecked_states() -> None:

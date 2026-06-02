@@ -381,7 +381,9 @@ def suggest_model_name(repo_id: str, filename: str, quantization: str | None) ->
 def build_model_tags(repo_id: str, filename: str, quantization: str | None) -> list[str]:
     """Build default tags for an imported model."""
 
-    tags: list[str] = [f"hf:{repo_id}", "gguf"]
+    owner, repo = repo_id.split("/", 1) if "/" in repo_id else (repo_id, "")
+    repo_tag = f"hf_repo__{owner.lower()}__{repo.lower()}" if repo else "hf_repo"
+    tags: list[str] = ["hf", repo_tag, "gguf"]
     if quantization:
         tags.append(quantization.lower())
     size_tag = infer_model_size_tag(repo_id, filename)

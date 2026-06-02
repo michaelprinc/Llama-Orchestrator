@@ -105,6 +105,7 @@ class TestLoadConfig:
         assert config.server.host == "127.0.0.1"
         assert config.gpu.backend == "cpu"
         assert config.healthcheck.interval == 10
+        assert config.model_metadata is None
         assert "server.host" in config.parameter_mutability.static
         assert "healthcheck.interval" in config.parameter_mutability.dynamic
 
