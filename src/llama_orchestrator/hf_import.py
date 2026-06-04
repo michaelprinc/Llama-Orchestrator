@@ -7,9 +7,10 @@ import os
 import re
 import shutil
 import tempfile
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlparse
 
 import httpx
@@ -38,6 +39,24 @@ _QUANTIZATION_PATTERNS = (
 _MODEL_SIZE_RE = re.compile(r"(?<![A-Za-z0-9])(\d+(?:\.\d+)?)B(?![A-Za-z0-9])", re.IGNORECASE)
 _SPLIT_GGUF_RE = re.compile(r"-(\d{5})-of-(\d{5})\.gguf$", re.IGNORECASE)
 _DOWNLOAD_CHUNK_SIZE = 1024 * 1024
+_GGUF_FILE_TYPE_LABELS = {
+    0: "F32",
+    1: "F16",
+    2: "Q4_0",
+    3: "Q4_1",
+    6: "Q5_0",
+    7: "Q5_1",
+    8: "Q8_0",
+    10: "Q2_K",
+    11: "Q3_K_S",
+    12: "Q3_K_M",
+    13: "Q3_K_L",
+    14: "Q4_K_S",
+    15: "Q4_K_M",
+    16: "Q5_K_S",
+    17: "Q5_K_M",
+    18: "Q6_K",
+}
 
 HF_TOKEN_SERVICE = "llama-orchestrator"
 HF_TOKEN_USERNAME = "huggingface-read-token"
@@ -111,6 +130,31 @@ class ImportedModelSelection:
     local_path: Path
     quantization: str | None
     size_bytes: int | None
+    metadata_sidecar_path: Path | None = None
+    validation_status: str | None = None
+    validation_confidence: str | None = None
+    validation_warnings: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ModelCardImportMetadata:
+    """Lightweight claims extracted from a Hugging Face README/model card."""
+
+    claimed_model: str | None = None
+    claimed_context_length: int | None = None
+    claimed_architecture: str | None = None
+    claimed_chat_template: bool | None = None
+    claimed_mtp_support: bool | None = None
+    recommended_runtime: str | None = None
+
+
+@dataclass(frozen=True)
+class ImportValidationResult:
+    """Import-time confidence and warnings for GGUF/model-card agreement."""
+
+    status: Literal["ok", "warning", "error"]
+    confidence: Literal["high", "medium", "low"]
+    warnings: tuple[str, ...] = ()
 
 
 def get_import_settings_path() -> Path:
@@ -411,6 +455,196 @@ def build_add_model_prefill(selection: ImportedModelSelection) -> tuple[str, str
     )
 
 
+def get_import_metadata_sidecar_path(model_path: Path) -> Path:
+    """Return the sidecar metadata path for a local GGUF artifact."""
+
+    return model_path.with_name(f"{model_path.name}.metadata.json")
+
+
+def extract_model_card_metadata(markdown: str) -> ModelCardImportMetadata:
+    """Extract best-effort claims from a Hugging Face README/model card."""
+
+    text = markdown.strip()
+    if not text:
+        return ModelCardImportMetadata()
+
+    lower_text = text.lower()
+    context_length = _extract_claimed_context_length(text)
+    architecture = _extract_claimed_architecture(lower_text)
+    claimed_model = _extract_model_card_title(text)
+    if "no mtp" in lower_text or "without mtp" in lower_text:
+        mtp_support: bool | None = False
+    elif re.search(r"\b(mtp|nextn|next-n|speculative decoding)\b", lower_text):
+        mtp_support = True
+    else:
+        mtp_support = None
+
+    runtime = None
+    for candidate in ("llama.cpp", "vllm", "transformers", "koboldcpp"):
+        if candidate in lower_text:
+            runtime = candidate
+            break
+
+    return ModelCardImportMetadata(
+        claimed_model=claimed_model,
+        claimed_context_length=context_length,
+        claimed_architecture=architecture,
+        claimed_chat_template=True if "chat template" in lower_text else None,
+        claimed_mtp_support=mtp_support,
+        recommended_runtime=runtime,
+    )
+
+
+def fetch_hf_model_card(
+    repo_id: str,
+    *,
+    revision: str = "main",
+    token: str | None = None,
+) -> str | None:
+    """Fetch the Hugging Face README/model card without persisting credentials."""
+
+    headers: dict[str, str] = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    url = hf_hub_url(repo_id=repo_id, filename="README.md", repo_type="model", revision=revision)
+    try:
+        response = httpx.get(url, headers=headers, follow_redirects=True, timeout=20)
+    except httpx.RequestError:
+        return None
+    if response.status_code == 404:
+        return None
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError:
+        return None
+    return response.text
+
+
+def build_import_validation(
+    *,
+    repo_id: str,
+    filename: str,
+    gguf_metadata: Any | None,
+    model_card_metadata: ModelCardImportMetadata | None,
+) -> ImportValidationResult:
+    """Compare GGUF facts with filename, repo, and optional model-card claims."""
+
+    warnings: list[str] = []
+    if gguf_metadata is None:
+        return ImportValidationResult(
+            status="warning",
+            confidence="low",
+            warnings=("GGUF metadata could not be read from the local artifact.",),
+        )
+
+    architecture = getattr(gguf_metadata, "architecture", None)
+    if not architecture:
+        warnings.append("GGUF metadata is missing general.architecture.")
+    if getattr(gguf_metadata, "context_length", None) is None:
+        warnings.append("GGUF metadata is missing the architecture context length.")
+    if not getattr(gguf_metadata, "chat_template", None):
+        warnings.append("GGUF metadata does not include tokenizer.chat_template.")
+
+    filename_quant = parse_gguf_quantization(filename)
+    file_type = getattr(gguf_metadata, "file_type", None)
+    file_type_label = _gguf_file_type_label(file_type)
+    if filename_quant and file_type_label and not _quantization_labels_match(filename_quant, file_type_label):
+        warnings.append(
+            f"Filename quantization {filename_quant} does not match GGUF file_type {file_type_label}."
+        )
+
+    card = model_card_metadata or ModelCardImportMetadata()
+    if (
+        card.claimed_context_length
+        and getattr(gguf_metadata, "context_length", None)
+        and card.claimed_context_length != gguf_metadata.context_length
+    ):
+        warnings.append(
+            "Model card context length "
+            f"{card.claimed_context_length} does not match GGUF context length "
+            f"{gguf_metadata.context_length}."
+        )
+    if (
+        card.claimed_architecture
+        and architecture
+        and card.claimed_architecture.casefold() != architecture.casefold()
+    ):
+        warnings.append(
+            f"Model card architecture {card.claimed_architecture} does not match GGUF architecture {architecture}."
+        )
+    nextn_layers = getattr(gguf_metadata, "nextn_predict_layers", None) or 0
+    if card.claimed_mtp_support is True and nextn_layers <= 0:
+        warnings.append("MTP/NextN is claimed in the model card but not present in GGUF metadata.")
+    if card.claimed_mtp_support is False and nextn_layers > 0:
+        warnings.append("GGUF metadata reports NextN layers although the model card says MTP is absent.")
+
+    repo_and_file = f"{repo_id}/{filename}".casefold()
+    if (
+        architecture
+        and architecture.casefold() not in repo_and_file
+        and card.claimed_architecture is None
+    ):
+        warnings.append("GGUF architecture is not evident from the Hugging Face repo or filename.")
+
+    status: Literal["ok", "warning", "error"] = "warning" if warnings else "ok"
+    confidence: Literal["high", "medium", "low"] = "high" if not warnings else "medium"
+    return ImportValidationResult(status=status, confidence=confidence, warnings=tuple(warnings))
+
+
+def write_import_metadata_sidecar(
+    selection: ImportedModelSelection,
+    *,
+    revision: str = "main",
+    model_card_text: str | None = None,
+    token: str | None = None,
+) -> ImportedModelSelection:
+    """Write additive HF/GGUF validation metadata next to a local GGUF file."""
+
+    from llama_orchestrator.memory_fit import load_gguf_metadata
+
+    gguf_metadata = load_gguf_metadata(selection.local_path)
+    if model_card_text is None:
+        model_card_text = fetch_hf_model_card(selection.repo_id, revision=revision, token=token)
+    card_metadata = extract_model_card_metadata(model_card_text or "")
+    validation = build_import_validation(
+        repo_id=selection.repo_id,
+        filename=selection.filename,
+        gguf_metadata=gguf_metadata,
+        model_card_metadata=card_metadata,
+    )
+    sidecar_path = get_import_metadata_sidecar_path(selection.local_path)
+    payload = {
+        "schema_version": "1",
+        "source": {
+            "provider": "huggingface",
+            "repo_id": selection.repo_id,
+            "filename": selection.filename,
+            "revision": revision,
+            "fetched_at": _utc_now_iso(),
+        },
+        "gguf_metadata": _serialize_gguf_import_metadata(gguf_metadata, selection.filename),
+        "model_card_metadata": asdict(card_metadata),
+        "validation": asdict(validation),
+    }
+
+    try:
+        sidecar_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    except OSError as exc:
+        raise HuggingFaceImportError(f"Failed to write GGUF import metadata sidecar: {exc}") from exc
+
+    return ImportedModelSelection(
+        repo_id=selection.repo_id,
+        filename=selection.filename,
+        local_path=selection.local_path,
+        quantization=selection.quantization,
+        size_bytes=selection.size_bytes,
+        metadata_sidecar_path=sidecar_path,
+        validation_status=validation.status,
+        validation_confidence=validation.confidence,
+        validation_warnings=validation.warnings,
+    )
+
+
 def download_gguf_variant(
     repo_id: str,
     filename: str,
@@ -429,13 +663,14 @@ def download_gguf_variant(
     if plan.action == "cancel":
         raise DownloadCancelledError("Model download cancelled.")
     if plan.action == "use_existing":
-        return ImportedModelSelection(
+        selection = ImportedModelSelection(
             repo_id=repo_id,
             filename=filename,
             local_path=final_path,
             quantization=parse_gguf_quantization(filename),
             size_bytes=final_path.stat().st_size,
         )
+        return write_import_metadata_sidecar(selection, token=token)
 
     temp_path = plan.temp_path
     if temp_path is None:
@@ -500,13 +735,97 @@ def download_gguf_variant(
             f"Failed to write the GGUF model into the target directory: {exc}"
         ) from exc
 
-    return ImportedModelSelection(
+    selection = ImportedModelSelection(
         repo_id=repo_id,
         filename=filename,
         local_path=final_path,
         quantization=parse_gguf_quantization(filename),
         size_bytes=total_bytes,
     )
+    return write_import_metadata_sidecar(selection, token=token)
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def _gguf_file_type_label(file_type: int | None) -> str | None:
+    if file_type is None:
+        return None
+    return _GGUF_FILE_TYPE_LABELS.get(file_type)
+
+
+def _quantization_labels_match(filename_quant: str, file_type_label: str) -> bool:
+    normalized_filename = "F16" if filename_quant.upper() == "FP16" else filename_quant.upper()
+    normalized_file_type = file_type_label.upper()
+    return normalized_filename == normalized_file_type
+
+
+def _serialize_gguf_import_metadata(gguf_metadata: Any | None, filename: str) -> dict[str, Any]:
+    if gguf_metadata is None:
+        return {}
+    file_type = getattr(gguf_metadata, "file_type", None)
+    return {
+        "architecture": getattr(gguf_metadata, "architecture", None),
+        "name": getattr(gguf_metadata, "general_name", None),
+        "basename": getattr(gguf_metadata, "general_basename", None),
+        "context_length": getattr(gguf_metadata, "context_length", None),
+        "embedding_length": getattr(gguf_metadata, "embedding_length", None),
+        "block_count": getattr(gguf_metadata, "block_count", None),
+        "attention_head_count": getattr(gguf_metadata, "attention_head_count", None),
+        "attention_head_count_kv": getattr(gguf_metadata, "attention_head_count_kv", None),
+        "rope_freq_base": getattr(gguf_metadata, "rope_freq_base", None),
+        "file_type": _gguf_file_type_label(file_type) or parse_gguf_quantization(filename),
+        "file_type_value": file_type,
+        "quantization_version": getattr(gguf_metadata, "quantization_version", None),
+        "chat_template_present": bool(getattr(gguf_metadata, "chat_template", None)),
+        "nextn_predict_layers": getattr(gguf_metadata, "nextn_predict_layers", None),
+    }
+
+
+def _extract_model_card_title(markdown: str) -> str | None:
+    for line in markdown.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("#"):
+            title = stripped.lstrip("#").strip()
+            return title or None
+    return None
+
+
+def _extract_claimed_context_length(markdown: str) -> int | None:
+    pattern = re.compile(
+        r"(?:context|ctx|sequence(?:\s+length)?|context_length)[^\n]{0,80}?(\d+(?:\.\d+)?)\s*([kKmM])?",
+        re.IGNORECASE,
+    )
+    for match in pattern.finditer(markdown):
+        value = float(match.group(1))
+        suffix = (match.group(2) or "").lower()
+        if suffix == "m":
+            value *= 1_000_000
+        elif suffix == "k":
+            value *= 1024
+        parsed = int(value)
+        if parsed >= 512:
+            return parsed
+    return None
+
+
+def _extract_claimed_architecture(lower_text: str) -> str | None:
+    for candidate in (
+        "qwen3",
+        "qwen2",
+        "llama",
+        "gemma",
+        "deepseek2",
+        "deepseek",
+        "mistral",
+        "mixtral",
+        "phi4",
+        "phi3",
+    ):
+        if re.search(rf"(?<![a-z0-9]){re.escape(candidate)}(?![a-z0-9])", lower_text):
+            return candidate
+    return None
 
 
 def _extract_repo_filename(parts: list[str]) -> str | None:

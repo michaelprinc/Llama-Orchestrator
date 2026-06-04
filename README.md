@@ -391,7 +391,8 @@ The GUI supports:
 - Importing GGUF variants directly from Hugging Face inside `Add model`, with
   repo URL or `owner/repo` normalization, GGUF variant discovery, background
   download progress, cancel support, existing-file reuse or re-download
-  handling, and Add Model autofill after the selected artifact is ready.
+  handling, GGUF metadata validation, sidecar metadata writing, and Add Model
+  autofill after the selected artifact is ready.
 - Managing these llama-server args for new or selected instances:
   `--no-mmproj --reasoning off --flash-attn auto`.
 - Installing a `llama-server.exe` binary from GitHub releases with
@@ -433,9 +434,11 @@ The main table also persists visible columns and primary/secondary sort order in
 `state/gui_settings.json`. The Hugging Face import dialog persists the chosen
 local models directory in `state/huggingface_import.json`; any Hugging Face
 read token is stored through the system keyring when available and otherwise is
-kept session-only instead of being written to repo files. Serial benchmark
-queue checkmarks are session-only; tag filter and window geometry still reset
-on GUI launch.
+kept session-only instead of being written to repo files. Imported GGUF files
+also get an additive `<model>.gguf.metadata.json` sidecar with source, extracted
+GGUF facts, best-effort model-card claims, and validation warnings. Serial
+benchmark queue checkmarks are session-only; tag filter and window geometry
+still reset on GUI launch.
 
 ### Runtime Detection and GPU Mapping
 

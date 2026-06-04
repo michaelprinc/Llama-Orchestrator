@@ -476,6 +476,8 @@ class ModelMetadataSpeculativeDecoding(BaseModel):
 class ModelMetadataGgufExtracted(BaseModel):
     """GGUF-derived metadata (source of truth when available)."""
 
+    general_name: str | None = None
+    general_basename: str | None = None
     n_layers: int | None = None
     n_embd: int | None = None
     n_attention_heads: int | None = None
@@ -487,6 +489,9 @@ class ModelMetadataGgufExtracted(BaseModel):
     chat_template: str | None = None
     n_experts: int | None = None
     n_experts_used: int | None = None
+    file_type: int | None = None
+    quantization_version: int | None = None
+    nextn_predict_layers: int | None = None
 
 
 class ModelMetadataDerived(BaseModel):

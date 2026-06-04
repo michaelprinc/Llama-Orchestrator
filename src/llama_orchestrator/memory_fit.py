@@ -51,6 +51,8 @@ class GgufModelMetadata:
     """Minimal GGUF metadata needed for memory estimation."""
 
     architecture: str | None = None
+    general_name: str | None = None
+    general_basename: str | None = None
     context_length: int | None = None
     block_count: int | None = None
     embedding_length: int | None = None
@@ -58,12 +60,15 @@ class GgufModelMetadata:
     attention_head_count_kv: int | None = None
     attention_key_length: int | None = None
     attention_value_length: int | None = None
+    rope_freq_base: float | None = None
     rope_scaling: str | None = None
     tokenizer_model: str | None = None
     chat_template: str | None = None
     expert_count: int | None = None
     expert_used_count: int | None = None
     file_type: int | None = None
+    quantization_version: int | None = None
+    nextn_predict_layers: int | None = None
 
 
 @dataclass(frozen=True)
@@ -128,6 +133,8 @@ def load_gguf_metadata(model_path: Path) -> GgufModelMetadata | None:
 
     return GgufModelMetadata(
         architecture=architecture,
+        general_name=_as_string(values.get("general.name")),
+        general_basename=_as_string(values.get("general.basename")),
         context_length=_as_int(prefixed("context_length")),
         block_count=_as_int(prefixed("block_count")),
         embedding_length=_as_int(prefixed("embedding_length")),
@@ -135,12 +142,15 @@ def load_gguf_metadata(model_path: Path) -> GgufModelMetadata | None:
         attention_head_count_kv=_as_int(prefixed("attention.head_count_kv")),
         attention_key_length=_as_int(prefixed("attention.key_length")),
         attention_value_length=_as_int(prefixed("attention.value_length")),
+        rope_freq_base=_as_float(prefixed("rope.freq_base")),
         rope_scaling=_as_string(prefixed("rope.scaling.type")) or _as_string(prefixed("rope.scaling")),
         tokenizer_model=_as_string(values.get("tokenizer.ggml.model")),
         chat_template=_as_string(values.get("tokenizer.chat_template")),
         expert_count=_as_int(prefixed("expert_count")),
         expert_used_count=_as_int(prefixed("expert_used_count")),
         file_type=_as_int(values.get("general.file_type")),
+        quantization_version=_as_int(values.get("general.quantization_version")),
+        nextn_predict_layers=_as_int(prefixed("nextn_predict_layers")),
     )
 
 
@@ -433,6 +443,14 @@ def _as_int(value: Any) -> int | None:
         return None
     if isinstance(value, int | float):
         return int(value)
+    return None
+
+
+def _as_float(value: Any) -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        return float(value)
     return None
 
 

@@ -17,14 +17,14 @@
     "model": {
         "path": "models\\unsloth_Qwen3.5-9B-MTP-GGUF\\Qwen3.5-9B-Q4_K_M.gguf",
         "context_size": 80000,
-        "batch_size": 2048,
+        "batch_size": 1024,
         "threads": 16
     },
     "server": {
         "host": "127.0.0.1",
         "port": 8055,
         "timeout": 600,
-        "parallel": 1
+        "parallel": 2
     },
     "gpu": {
         "backend": "vulkan",
@@ -36,7 +36,7 @@
     },
     "args": [
         "--parallel",
-        "1",
+        "2",
         "--device",
         "Vulkan1",
         "--main-gpu",
@@ -46,7 +46,7 @@
         "--no-mmproj",
         "--jinja",
         "--reasoning",
-        "off",
+        "on",
         "--flash-attn",
         "on",
         "--cache-type-k",

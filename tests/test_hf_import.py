@@ -1,5 +1,7 @@
 """Tests for Hugging Face GGUF import helpers."""
 
+import json
+import struct
 from pathlib import Path
 
 import pytest
@@ -19,7 +21,42 @@ from llama_orchestrator.hf_import import (
     save_import_settings,
     split_gguf_note,
     suggest_model_name,
+    write_import_metadata_sidecar,
 )
+
+_GGUF_TYPE_STRING = 8
+_GGUF_TYPE_UINT32 = 4
+_GGUF_TYPE_UINT64 = 10
+
+
+def _write_gguf_string(handle, value: str) -> None:
+    encoded = value.encode("utf-8")
+    handle.write(struct.pack("<Q", len(encoded)))
+    handle.write(encoded)
+
+
+def _write_gguf_value(handle, value) -> None:
+    if isinstance(value, str):
+        handle.write(struct.pack("<I", _GGUF_TYPE_STRING))
+        _write_gguf_string(handle, value)
+        return
+    if isinstance(value, int):
+        gguf_type = _GGUF_TYPE_UINT32 if value <= 0xFFFFFFFF else _GGUF_TYPE_UINT64
+        handle.write(struct.pack("<I", gguf_type))
+        handle.write(struct.pack("<I" if gguf_type == _GGUF_TYPE_UINT32 else "<Q", value))
+        return
+    raise TypeError(f"Unsupported test GGUF metadata value: {value!r}")
+
+
+def _write_test_gguf(path: Path, metadata: dict[str, object]) -> None:
+    with path.open("wb") as handle:
+        handle.write(b"GGUF")
+        handle.write(struct.pack("<I", 3))
+        handle.write(struct.pack("<Q", 0))
+        handle.write(struct.pack("<Q", len(metadata)))
+        for key, value in metadata.items():
+            _write_gguf_string(handle, key)
+            _write_gguf_value(handle, value)
 
 
 def test_normalize_hf_model_reference_accepts_owner_repo() -> None:
@@ -147,3 +184,69 @@ def test_build_add_model_prefill_returns_name_absolute_path_and_tags(tmp_path: P
     assert name == "Qwen3 8B GGUF Q4_K_M"
     assert model_path == str(selection.local_path.resolve())
     assert tags == ["hf", "hf_repo__qwen__qwen3-8b-gguf", "gguf", "q4_k_m", "8b"]
+
+
+def test_write_import_metadata_sidecar_validates_gguf_and_model_card(tmp_path: Path) -> None:
+    model_path = tmp_path / "Qwen3-8B-Q4_K_M.gguf"
+    _write_test_gguf(
+        model_path,
+        {
+            "general.architecture": "qwen3",
+            "general.name": "Qwen3 8B",
+            "general.basename": "Qwen3",
+            "general.file_type": 15,
+            "general.quantization_version": 2,
+            "tokenizer.chat_template": "{{ messages }}",
+            "qwen3.context_length": 262144,
+            "qwen3.embedding_length": 4096,
+            "qwen3.block_count": 36,
+            "qwen3.attention.head_count": 32,
+            "qwen3.attention.head_count_kv": 8,
+            "qwen3.rope.freq_base": 1000000,
+            "qwen3.nextn_predict_layers": 1,
+        },
+    )
+    selection = ImportedModelSelection(
+        repo_id="Qwen/Qwen3-8B-GGUF",
+        filename=model_path.name,
+        local_path=model_path,
+        quantization="Q4_K_M",
+        size_bytes=model_path.stat().st_size,
+    )
+
+    enriched = write_import_metadata_sidecar(
+        selection,
+        model_card_text="# Qwen3 8B\n\nContext length: 262144. MTP supported. Use llama.cpp.",
+    )
+
+    assert enriched.validation_status == "ok"
+    assert enriched.validation_confidence == "high"
+    assert enriched.metadata_sidecar_path is not None
+    payload = json.loads(enriched.metadata_sidecar_path.read_text(encoding="utf-8"))
+    assert payload["source"]["provider"] == "huggingface"
+    assert payload["gguf_metadata"]["architecture"] == "qwen3"
+    assert payload["gguf_metadata"]["context_length"] == 262144
+    assert payload["gguf_metadata"]["file_type"] == "Q4_K_M"
+    assert payload["gguf_metadata"]["nextn_predict_layers"] == 1
+    assert payload["model_card_metadata"]["claimed_mtp_support"] is True
+    assert payload["validation"]["warnings"] == []
+
+
+def test_write_import_metadata_sidecar_warns_when_gguf_metadata_is_missing(tmp_path: Path) -> None:
+    model_path = tmp_path / "broken-Q4_K_M.gguf"
+    model_path.write_bytes(b"not-a-gguf")
+    selection = ImportedModelSelection(
+        repo_id="Author/Broken-GGUF",
+        filename=model_path.name,
+        local_path=model_path,
+        quantization="Q4_K_M",
+        size_bytes=model_path.stat().st_size,
+    )
+
+    enriched = write_import_metadata_sidecar(selection, model_card_text="")
+
+    assert enriched.validation_status == "warning"
+    assert enriched.validation_confidence == "low"
+    assert enriched.validation_warnings == ("GGUF metadata could not be read from the local artifact.",)
+    payload = json.loads(enriched.metadata_sidecar_path.read_text(encoding="utf-8"))  # type: ignore[union-attr]
+    assert payload["gguf_metadata"] == {}

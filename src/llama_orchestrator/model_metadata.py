@@ -330,6 +330,8 @@ def build_model_metadata(
             },
         ),
         gguf_extracted=ModelMetadataGgufExtracted(
+            general_name=gguf.general_name if gguf else None,
+            general_basename=gguf.general_basename if gguf else None,
             n_layers=gguf.block_count if gguf else None,
             n_embd=gguf.embedding_length if gguf else None,
             n_attention_heads=gguf.attention_head_count if gguf else None,
@@ -341,6 +343,9 @@ def build_model_metadata(
             chat_template=gguf.chat_template if gguf else None,
             n_experts=gguf.expert_count if gguf else None,
             n_experts_used=gguf.expert_used_count if gguf else None,
+            file_type=gguf.file_type if gguf else None,
+            quantization_version=gguf.quantization_version if gguf else None,
+            nextn_predict_layers=gguf.nextn_predict_layers if gguf else None,
         ),
         derived=ModelMetadataDerived(
             formula_version=_KV_FORMULA_VERSION,

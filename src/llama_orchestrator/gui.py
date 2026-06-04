@@ -101,6 +101,7 @@ from llama_orchestrator.hf_import import (
     parse_gguf_quantization,
     plan_download_target,
     save_import_settings,
+    write_import_metadata_sidecar,
 )
 from llama_orchestrator.model_metadata import build_model_metadata
 
@@ -2745,13 +2746,22 @@ class HuggingFaceImportDialog(tk.Toplevel):
             self.status_var.set("Download cancelled before it started.")
             return
         if existing_choice == "use_existing":
-            self.selected_model = ImportedModelSelection(
+            selection = ImportedModelSelection(
                 repo_id=self.repo_ref.repo_id,
                 filename=variant.filename,
                 local_path=variant.local_path,
                 quantization=variant.quantization or parse_gguf_quantization(variant.filename),
                 size_bytes=variant.size_bytes,
             )
+            try:
+                self.selected_model = write_import_metadata_sidecar(
+                    selection,
+                    token=token,
+                    model_card_text="",
+                )
+            except HuggingFaceImportError as exc:
+                messagebox.showerror("Hugging Face import", str(exc), parent=self)
+                return
             self._set_variant_status(variant.filename, "downloaded")
             self.status_var.set(f"Using existing local model: {variant.local_path}")
             self._update_actions()
@@ -2808,13 +2818,22 @@ class HuggingFaceImportDialog(tk.Toplevel):
                     parent=self,
                 )
                 return
-            self.selected_model = ImportedModelSelection(
+            selection = ImportedModelSelection(
                 repo_id=self.repo_ref.repo_id,
                 filename=variant.filename,
                 local_path=variant.local_path,
                 quantization=variant.quantization or parse_gguf_quantization(variant.filename),
                 size_bytes=variant.size_bytes,
             )
+            try:
+                self.selected_model = write_import_metadata_sidecar(
+                    selection,
+                    token=self.token_store.get_token(),
+                    model_card_text="",
+                )
+            except HuggingFaceImportError as exc:
+                messagebox.showerror("Hugging Face import", str(exc), parent=self)
+                return
         self.on_use(self.selected_model)
         self.destroy()
 
