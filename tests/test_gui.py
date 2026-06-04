@@ -1,5 +1,6 @@
 """Tests for GUI helper behavior."""
 
+import threading
 from pathlib import Path
 from unittest.mock import patch
 
@@ -15,6 +16,7 @@ from llama_orchestrator.gui import (
     DEFAULT_RUNTIME_ARGS,
     EDIT_BENCHMARK_PROMPT_LABEL,
     INSTALL_LLAMA_SERVER_LABEL,
+    LlamaOrchestratorGui,
     QUEUE_CHECKED_GLYPH,
     QUEUE_UNCHECKED_GLYPH,
     VULKAN_BINARY_MISSING_MESSAGE,
@@ -46,6 +48,36 @@ from llama_orchestrator.gui import (
     update_instance_display_name,
 )
 from llama_orchestrator.hf_import import DownloadProgress
+
+
+class _FakeQueueTree:
+    def __init__(self, names: tuple[str, ...]) -> None:
+        self._names = names
+        self.values = {name: QUEUE_UNCHECKED_GLYPH for name in names}
+
+    def get_children(self) -> tuple[str, ...]:
+        return self._names
+
+    def set(self, item: str, column: str, value: str | None = None) -> str:
+        assert column == "queue"
+        if value is None:
+            return self.values[item]
+        self.values[item] = value
+        return value
+
+
+def _queue_only_gui(names: tuple[str, ...]) -> LlamaOrchestratorGui:
+    gui = object.__new__(LlamaOrchestratorGui)
+    gui.tree = _FakeQueueTree(names)
+    gui._queued_benchmark_names = set()
+    gui._benchmark_job_lock = threading.Lock()
+    gui._benchmark_job_active = False
+    gui._serial_benchmark_active = False
+    gui._serial_benchmark_stop = threading.Event()
+    gui.quick_benchmark_button = None
+    gui.serial_benchmark_button = None
+    gui.stop_serial_benchmark_button = None
+    return gui
 
 
 def test_apply_managed_runtime_args_defaults() -> None:
@@ -232,6 +264,31 @@ def test_queue_checkbox_glyphs_render_checked_and_unchecked_states() -> None:
     """The queue column should look like a checkbox without extra widgets."""
     assert format_queue_checkbox(False) == QUEUE_UNCHECKED_GLYPH
     assert format_queue_checkbox(True) == QUEUE_CHECKED_GLYPH
+
+
+def test_toggle_queue_name_updates_only_queue_cell_without_refresh() -> None:
+    """Single queue clicks should not rebuild the whole Treeview."""
+    gui = _queue_only_gui(("alpha", "beta"))
+
+    with patch.object(gui, "refresh") as mock_refresh:
+        gui._toggle_queue_name("alpha")
+
+    mock_refresh.assert_not_called()
+    assert gui._queued_benchmark_names == {"alpha"}
+    assert gui.tree.values == {
+        "alpha": QUEUE_CHECKED_GLYPH,
+        "beta": QUEUE_UNCHECKED_GLYPH,
+    }
+
+
+def test_update_queue_cells_skips_hidden_rows() -> None:
+    """Filtered rows can stay untouched until the next full refresh."""
+    gui = _queue_only_gui(("alpha",))
+    gui._queued_benchmark_names = {"alpha", "hidden"}
+
+    gui._update_queue_cells(("alpha", "hidden"))
+
+    assert gui.tree.values == {"alpha": QUEUE_CHECKED_GLYPH}
 
 
 def test_ordered_visible_names_preserves_current_table_order() -> None:

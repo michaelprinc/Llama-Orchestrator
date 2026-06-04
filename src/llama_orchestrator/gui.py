@@ -21,6 +21,10 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, simpledialog, ttk
 
+# Optional timing instrumentation for performance profiling.
+# Enable by setting LLAMA_ORCH_DEBUG_GUI_TIMING=1 in the environment.
+_GUI_TIMING_ENABLED: bool = os.environ.get("LLAMA_ORCH_DEBUG_GUI_TIMING", "0") == "1"
+
 from llama_orchestrator.benchmark import (
     DEFAULT_ENDPOINT,
     DEFAULT_MAX_TOKENS,
@@ -205,6 +209,16 @@ class ImportDialogEvent:
     variants: list[GGUFVariant] | None = None
     progress: DownloadProgress | None = None
     selection: ImportedModelSelection | None = None
+
+
+@dataclass(frozen=True)
+class GuiRefreshSnapshot:
+    """Immutable snapshot of data collected during a full refresh."""
+
+    rows: tuple[TableRow, ...]
+    detected_gpus: tuple[DetectedGpu, ...]
+    all_tags: tuple[str, ...]
+    collected_at: float
 
 
 def format_queue_checkbox(checked: bool) -> str:
@@ -999,24 +1013,77 @@ class LlamaOrchestratorGui(tk.Tk):
         self._messages.put(message)
 
     def refresh(self) -> None:
+        _t0 = time.perf_counter_ns()
+        selection, focused = self._capture_tree_position()
+        _t1 = time.perf_counter_ns()
+        snapshot = self._collect_refresh_snapshot(
+            queued_names=frozenset(self._queued_benchmark_names),
+            active_tag=self.tag_filter_var.get(),
+        )
+        _t4 = time.perf_counter_ns()
+        self._render_full_rows(snapshot.rows)
+        _t5 = time.perf_counter_ns()
+        self._render_refresh_metadata(snapshot, selection, focused)
+        _t6 = time.perf_counter_ns()
+        self._update_benchmark_controls()
+        self._render_daemon_status()
+        _t7 = time.perf_counter_ns()
+        if _GUI_TIMING_ENABLED:
+            ns = 1_000_000
+            self._post_message(
+                f"[gui-timing] refresh() total={(_t7 - _t0) / ns:.1f}ms "
+                f"sel={(_t1 - _t0) / ns:.1f}ms collect={(_t4 - _t1) / ns:.1f}ms "
+                f"render={(_t5 - _t4) / ns:.1f}ms metadata={(_t6 - _t5) / ns:.1f}ms "
+                f"done={(_t7 - _t6) / ns:.1f}ms"
+            )
+
+    def _capture_tree_position(self) -> tuple[tuple[str, ...], str | None]:
         selection = tuple(str(item) for item in self.tree.selection()) or self._selected_names
         if not selection and self._selected_name:
             selection = (self._selected_name,)
         focused = str(self.tree.focus()) if self.tree.focus() else self._focused_name
         if not focused and selection:
             focused = selection[0]
-        for item in self.tree.get_children():
-            self.tree.delete(item)
+        return selection, focused
 
+    def _collect_refresh_snapshot(
+        self,
+        *,
+        queued_names: frozenset[str],
+        active_tag: str,
+    ) -> GuiRefreshSnapshot:
         states = list_instances()
         configs = load_all_instances()
         detected_gpus = collect_detected_gpu_inventory(configs.values())
         self._detected_gpus = tuple(detected_gpus)
-        all_names = sorted(set(states) | set(configs))
-        active_tag = self.tag_filter_var.get()
-        all_tags: set[str] = set()
-        visible_names: set[str] = set()
         latest_results = latest_benchmark_results()
+        rows, all_tags = self._build_table_rows(
+            states=states,
+            configs=configs,
+            detected_gpus=tuple(detected_gpus),
+            latest_results=latest_results,
+            queued_names=queued_names,
+            active_tag=active_tag,
+        )
+        return GuiRefreshSnapshot(
+            rows=rows,
+            detected_gpus=tuple(detected_gpus),
+            all_tags=tuple(sorted(all_tags)),
+            collected_at=time.time(),
+        )
+
+    def _build_table_rows(
+        self,
+        *,
+        states: dict[str, InstanceState],
+        configs: dict[str, InstanceConfig],
+        detected_gpus: tuple[DetectedGpu, ...],
+        latest_results: dict[str, BenchmarkResult],
+        queued_names: frozenset[str],
+        active_tag: str,
+    ) -> tuple[tuple[TableRow, ...], set[str]]:
+        all_names = sorted(set(states) | set(configs))
+        all_tags: set[str] = set()
         rows: list[TableRow] = []
 
         for name in all_names:
@@ -1081,7 +1148,6 @@ class LlamaOrchestratorGui(tk.Tk):
 
             if active_tag != "All tags" and active_tag not in {tag.strip() for tag in tags.split(",")}:
                 continue
-            visible_names.add(name)
 
             status, health = derive_display_status_and_health(state)
             pid = str(state.pid) if state and state.pid else "-"
@@ -1111,7 +1177,7 @@ class LlamaOrchestratorGui(tk.Tk):
                 TableRow(
                     name=name,
                     values=(
-                        format_queue_checkbox(name in self._queued_benchmark_names),
+                        format_queue_checkbox(name in queued_names),
                         display_name,
                         status,
                         health,
@@ -1133,7 +1199,7 @@ class LlamaOrchestratorGui(tk.Tk):
                         uptime,
                     ),
                     sort_values={
-                        "queue": name in self._queued_benchmark_names,
+                        "queue": name in queued_names,
                         "name": (display_name.casefold(), name.casefold()),
                         "status": status,
                         "health": health,
@@ -1157,23 +1223,40 @@ class LlamaOrchestratorGui(tk.Tk):
                 )
             )
 
-        for row in stable_sort_rows(
-            rows,
-            self.gui_settings.sort_order,
-            lambda current, column: current.sort_values.get(column),
-        ):
+        return tuple(rows), all_tags
+
+    def _visible_rows(self, rows: Sequence[TableRow]) -> tuple[TableRow, ...]:
+        return tuple(
+            stable_sort_rows(
+                list(rows),
+                self.gui_settings.sort_order,
+                lambda current, column: current.sort_values.get(column),
+            )
+        )
+
+    def _render_full_rows(self, rows: Sequence[TableRow]) -> None:
+        for item in self.tree.get_children():
+            self.tree.delete(item)
+        for row in self._visible_rows(rows):
             tags = (RUNNING_BENCHMARK_ROW_TAG,) if row.name == self._benchmark_active_name else ()
             self.tree.insert("", tk.END, iid=row.name, values=row.values, tags=tags)
 
-        self.gpu_inventory_var.set(format_detected_gpu_summary(detected_gpus, self.gpu_aliases))
-        self._render_gpu_inventory(detected_gpus)
+    def _render_refresh_metadata(
+        self,
+        snapshot: GuiRefreshSnapshot,
+        selection: tuple[str, ...],
+        focused: str | None,
+    ) -> None:
+        self.gpu_inventory_var.set(format_detected_gpu_summary(snapshot.detected_gpus, self.gpu_aliases))
+        self._render_gpu_inventory(snapshot.detected_gpus)
 
-        filter_values = ("All tags", *sorted(all_tags))
+        filter_values = ("All tags", *snapshot.all_tags)
         self.tag_filter.configure(values=filter_values)
         if self.tag_filter_var.get() not in filter_values:
             self.tag_filter_var.set("All tags")
         self.prompt_var.set(self.benchmark_settings.prompt_file.name)
 
+        visible_names = {row.name for row in snapshot.rows}
         visible_selection = tuple(name for name in selection if name in visible_names)
         if visible_selection:
             self.tree.selection_set(visible_selection)
@@ -1189,8 +1272,8 @@ class LlamaOrchestratorGui(tk.Tk):
         self._selected_names = visible_selection
         self._selected_name = visible_selection[0] if visible_selection else None
         self._focused_name = focus_target
-        self._update_benchmark_controls()
 
+    def _render_daemon_status(self) -> None:
         daemon = get_daemon_status()
         if daemon.running:
             self.daemon_var.set(f"Daemon: running (PID {daemon.pid})")
@@ -1265,12 +1348,28 @@ class LlamaOrchestratorGui(tk.Tk):
     def _ordered_queued_instance_names(self) -> tuple[str, ...]:
         return ordered_visible_names(self._queued_benchmark_names, self._visible_instance_names())
 
+    def _update_queue_cells(self, names: Sequence[str]) -> None:
+        """Fast-path: update only the queue column for the given visible row names.
+
+        Updates the queue cell glyph for each named row without rebuilding the
+        entire Treeview.  Rows that are not currently visible are skipped; the
+        next normal refresh will render their correct state.
+        """
+        for item in self.tree.get_children():
+            if item in names:
+                checked = item in self._queued_benchmark_names
+                current = self.tree.set(item, "queue")
+                expected = format_queue_checkbox(checked)
+                if current != expected:
+                    self.tree.set(item, "queue", expected)
+
     def _toggle_queue_name(self, name: str) -> None:
         if name in self._queued_benchmark_names:
             self._queued_benchmark_names.remove(name)
         else:
             self._queued_benchmark_names.add(name)
-        self.refresh()
+        self._update_queue_cells((name,))
+        self._update_benchmark_controls()
 
     def _set_active_benchmark_name(self, name: str | None) -> None:
         self._benchmark_active_name = name
@@ -1287,7 +1386,8 @@ class LlamaOrchestratorGui(tk.Tk):
                 self._queued_benchmark_names.add(name)
             else:
                 self._queued_benchmark_names.discard(name)
-        self.refresh()
+        self._update_queue_cells(names)
+        self._update_benchmark_controls()
 
     def _benchmark_job_running(self) -> bool:
         with self._benchmark_job_lock:

@@ -5,18 +5,18 @@
     "instance_no": "00000054",
     "display_name": "qwen36_27b_mtp_udq3xl_rx6800_p1_128k",
     "created_at": "2026-05-30T19:14:20Z",
-    "updated_at": "2026-05-30T19:19:32Z",
+    "updated_at": "2026-06-03T00:00:00Z",
     "sort_order": null,
     "binary": {
-        "binary_id": "84d1f8f0-4d6b-49c1-91b5-123a3ab094bd",
-        "version": "b9222",
+        "binary_id": "1e155a2a-7cbc-4077-affd-19b476f15ef6",
+        "version": "b9297",
         "variant": "win-vulkan-x64",
-        "source_url": "https://github.com/ggml-org/llama.cpp/releases/download/b9222/llama-b9222-bin-win-vulkan-x64.zip",
-        "sha256": "71d896955c0ae3576f6fd147f4ca197aa6a839ed7693651c14fe74014cef954e"
+        "source_url": "https://github.com/ggml-org/llama.cpp/releases/download/b9297/llama-b9297-bin-win-vulkan-x64.zip",
+        "sha256": "533bfc014a28941b624b70ac177ada2d463e1b64b6ddaf4dfebfe4aef6ef931e"
     },
     "model": {
         "path": "models\\Qwen3.6-27B-MTP-UD-Q3_K_XL.gguf",
-        "context_size": 110000,
+        "context_size": 50000,
         "batch_size": 512,
         "threads": 16
     },
@@ -28,7 +28,7 @@
     },
     "gpu": {
         "backend": "vulkan",
-        "device_id": 4,
+        "device_id": 2,
         "layers": 999
     },
     "env": {
@@ -48,6 +48,20 @@
         "q4_0",
         "--cache-type-v",
         "q4_0",
+        "--cache-type-k-draft",
+        "q4_0",
+        "--cache-type-v-draft",
+        "q4_0",
+        "--cache-reuse",
+        "128",
+        "--ctx-checkpoints",
+        "32",
+        "--checkpoint-every-n-tokens",
+        "4096",
+        "--cache-ram",
+        "4096",
+        "--kv-unified",
+        "--cache-idle-slots",
         "--no-mmproj",
         "--jinja",
         "--reasoning",
@@ -55,13 +69,16 @@
         "--flash-attn",
         "on",
         "--ubatch-size",
-        "128",
+        "256",
+        "--threads-batch",
+        "16",
         "--spec-type",
         "draft-mtp",
         "--spec-draft-n-max",
-        "2",
+        "3",
         "--spec-draft-n-min",
-        "1"
+        "1",
+        "--metrics"
     ],
     "parameter_mutability": {
         "static": [
@@ -120,7 +137,15 @@
         "vulkan",
         "parallel-1",
         "long-context",
-        "b9222"
+        "128k",
+        "q4-kv",
+        "draft-kv",
+        "cache-reuse",
+        "cache-ram",
+        "checkpoints",
+        "threads-batch-16",
+        "metrics",
+        "b9297"
     ],
     "healthcheck": {
         "type": "http",
