@@ -21,10 +21,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, simpledialog, ttk
 
-# Optional timing instrumentation for performance profiling.
-# Enable by setting LLAMA_ORCH_DEBUG_GUI_TIMING=1 in the environment.
-_GUI_TIMING_ENABLED: bool = os.environ.get("LLAMA_ORCH_DEBUG_GUI_TIMING", "0") == "1"
-
 from llama_orchestrator.benchmark import (
     DEFAULT_ENDPOINT,
     DEFAULT_MAX_TOKENS,
@@ -35,6 +31,15 @@ from llama_orchestrator.benchmark import (
     load_benchmark_settings,
     quick_benchmark_instance,
     save_benchmark_settings,
+)
+from llama_orchestrator.benchmark_grid import (
+    GridParameterRange,
+    GridParameterSpec,
+    GridPlan,
+    grid_parameter_catalog,
+    latest_grid_runs,
+    run_request_grid_for_instance,
+    write_grid_summary_artifact,
 )
 from llama_orchestrator.config import (
     BinaryConfig,
@@ -105,6 +110,10 @@ from llama_orchestrator.hf_import import (
 )
 from llama_orchestrator.model_metadata import build_model_metadata
 
+# Optional timing instrumentation for performance profiling.
+# Enable by setting LLAMA_ORCH_DEBUG_GUI_TIMING=1 in the environment.
+_GUI_TIMING_ENABLED: bool = os.environ.get("LLAMA_ORCH_DEBUG_GUI_TIMING", "0") == "1"
+
 DEFAULT_RUNTIME_ARGS = ["--no-mmproj", "--reasoning", "off", "--flash-attn", "auto"]
 MANAGED_VALUE_ARGS = {"--reasoning", "--flash-attn"}
 MANAGED_FLAG_ARGS = {"--no-mmproj"}
@@ -112,6 +121,7 @@ VULKAN_VARIANT = "win-vulkan-x64"
 INSTALL_LLAMA_SERVER_LABEL = "Install llama-server"
 EDIT_BENCHMARK_PROMPT_LABEL = "Edit Benchmark Prompt"
 BENCHMARK_PARAMS_MENU_LABEL = "Params"
+GRID_BENCHMARK_LABEL = "Grid benchmark"
 VULKAN_BINARY_MISSING_MESSAGE = (
     "No win-vulkan-x64 llama-server binary is installed. Use Install llama-server "
     "to download the default variant, or choose another llama-server variant."
@@ -220,6 +230,251 @@ class GuiRefreshSnapshot:
     detected_gpus: tuple[DetectedGpu, ...]
     all_tags: tuple[str, ...]
     collected_at: float
+
+
+@dataclass(frozen=True)
+class GridDialogParameterVars:
+    """Tk variables backing one Grid benchmark dialog row."""
+
+    spec: GridParameterSpec
+    enabled: tk.BooleanVar
+    minimum: tk.StringVar
+    maximum: tk.StringVar
+    step_or_values: tk.StringVar
+
+
+def parse_grid_values(text: str, value_type: str) -> tuple[int | float | str | bool, ...]:
+    """Parse comma-separated grid values from the dialog."""
+    raw_values = [part.strip() for part in text.split(",") if part.strip()]
+    if not raw_values:
+        raise ValueError("Enter at least one value.")
+    parsed: list[int | float | str | bool] = []
+    for value in raw_values:
+        if value_type == "int":
+            parsed.append(int(value))
+        elif value_type == "float":
+            parsed.append(float(value))
+        elif value_type == "bool":
+            normalized = value.lower()
+            if normalized in {"1", "true", "yes", "on"}:
+                parsed.append(True)
+            elif normalized in {"0", "false", "no", "off"}:
+                parsed.append(False)
+            else:
+                raise ValueError(f"Invalid boolean value: {value}")
+        else:
+            parsed.append(value)
+    return tuple(parsed)
+
+
+def parse_grid_number(text: str, value_type: str) -> int | float | None:
+    """Parse an optional numeric grid bound."""
+    value = text.strip()
+    if not value:
+        return None
+    if value_type == "int":
+        return int(value)
+    if value_type == "float":
+        return float(value)
+    raise ValueError(f"{value_type} is not a numeric grid type.")
+
+
+def _default_grid_values_for_spec(value: int | float | str | bool | None) -> str:
+    if isinstance(value, bool):
+        return "false,true" if value is False else "true,false"
+    if isinstance(value, float):
+        return f"{value:g}"
+    if value is None:
+        return ""
+    return str(value)
+
+
+def _default_grid_bound(value: int | float | str | bool | None) -> str:
+    if isinstance(value, bool) or value is None:
+        return ""
+    if isinstance(value, (int, float)):
+        return f"{value:g}"
+    return ""
+
+
+def _default_step_or_values(spec: GridParameterSpec) -> str:
+    if spec.value_type == "int":
+        return "1"
+    if spec.value_type == "float":
+        return "0.1"
+    if spec.choices:
+        return ",".join(str(choice).lower() if isinstance(choice, bool) else str(choice) for choice in spec.choices)
+    return _default_grid_values_for_spec(spec.default)
+
+
+def _grid_dialog_status(spec: GridParameterSpec) -> str:
+    if spec.read_only:
+        return "read-only"
+    if not spec.execution_supported:
+        return "planned"
+    return "ready"
+
+
+class GridBenchmarkDialog(tk.Toplevel):
+    """Grid benchmark parameter dialog."""
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        settings: BenchmarkSettings,
+        config: InstanceConfig | None = None,
+    ) -> None:
+        super().__init__(parent)
+        self.title(GRID_BENCHMARK_LABEL)
+        self.resizable(True, True)
+        self.result: GridPlan | None = None
+        self._parameter_vars: dict[str, GridDialogParameterVars] = {}
+
+        body = ttk.Frame(self, padding=10)
+        body.grid(row=0, column=0, sticky="nsew")
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        body.columnconfigure(4, weight=1)
+
+        headers = (
+            "Enabled",
+            "Parameter",
+            "Current/default",
+            "Minimum",
+            "Maximum",
+            "Step / values",
+            "Category",
+            "Restart",
+            "Status",
+        )
+        for column, header in enumerate(headers):
+            ttk.Label(body, text=header).grid(row=0, column=column, sticky="w", padx=4)
+
+        for row, spec in enumerate(grid_parameter_catalog(config, settings), start=1):
+            enabled = tk.BooleanVar(value=False)
+            min_value = tk.StringVar(value=_default_grid_bound(spec.default))
+            max_value = tk.StringVar(value=_default_grid_bound(spec.default))
+            step_or_values = tk.StringVar(value=_default_step_or_values(spec))
+            self._parameter_vars[spec.name] = GridDialogParameterVars(
+                spec=spec,
+                enabled=enabled,
+                minimum=min_value,
+                maximum=max_value,
+                step_or_values=step_or_values,
+            )
+            ttk.Checkbutton(
+                body,
+                variable=enabled,
+                state=tk.DISABLED if spec.read_only else tk.NORMAL,
+            ).grid(row=row, column=0, sticky="w", padx=4)
+            ttk.Label(body, text=spec.name).grid(row=row, column=1, sticky="w", padx=4)
+            ttk.Label(body, text=_default_grid_values_for_spec(spec.default) or "-").grid(
+                row=row,
+                column=2,
+                sticky="w",
+                padx=4,
+            )
+            numeric_state = tk.NORMAL if spec.value_type in {"int", "float"} and not spec.read_only else tk.DISABLED
+            ttk.Entry(body, textvariable=min_value, width=10, state=numeric_state).grid(
+                row=row, column=3, sticky="ew", padx=4
+            )
+            ttk.Entry(body, textvariable=max_value, width=10, state=numeric_state).grid(
+                row=row, column=4, sticky="ew", padx=4
+            )
+            ttk.Entry(
+                body,
+                textvariable=step_or_values,
+                width=24,
+                state=tk.NORMAL if not spec.read_only else tk.DISABLED,
+            ).grid(row=row, column=5, sticky="ew", padx=4)
+            ttk.Label(body, text=spec.category).grid(row=row, column=6, sticky="w", padx=4)
+            ttk.Label(body, text="yes" if spec.restart_required else "no").grid(
+                row=row,
+                column=7,
+                sticky="w",
+                padx=4,
+            )
+            ttk.Label(body, text=_grid_dialog_status(spec)).grid(row=row, column=8, sticky="w", padx=4)
+
+        self.preview_var = tk.StringVar(value="Combinations: 1")
+        ttk.Label(body, textvariable=self.preview_var).grid(
+            row=len(self._parameter_vars) + 1,
+            column=0,
+            columnspan=9,
+            sticky="w",
+            pady=(10, 0),
+        )
+
+        buttons = ttk.Frame(body)
+        buttons.grid(row=len(self._parameter_vars) + 2, column=0, columnspan=9, sticky="e", pady=(10, 0))
+        ttk.Button(buttons, text="Preview", command=self._update_preview).pack(side=tk.LEFT, padx=4)
+        ttk.Button(buttons, text="Cancel", command=self._cancel).pack(side=tk.LEFT, padx=4)
+        ttk.Button(buttons, text="Start", command=self._accept).pack(side=tk.LEFT, padx=4)
+
+        self.transient(parent)
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self._update_preview()
+
+    def _build_plan(self) -> GridPlan:
+        ranges: list[GridParameterRange] = []
+        for name, vars_ in self._parameter_vars.items():
+            if not vars_.enabled.get():
+                continue
+            if vars_.spec.read_only:
+                raise ValueError(f"{name} is read-only metadata and cannot be benchmarked.")
+            if not vars_.spec.execution_supported:
+                raise ValueError(
+                    f"{name} requires restart/runtime-grid support, which is planned but not active yet."
+                )
+            if vars_.spec.value_type in {"int", "float"}:
+                minimum = parse_grid_number(vars_.minimum.get(), vars_.spec.value_type)
+                maximum = parse_grid_number(vars_.maximum.get(), vars_.spec.value_type)
+                step = parse_grid_number(vars_.step_or_values.get(), vars_.spec.value_type)
+                ranges.append(
+                    GridParameterRange(
+                        name=name,
+                        minimum=minimum,
+                        maximum=maximum,
+                        step=step,
+                    )
+                )
+                continue
+            ranges.append(
+                GridParameterRange(
+                    name=name,
+                    values=parse_grid_values(vars_.step_or_values.get(), vars_.spec.value_type),
+                )
+            )
+        return GridPlan(parameters=tuple(ranges))
+
+    def _update_preview(self) -> None:
+        try:
+            plan = self._build_plan()
+            suffix = " confirmation required" if plan.needs_confirmation() else ""
+            self.preview_var.set(f"Combinations: {plan.combination_count()}{suffix}")
+        except Exception as exc:
+            self.preview_var.set(f"Invalid grid: {exc}")
+
+    def _accept(self) -> None:
+        try:
+            plan = self._build_plan()
+            count = plan.combination_count()
+        except Exception as exc:
+            messagebox.showerror(GRID_BENCHMARK_LABEL, str(exc), parent=self)
+            return
+        if plan.needs_confirmation() and not messagebox.askyesno(
+            GRID_BENCHMARK_LABEL,
+            f"Run {count} combinations?",
+            parent=self,
+        ):
+            return
+        self.result = plan
+        self.destroy()
+
+    def _cancel(self) -> None:
+        self.result = None
+        self.destroy()
 
 
 def format_queue_checkbox(checked: bool) -> str:
@@ -718,9 +973,13 @@ class LlamaOrchestratorGui(tk.Tk):
         self._benchmark_job_label: str | None = None
         self._serial_benchmark_stop = threading.Event()
         self._serial_benchmark_active = False
+        self._grid_benchmark_stop = threading.Event()
+        self._grid_benchmark_active = False
         self.quick_benchmark_button: ttk.Button | None = None
         self.serial_benchmark_button: ttk.Button | None = None
         self.stop_serial_benchmark_button: ttk.Button | None = None
+        self.grid_benchmark_button: ttk.Button | None = None
+        self.stop_grid_benchmark_button: ttk.Button | None = None
 
         self._build_widgets()
         self._schedule_message_pump()
@@ -826,6 +1085,7 @@ class LlamaOrchestratorGui(tk.Tk):
 
         self.context_menu = tk.Menu(self, tearoff=False)
         self.context_menu.add_command(label="Quick benchmark", command=self._run_benchmark_selected)
+        self.context_menu.add_command(label=GRID_BENCHMARK_LABEL, command=self._run_grid_benchmark)
         self.context_menu.add_command(label="Toggle benchmark queue", command=self._toggle_selected_queue_rows)
         self.context_menu.add_command(label="Clone row", command=self._clone_selected)
         self.context_menu.add_command(label="Rename display name", command=self._rename_display_name)
@@ -846,12 +1106,24 @@ class LlamaOrchestratorGui(tk.Tk):
             command=self._run_serial_benchmark,
         )
         self.serial_benchmark_button.pack(side=tk.LEFT, padx=(6, 0))
+        self.grid_benchmark_button = ttk.Button(
+            detail_bar,
+            text=GRID_BENCHMARK_LABEL,
+            command=self._run_grid_benchmark,
+        )
+        self.grid_benchmark_button.pack(side=tk.LEFT, padx=(6, 0))
         self.stop_serial_benchmark_button = ttk.Button(
             detail_bar,
             text="Stop queue",
             command=self._stop_serial_benchmark,
         )
         self.stop_serial_benchmark_button.pack(side=tk.LEFT, padx=(6, 0))
+        self.stop_grid_benchmark_button = ttk.Button(
+            detail_bar,
+            text="Stop grid",
+            command=self._stop_grid_benchmark,
+        )
+        self.stop_grid_benchmark_button.pack(side=tk.LEFT, padx=(6, 0))
         params_button = ttk.Menubutton(detail_bar, text=BENCHMARK_PARAMS_MENU_LABEL)
         self.benchmark_params_menu = tk.Menu(params_button, tearoff=False)
         params_button["menu"] = self.benchmark_params_menu
@@ -1416,11 +1688,24 @@ class LlamaOrchestratorGui(tk.Tk):
             self.serial_benchmark_button.configure(
                 state=tk.DISABLED if running or not queued_visible else tk.NORMAL
             )
+        if self.grid_benchmark_button is not None:
+            has_grid_target = bool(self.tree.selection() or queued_visible)
+            self.grid_benchmark_button.configure(
+                state=tk.DISABLED if running or not has_grid_target else tk.NORMAL
+            )
         if self.stop_serial_benchmark_button is not None:
             self.stop_serial_benchmark_button.configure(
                 state=(
                     tk.NORMAL
                     if self._serial_benchmark_active and not self._serial_benchmark_stop.is_set()
+                    else tk.DISABLED
+                )
+            )
+        if self.stop_grid_benchmark_button is not None:
+            self.stop_grid_benchmark_button.configure(
+                state=(
+                    tk.NORMAL
+                    if self._grid_benchmark_active and not self._grid_benchmark_stop.is_set()
                     else tk.DISABLED
                 )
             )
@@ -1619,6 +1904,81 @@ class LlamaOrchestratorGui(tk.Tk):
             return
         self._serial_benchmark_stop.set()
         self._post_message("[Serial benchmark] stop requested.")
+        self._update_benchmark_controls()
+
+    def _grid_benchmark_targets(self) -> tuple[str, ...]:
+        queued = self._ordered_queued_instance_names()
+        if queued:
+            return queued
+        selection = self.tree.selection()
+        return (str(selection[0]),) if selection else ()
+
+    def _run_grid_benchmark(self) -> None:
+        names = self._grid_benchmark_targets()
+        if not names:
+            return
+        self._reload_benchmark_settings()
+        dialog_config = get_instance_config(names[0])
+        dialog = GridBenchmarkDialog(self, self.benchmark_settings, dialog_config)
+        self.wait_window(dialog)
+        plan = dialog.result
+        if plan is None:
+            return
+        if not self._begin_benchmark_job(GRID_BENCHMARK_LABEL):
+            active_label = self._benchmark_job_label or "Another benchmark"
+            messagebox.showinfo("Benchmark already running", f"{active_label} is already in progress.")
+            return
+        self._grid_benchmark_active = True
+        self._grid_benchmark_stop.clear()
+        self._update_benchmark_controls()
+
+        def action() -> str:
+            completed = 0
+            try:
+                for name in names:
+                    if self._grid_benchmark_stop.is_set():
+                        break
+                    started_by_grid = self._start_serial_benchmark_instance(name)
+                    self._set_active_benchmark_name(name)
+                    try:
+                        config = get_instance_config(name)
+                        sweep = run_request_grid_for_instance(
+                            config,
+                            base_settings=load_benchmark_settings(self.project_root),
+                            plan=plan,
+                            should_stop=self._grid_benchmark_stop.is_set,
+                            post_message=self._post_message,
+                        )
+                        runs = latest_grid_runs(sweep.sweep_id)
+                        summary = write_grid_summary_artifact(
+                            instance_name=name,
+                            sweep_id=sweep.sweep_id,
+                            runs=runs,
+                        )
+                        self._post_message(
+                            f"[Grid benchmark] summary: {summary.relative_to(self.project_root)}"
+                        )
+                        completed += 1
+                    finally:
+                        self._set_active_benchmark_name(None)
+                        if started_by_grid:
+                            stop_instance(name)
+                if self._grid_benchmark_stop.is_set():
+                    return f"[Grid benchmark] stopped after {completed}/{len(names)} sweep(s)."
+                return f"[Grid benchmark] finished {completed}/{len(names)} sweep(s)."
+            finally:
+                self._set_active_benchmark_name(None)
+                self._grid_benchmark_active = False
+                self._grid_benchmark_stop.clear()
+                self._finish_benchmark_job()
+
+        self._run_background(GRID_BENCHMARK_LABEL, action)
+
+    def _stop_grid_benchmark(self) -> None:
+        if not self._grid_benchmark_active:
+            return
+        self._grid_benchmark_stop.set()
+        self._post_message("[Grid benchmark] stop requested.")
         self._update_benchmark_controls()
 
     def _set_benchmark_settings(self, **changes: int | float | str | bool | Path | None) -> None:

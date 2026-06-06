@@ -62,7 +62,6 @@
         "4096",
         "--kv-unified",
         "--cache-idle-slots",
-        "--no-mmproj",
         "--jinja",
         "--reasoning",
         "on",

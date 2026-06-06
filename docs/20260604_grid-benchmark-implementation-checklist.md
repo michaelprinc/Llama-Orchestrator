@@ -2,54 +2,54 @@
 
 ## Faze A - Parameter catalog
 
-- [ ] A1 Navrhnout `GridParameterSpec` a typy hodnot.
-- [ ] A2 Implementovat enumeraci kombinaci s limity.
-- [ ] A3 Pridat katalog request parametru.
-- [ ] A4 Pridat katalog runtime-static parametru.
+- [x] A1 Navrhnout `GridParameterSpec` a typy hodnot.
+- [x] A2 Implementovat enumeraci kombinaci s limity.
+- [x] A3 Pridat katalog request parametru.
+- [x] A4 Pridat katalog runtime-static parametru.
 - [ ] A5 Pridat informacni introspekci `llama-server --help`.
 
 **Acceptance checks**
 
-- [ ] Numeric parametry umi `min/max/step`.
-- [ ] Enum/bool parametry umi explicitni seznam hodnot.
-- [ ] Katalog oznacuje restart-required parametry.
+- [x] Numeric parametry umi `min/max/step`.
+- [x] Enum/bool parametry umi explicitni seznam hodnot.
+- [x] Katalog oznacuje restart-required parametry.
 
 ## Faze M - Model-aware tuning
 
-- [ ] M1 Vytvorit read-only model capability profile z GGUF/metadat.
+- [x] M1 Vytvorit read-only model capability profile z GGUF/metadat.
 - [ ] M2 Pridat KV/cache tuning katalog a memory warnings.
 - [ ] M3 Pridat MTP/speculative tuning katalog a eligibility.
 - [ ] M4 Pridat mapovani MTP/KV parametru na runtime args.
 
 **Acceptance checks**
 
-- [ ] Architekturni metadata se zobrazuji jako read-only.
+- [x] Architekturni metadata se zobrazuji jako read-only.
 - [ ] KV/cache kombinace maji odhad pametoveho dopadu.
 - [ ] MTP/speculative parametry jsou dostupne jen pri podpore modelu/binary nebo explicitnim override.
 
 ## Faze B - Storage and artifacts
 
-- [ ] B1 Navrhnout SQLite grid schema.
-- [ ] B2 Implementovat sweep/run insert/update helpers.
-- [ ] B3 Implementovat grid artifact path a writer.
+- [x] B1 Navrhnout SQLite grid schema.
+- [x] B2 Implementovat sweep/run insert/update helpers.
+- [x] B3 Implementovat grid artifact path a writer.
 
 **Acceptance checks**
 
-- [ ] Stavajici `benchmarks` historie je citelna.
-- [ ] Kazdy grid run ma ulozene `parameters_json`.
-- [ ] Failed run zustane dohledatelny.
+- [x] Stavajici `benchmarks` historie je citelna.
+- [x] Kazdy grid run ma ulozene `parameters_json`.
+- [x] Failed run zustane dohledatelny.
 
 ## Faze C - Request-only runner
 
-- [ ] C1 Implementovat request-only runner.
-- [ ] C2 Doplnit stop request a progress callbacks.
-- [ ] C3 Propojit quick benchmark result s grid runem.
+- [x] C1 Implementovat request-only runner.
+- [x] C2 Doplnit stop request a progress callbacks.
+- [x] C3 Propojit quick benchmark result s grid runem.
 
 **Acceptance checks**
 
-- [ ] Stop ukonci sweep mezi kombinacemi.
-- [ ] Request body odpovida hodnotam kombinace.
-- [ ] GUI quick benchmark zustava kompatibilni.
+- [x] Stop ukonci sweep mezi kombinacemi.
+- [x] Request body odpovida hodnotam kombinace.
+- [x] GUI quick benchmark zustava kompatibilni.
 
 ## Faze D - Runtime/model-static runner
 
@@ -65,17 +65,17 @@
 
 ## Faze E - GUI dialog and UX
 
-- [ ] E1 Pridat GUI akci `Grid benchmark`.
-- [ ] E2 Implementovat dialog s tabulkou parametru.
-- [ ] E3 Pridat preview kombinaci a potvrzeni limitu.
-- [ ] E4 Napojit background runner, progress a stop.
-- [ ] E5 Pridat zobrazeni/export vysledku.
+- [x] E1 Pridat GUI akci `Grid benchmark`.
+- [x] E2 Implementovat dialog s tabulkou parametru.
+- [x] E3 Pridat preview kombinaci a potvrzeni limitu.
+- [x] E4 Napojit background runner, progress a stop.
+- [x] E5 Pridat zobrazeni/export vysledku.
 
 **Acceptance checks**
 
-- [ ] Dialog se otevre bez spusteni benchmarku.
-- [ ] Nevalidni rozsahy se odmitnou pred startem.
-- [ ] GUI zustane responzivni behem sweepu.
+- [x] Dialog se otevre bez spusteni benchmarku.
+- [x] Nevalidni rozsahy se odmitnou pred startem.
+- [x] GUI zustane responzivni behem sweepu.
 
 ## Faze F - Hugging Face metadata
 
@@ -91,13 +91,13 @@
 
 ## Faze G - Verification and documentation
 
-- [ ] G1 Aktualizovat README benchmark sekci.
-- [ ] G2 Vytvorit implementacni report.
-- [ ] G3 Spustit scoped testy a ruff.
+- [x] G1 Aktualizovat README benchmark sekci.
+- [x] G2 Vytvorit implementacni report.
+- [x] G3 Spustit scoped testy a ruff.
 
 **Acceptance checks**
 
-- [ ] Plan a checklist pouzivaji stejna task ID.
-- [ ] Kazde acceptance kriterium ma provadeci krok.
-- [ ] Rizikove kroky maji rollback.
-- [ ] Jsou uvedene verification kroky.
+- [x] Plan a checklist pouzivaji stejna task ID.
+- [x] Kazde acceptance kriterium ma provadeci krok.
+- [x] Rizikove kroky maji rollback.
+- [x] Jsou uvedene verification kroky.

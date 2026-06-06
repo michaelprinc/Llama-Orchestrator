@@ -15,11 +15,12 @@ from llama_orchestrator.gui import (
     CPU_ACTIVE_GLYPH,
     DEFAULT_RUNTIME_ARGS,
     EDIT_BENCHMARK_PROMPT_LABEL,
+    GRID_BENCHMARK_LABEL,
     INSTALL_LLAMA_SERVER_LABEL,
-    LlamaOrchestratorGui,
     QUEUE_CHECKED_GLYPH,
     QUEUE_UNCHECKED_GLYPH,
     VULKAN_BINARY_MISSING_MESSAGE,
+    LlamaOrchestratorGui,
     apply_managed_runtime_args,
     benchmark_shared_ram_warning,
     derive_display_status_and_health,
@@ -38,6 +39,8 @@ from llama_orchestrator.gui import (
     normalize_gpu_alias,
     normalize_model_path_for_config,
     ordered_visible_names,
+    parse_grid_number,
+    parse_grid_values,
     parse_tag_string,
     persist_instance_health,
     resolve_instance_config_dir,
@@ -53,10 +56,14 @@ from llama_orchestrator.hf_import import DownloadProgress
 class _FakeQueueTree:
     def __init__(self, names: tuple[str, ...]) -> None:
         self._names = names
-        self.values = {name: QUEUE_UNCHECKED_GLYPH for name in names}
+        self._selection: tuple[str, ...] = ()
+        self.values = dict.fromkeys(names, QUEUE_UNCHECKED_GLYPH)
 
     def get_children(self) -> tuple[str, ...]:
         return self._names
+
+    def selection(self) -> tuple[str, ...]:
+        return self._selection
 
     def set(self, item: str, column: str, value: str | None = None) -> str:
         assert column == "queue"
@@ -77,6 +84,10 @@ def _queue_only_gui(names: tuple[str, ...]) -> LlamaOrchestratorGui:
     gui.quick_benchmark_button = None
     gui.serial_benchmark_button = None
     gui.stop_serial_benchmark_button = None
+    gui.grid_benchmark_button = None
+    gui.stop_grid_benchmark_button = None
+    gui._grid_benchmark_active = False
+    gui._grid_benchmark_stop = threading.Event()
     return gui
 
 
@@ -179,6 +190,51 @@ def test_gui_uses_explicit_benchmark_prompt_edit_label() -> None:
 def test_gui_has_compact_benchmark_params_menu_label() -> None:
     """The benchmark params menu should stay compact next to Quick benchmark."""
     assert BENCHMARK_PARAMS_MENU_LABEL == "Params"
+
+
+def test_gui_grid_benchmark_label_is_explicit() -> None:
+    """The grid benchmark action should be clearly named."""
+    assert GRID_BENCHMARK_LABEL == "Grid benchmark"
+
+
+def test_parse_grid_values_supports_request_value_types() -> None:
+    """Grid dialog values should parse into typed request parameters."""
+    assert parse_grid_values("32, 64", "int") == (32, 64)
+    assert parse_grid_values("0, 0.2", "float") == (0.0, 0.2)
+    assert parse_grid_values("false, true", "bool") == (False, True)
+    assert parse_grid_values("chat_completions, completion", "enum") == (
+        "chat_completions",
+        "completion",
+    )
+
+
+def test_parse_grid_number_supports_numeric_ranges() -> None:
+    """Grid dialog numeric rows should support min/max/step inputs."""
+    assert parse_grid_number("4", "int") == 4
+    assert parse_grid_number("0.25", "float") == 0.25
+    assert parse_grid_number("", "int") is None
+
+
+def test_grid_benchmark_targets_are_silent_without_selection_or_queue() -> None:
+    """Grid target lookup should not call the noisy selected-instance helper."""
+    gui = _queue_only_gui(("alpha", "beta"))
+
+    with patch.object(gui, "_selected_instance") as mock_selected:
+        assert gui._grid_benchmark_targets() == ()
+
+    mock_selected.assert_not_called()
+
+
+def test_grid_benchmark_targets_prefer_queue_then_selection() -> None:
+    """Grid benchmark can run from queue or selected row."""
+    gui = _queue_only_gui(("alpha", "beta"))
+    gui.tree._selection = ("beta",)
+
+    assert gui._grid_benchmark_targets() == ("beta",)
+
+    gui._queued_benchmark_names = {"alpha"}
+
+    assert gui._grid_benchmark_targets() == ("alpha",)
 
 
 def test_format_benchmark_settings_summary_lists_custom_values() -> None:
