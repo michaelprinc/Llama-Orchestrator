@@ -6,18 +6,22 @@ from llama_orchestrator.benchmark import BenchmarkResult, BenchmarkSettings
 from llama_orchestrator.benchmark_grid import (
     GridParameterRange,
     GridPlan,
+    apply_runtime_combination,
     default_request_grid_plan,
     grid_parameter_catalog,
     latest_grid_runs,
+    load_grid_plan,
     model_metadata_catalog,
+    plan_requires_restart,
     record_grid_run_finish,
     record_grid_run_start,
     request_parameter_catalog,
+    run_grid_for_instance,
     run_request_grid_for_instance,
     runtime_static_parameter_catalog,
     sampling_parameter_catalog,
+    save_grid_plan,
     settings_for_combination,
-    unsupported_execution_parameters,
 )
 from llama_orchestrator.config import InstanceConfig, ModelConfig
 
@@ -124,7 +128,7 @@ def test_runtime_catalog_marks_restart_required_parameters() -> None:
     assert "q4_0" in specs["--cache-type-k"].choices
     assert specs["--spec-type"].restart_required is True
     assert specs["--spec-draft-n-max"].value_type == "int"
-    assert specs["--spec-draft-n-max"].execution_supported is False
+    assert specs["--spec-draft-n-max"].execution_supported is True
 
 
 def test_grid_catalog_separates_runtime_sampling_and_metadata(tmp_path: Path) -> None:
@@ -168,7 +172,7 @@ def test_request_grid_rejects_restart_required_parameters(tmp_path: Path) -> Non
     config = InstanceConfig(name="demo", model=ModelConfig(path=Path("model.gguf")))
     plan = GridPlan(parameters=(GridParameterRange("--spec-draft-n-max", minimum=1, maximum=3, step=1),))
 
-    assert unsupported_execution_parameters(plan) == ("--spec-draft-n-max",)
+    assert plan_requires_restart(plan) is True
     try:
         run_request_grid_for_instance(
             config,
@@ -181,6 +185,40 @@ def test_request_grid_rejects_restart_required_parameters(tmp_path: Path) -> Non
         assert "restart-required" in str(exc)
     else:
         raise AssertionError("Expected request-only runner to reject runtime parameter")
+
+
+def test_grid_plan_settings_roundtrip(tmp_path: Path) -> None:
+    path = tmp_path / "grid_settings.json"
+    plan = GridPlan(
+        parameters=(
+            GridParameterRange("--spec-draft-n-max", minimum=1, maximum=3, step=1),
+            GridParameterRange("--cache-type-k", values=("f16", "q8_0")),
+        )
+    )
+
+    save_grid_plan(plan, path)
+    loaded = load_grid_plan(path)
+
+    assert loaded.to_json_dict() == plan.to_json_dict()
+
+
+def test_apply_runtime_combination_updates_in_memory_config_without_mutating_original() -> None:
+    config = InstanceConfig(name="demo", model=ModelConfig(path=Path("model.gguf")))
+    config.args = ["--flash-attn", "auto"]
+    combination = GridPlan(
+        parameters=(
+            GridParameterRange("model.context_size", values=(8192,)),
+            GridParameterRange("--spec-draft-n-max", values=(4,)),
+            GridParameterRange("--flash-attn", values=("on",)),
+        )
+    ).combinations()[0]
+
+    updated = apply_runtime_combination(config, combination)
+
+    assert updated.model.context_size == 8192
+    assert updated.args == ["--spec-draft-n-max", "4", "--flash-attn", "on"]
+    assert config.model.context_size == 4096
+    assert config.args == ["--flash-attn", "auto"]
 
 
 def test_grid_db_helpers_store_failed_run(tmp_path: Path) -> None:
@@ -243,3 +281,32 @@ def test_request_grid_runner_records_runs_and_stops_between_combinations(tmp_pat
         "[Grid benchmark] 1/3 running: demo",
         "[Grid benchmark] 1/3 ok: demo",
     ]
+
+
+def test_grid_runner_restarts_for_each_runtime_combination(tmp_path: Path) -> None:
+    settings = _settings(tmp_path)
+    config = InstanceConfig(name="demo", model=ModelConfig(path=Path("model.gguf")))
+    plan = GridPlan(parameters=(GridParameterRange("model.context_size", values=(4096, 8192)),))
+    db_path = tmp_path / "benchmarks.sqlite"
+    restarted_contexts: list[int] = []
+    benchmark_contexts: list[int] = []
+
+    def restart_runtime(runtime_config: InstanceConfig) -> None:
+        restarted_contexts.append(runtime_config.model.context_size)
+
+    def run_benchmark(runtime_config: InstanceConfig, _settings: BenchmarkSettings) -> BenchmarkResult:
+        benchmark_contexts.append(runtime_config.model.context_size)
+        return _result("demo")
+
+    sweep = run_grid_for_instance(
+        config,
+        base_settings=settings,
+        plan=plan,
+        restart_runtime=restart_runtime,
+        run_benchmark=run_benchmark,
+        db_path=db_path,
+    )
+
+    assert restarted_contexts == [4096, 8192]
+    assert benchmark_contexts == [4096, 8192]
+    assert len(latest_grid_runs(sweep.sweep_id, db_path)) == 2

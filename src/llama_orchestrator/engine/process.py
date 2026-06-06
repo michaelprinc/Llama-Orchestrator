@@ -398,7 +398,12 @@ def check_stale_state(state: InstanceState) -> InstanceState:
     return state
 
 
-def start_instance(name: str, wait_for_ready: bool = True, detach: bool = False) -> InstanceState:
+def start_instance(
+    name: str,
+    wait_for_ready: bool = True,
+    detach: bool = False,
+    config_override: "InstanceConfig | None" = None,
+) -> InstanceState:
     """
     Start a llama-server instance.
     
@@ -414,10 +419,13 @@ def start_instance(name: str, wait_for_ready: bool = True, detach: bool = False)
     """
     with instance_lock(name, operation="start"):
         # Load config
-        try:
-            config = get_instance_config(name)
-        except ConfigLoadError as e:
-            raise ProcessError(name, f"Failed to load config: {e.message}", e) from e
+        if config_override is not None:
+            config = config_override
+        else:
+            try:
+                config = get_instance_config(name)
+            except ConfigLoadError as e:
+                raise ProcessError(name, f"Failed to load config: {e.message}", e) from e
 
         # Validate executable exists after loading config so UUID-based binary
         # resolution works for per-instance binary selections.
@@ -671,7 +679,12 @@ def stop_instance(name: str, force: bool = False, timeout: float = 10.0) -> Inst
         return state
 
 
-def restart_instance(name: str, force: bool = False, wait_for_ready: bool = True) -> InstanceState:
+def restart_instance(
+    name: str,
+    force: bool = False,
+    wait_for_ready: bool = True,
+    config_override: "InstanceConfig | None" = None,
+) -> InstanceState:
     """
     Restart a llama-server instance.
     
@@ -704,7 +717,10 @@ def restart_instance(name: str, force: bool = False, wait_for_ready: bool = True
     time.sleep(0.5)
     
     # Start
-    state = start_instance(name, wait_for_ready=wait_for_ready)
+    if config_override is None:
+        state = start_instance(name, wait_for_ready=wait_for_ready)
+    else:
+        state = start_instance(name, wait_for_ready=wait_for_ready, config_override=config_override)
     state.restart_count = restart_count
     save_state(state)
     _sync_runtime_from_state(state)

@@ -19,7 +19,7 @@
 - [x] M1 Vytvorit read-only model capability profile z GGUF/metadat.
 - [ ] M2 Pridat KV/cache tuning katalog a memory warnings.
 - [ ] M3 Pridat MTP/speculative tuning katalog a eligibility.
-- [ ] M4 Pridat mapovani MTP/KV parametru na runtime args.
+- [x] M4 Pridat mapovani MTP/KV parametru na runtime args.
 
 **Acceptance checks**
 
@@ -53,15 +53,15 @@
 
 ## Faze D - Runtime/model-static runner
 
-- [ ] D1 Navrhnout temporary runtime config aplikaci.
-- [ ] D2 Implementovat mapovani runtime/model parametru na config/args.
-- [ ] D3 Implementovat restart/start strategii pro runtime grid.
+- [x] D1 Navrhnout temporary runtime config aplikaci.
+- [x] D2 Implementovat mapovani runtime/model parametru na config/args.
+- [x] D3 Implementovat restart/start strategii pro runtime grid.
 
 **Acceptance checks**
 
-- [ ] `config.json` se bez potvrzeni nezmeni.
-- [ ] Runtime/model run ceka na healthy stav.
-- [ ] Chyba startu se zapise jako failed run.
+- [x] `config.json` se bez potvrzeni nezmeni.
+- [x] Runtime/model run ceka na healthy stav.
+- [x] Chyba startu se zapise jako failed run.
 
 ## Faze E - GUI dialog and UX
 

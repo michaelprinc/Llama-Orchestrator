@@ -38,7 +38,10 @@ from llama_orchestrator.benchmark_grid import (
     GridPlan,
     grid_parameter_catalog,
     latest_grid_runs,
-    run_request_grid_for_instance,
+    load_grid_plan,
+    plan_requires_restart,
+    run_grid_for_instance,
+    save_grid_plan,
     write_grid_summary_artifact,
 )
 from llama_orchestrator.config import (
@@ -307,6 +310,10 @@ def _default_step_or_values(spec: GridParameterSpec) -> str:
     return _default_grid_values_for_spec(spec.default)
 
 
+def _format_grid_values(values: Sequence[int | float | str | bool]) -> str:
+    return ",".join(str(value).lower() if isinstance(value, bool) else str(value) for value in values)
+
+
 def _grid_dialog_status(spec: GridParameterSpec) -> str:
     if spec.read_only:
         return "read-only"
@@ -329,6 +336,7 @@ class GridBenchmarkDialog(tk.Toplevel):
         self.resizable(True, True)
         self.result: GridPlan | None = None
         self._parameter_vars: dict[str, GridDialogParameterVars] = {}
+        saved_ranges = {parameter.name: parameter for parameter in load_grid_plan().parameters}
 
         body = ttk.Frame(self, padding=10)
         body.grid(row=0, column=0, sticky="nsew")
@@ -351,10 +359,33 @@ class GridBenchmarkDialog(tk.Toplevel):
             ttk.Label(body, text=header).grid(row=0, column=column, sticky="w", padx=4)
 
         for row, spec in enumerate(grid_parameter_catalog(config, settings), start=1):
-            enabled = tk.BooleanVar(value=False)
-            min_value = tk.StringVar(value=_default_grid_bound(spec.default))
-            max_value = tk.StringVar(value=_default_grid_bound(spec.default))
-            step_or_values = tk.StringVar(value=_default_step_or_values(spec))
+            saved = saved_ranges.get(spec.name)
+            enabled = tk.BooleanVar(value=bool(saved.enabled) if saved else False)
+            min_value = tk.StringVar(
+                value=(
+                    str(saved.minimum)
+                    if saved is not None and saved.minimum is not None
+                    else _default_grid_bound(spec.default)
+                )
+            )
+            max_value = tk.StringVar(
+                value=(
+                    str(saved.maximum)
+                    if saved is not None and saved.maximum is not None
+                    else _default_grid_bound(spec.default)
+                )
+            )
+            step_or_values = tk.StringVar(
+                value=(
+                    _format_grid_values(saved.values)
+                    if saved is not None and saved.values
+                    else (
+                        str(saved.step)
+                        if saved is not None and saved.step is not None
+                        else _default_step_or_values(spec)
+                    )
+                )
+            )
             self._parameter_vars[spec.name] = GridDialogParameterVars(
                 spec=spec,
                 enabled=enabled,
@@ -408,6 +439,7 @@ class GridBenchmarkDialog(tk.Toplevel):
         buttons = ttk.Frame(body)
         buttons.grid(row=len(self._parameter_vars) + 2, column=0, columnspan=9, sticky="e", pady=(10, 0))
         ttk.Button(buttons, text="Preview", command=self._update_preview).pack(side=tk.LEFT, padx=4)
+        ttk.Button(buttons, text="Save config", command=self._save_config).pack(side=tk.LEFT, padx=4)
         ttk.Button(buttons, text="Cancel", command=self._cancel).pack(side=tk.LEFT, padx=4)
         ttk.Button(buttons, text="Start", command=self._accept).pack(side=tk.LEFT, padx=4)
 
@@ -423,10 +455,6 @@ class GridBenchmarkDialog(tk.Toplevel):
                 continue
             if vars_.spec.read_only:
                 raise ValueError(f"{name} is read-only metadata and cannot be benchmarked.")
-            if not vars_.spec.execution_supported:
-                raise ValueError(
-                    f"{name} requires restart/runtime-grid support, which is planned but not active yet."
-                )
             if vars_.spec.value_type in {"int", "float"}:
                 minimum = parse_grid_number(vars_.minimum.get(), vars_.spec.value_type)
                 maximum = parse_grid_number(vars_.maximum.get(), vars_.spec.value_type)
@@ -471,6 +499,14 @@ class GridBenchmarkDialog(tk.Toplevel):
             return
         self.result = plan
         self.destroy()
+
+    def _save_config(self) -> None:
+        try:
+            path = save_grid_plan(self._build_plan())
+        except Exception as exc:
+            messagebox.showerror(GRID_BENCHMARK_LABEL, str(exc), parent=self)
+            return
+        self.preview_var.set(f"Saved: {path.name}")
 
     def _cancel(self) -> None:
         self.result = None
@@ -1938,16 +1974,31 @@ class LlamaOrchestratorGui(tk.Tk):
                 for name in names:
                     if self._grid_benchmark_stop.is_set():
                         break
-                    started_by_grid = self._start_serial_benchmark_instance(name)
                     self._set_active_benchmark_name(name)
+                    original_config = get_instance_config(name)
+                    state_before = list_instances().get(name)
+                    was_running = (
+                        state_before is not None
+                        and state_before.status == InstanceStatus.RUNNING
+                    )
+                    started_by_grid = False
                     try:
-                        config = get_instance_config(name)
-                        sweep = run_request_grid_for_instance(
-                            config,
+                        restart_needed = plan_requires_restart(plan)
+                        if not restart_needed:
+                            started_by_grid = self._start_serial_benchmark_instance(name)
+                        def restart_grid_runtime(
+                            runtime_config: InstanceConfig,
+                            current_name: str = name,
+                        ) -> None:
+                            restart_instance(current_name, config_override=runtime_config)
+
+                        sweep = run_grid_for_instance(
+                            original_config,
                             base_settings=load_benchmark_settings(self.project_root),
                             plan=plan,
                             should_stop=self._grid_benchmark_stop.is_set,
                             post_message=self._post_message,
+                            restart_runtime=restart_grid_runtime,
                         )
                         runs = latest_grid_runs(sweep.sweep_id)
                         summary = write_grid_summary_artifact(
@@ -1961,7 +2012,12 @@ class LlamaOrchestratorGui(tk.Tk):
                         completed += 1
                     finally:
                         self._set_active_benchmark_name(None)
-                        if started_by_grid:
+                        if plan_requires_restart(plan):
+                            if was_running:
+                                restart_instance(name, config_override=original_config)
+                            else:
+                                stop_instance(name)
+                        elif started_by_grid:
                             stop_instance(name)
                 if self._grid_benchmark_stop.is_set():
                     return f"[Grid benchmark] stopped after {completed}/{len(names)} sweep(s)."

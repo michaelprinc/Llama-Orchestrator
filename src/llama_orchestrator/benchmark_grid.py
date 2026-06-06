@@ -18,7 +18,7 @@ from llama_orchestrator.benchmark import (
     get_benchmark_db_path,
     quick_benchmark_instance,
 )
-from llama_orchestrator.config import InstanceConfig, get_logs_dir
+from llama_orchestrator.config import InstanceConfig, get_logs_dir, get_state_dir
 
 GridParameterCategory = Literal[
     "request",
@@ -239,30 +239,30 @@ def request_parameter_catalog(settings: BenchmarkSettings | None = None) -> tupl
 def runtime_static_parameter_catalog() -> tuple[GridParameterSpec, ...]:
     """Return curated restart-required runtime parameters for the GUI catalog."""
     return (
-        GridParameterSpec("model.context_size", "int", "runtime_static", minimum=512, maximum=262144, restart_required=True, execution_supported=False),
-        GridParameterSpec("model.batch_size", "int", "runtime_static", minimum=1, maximum=8192, restart_required=True, execution_supported=False),
-        GridParameterSpec("server.parallel", "int", "runtime_static", minimum=1, maximum=64, restart_required=True, execution_supported=False),
-        GridParameterSpec("gpu.layers", "int", "runtime_static", minimum=0, maximum=999, restart_required=True, execution_supported=False),
-        GridParameterSpec("--ubatch-size", "int", "model_runtime", minimum=1, maximum=8192, restart_required=True, execution_supported=False),
-        GridParameterSpec("--cache-type-k", "enum", "model_runtime", choices=("f16", "q8_0", "q4_0", "q4_1", "iq4_nl"), restart_required=True, execution_supported=False),
-        GridParameterSpec("--cache-type-v", "enum", "model_runtime", choices=("f16", "q8_0", "q4_0", "q4_1", "iq4_nl"), restart_required=True, execution_supported=False),
-        GridParameterSpec("--kv-offload", "bool", "model_runtime", choices=(False, True), restart_required=True, execution_supported=False),
-        GridParameterSpec("--kv-unified", "bool", "model_runtime", choices=(False, True), restart_required=True, execution_supported=False),
-        GridParameterSpec("--cache-ram", "int", "model_runtime", minimum=0, maximum=1048576, restart_required=True, execution_supported=False),
-        GridParameterSpec("--cache-idle-slots", "int", "model_runtime", minimum=0, maximum=1024, restart_required=True, execution_supported=False),
-        GridParameterSpec("--ctx-checkpoints", "int", "model_runtime", minimum=0, maximum=1024, restart_required=True, execution_supported=False),
-        GridParameterSpec("--checkpoint-every-n-tokens", "int", "model_runtime", minimum=0, maximum=131072, restart_required=True, execution_supported=False),
-        GridParameterSpec("--swa-full", "bool", "model_runtime", choices=(False, True), restart_required=True, execution_supported=False),
-        GridParameterSpec("--flash-attn", "enum", "model_runtime", choices=("auto", "on", "off"), restart_required=True, execution_supported=False),
-        GridParameterSpec("--spec-type", "enum", "model_runtime", choices=("none", "draft-simple", "draft-eagle3", "draft-mtp"), restart_required=True, execution_supported=False),
-        GridParameterSpec("--spec-draft-n-max", "int", "model_runtime", minimum=1, maximum=64, restart_required=True, execution_supported=False),
-        GridParameterSpec("--spec-draft-n-min", "int", "model_runtime", minimum=0, maximum=64, restart_required=True, execution_supported=False),
-        GridParameterSpec("--spec-draft-p-min", "float", "model_runtime", minimum=0.0, maximum=1.0, restart_required=True, execution_supported=False),
-        GridParameterSpec("--spec-draft-p-split", "float", "model_runtime", minimum=0.0, maximum=1.0, restart_required=True, execution_supported=False),
-        GridParameterSpec("--cache-type-k-draft", "enum", "model_runtime", choices=("f16", "q8_0", "q4_0", "q4_1", "iq4_nl"), restart_required=True, execution_supported=False),
-        GridParameterSpec("--cache-type-v-draft", "enum", "model_runtime", choices=("f16", "q8_0", "q4_0", "q4_1", "iq4_nl"), restart_required=True, execution_supported=False),
-        GridParameterSpec("--n-gpu-layers-draft", "int", "model_runtime", minimum=0, maximum=999, restart_required=True, execution_supported=False),
-        GridParameterSpec("--model-draft", "str", "model_runtime", restart_required=True, execution_supported=False),
+        GridParameterSpec("model.context_size", "int", "runtime_static", minimum=512, maximum=262144, restart_required=True),
+        GridParameterSpec("model.batch_size", "int", "runtime_static", minimum=1, maximum=8192, restart_required=True),
+        GridParameterSpec("server.parallel", "int", "runtime_static", minimum=1, maximum=64, restart_required=True),
+        GridParameterSpec("gpu.layers", "int", "runtime_static", minimum=0, maximum=999, restart_required=True),
+        GridParameterSpec("--ubatch-size", "int", "model_runtime", minimum=1, maximum=8192, restart_required=True),
+        GridParameterSpec("--cache-type-k", "enum", "model_runtime", choices=("f16", "q8_0", "q4_0", "q4_1", "iq4_nl"), restart_required=True),
+        GridParameterSpec("--cache-type-v", "enum", "model_runtime", choices=("f16", "q8_0", "q4_0", "q4_1", "iq4_nl"), restart_required=True),
+        GridParameterSpec("--kv-offload", "bool", "model_runtime", choices=(False, True), restart_required=True),
+        GridParameterSpec("--kv-unified", "bool", "model_runtime", choices=(False, True), restart_required=True),
+        GridParameterSpec("--cache-ram", "int", "model_runtime", minimum=0, maximum=1048576, restart_required=True),
+        GridParameterSpec("--cache-idle-slots", "int", "model_runtime", minimum=0, maximum=1024, restart_required=True),
+        GridParameterSpec("--ctx-checkpoints", "int", "model_runtime", minimum=0, maximum=1024, restart_required=True),
+        GridParameterSpec("--checkpoint-every-n-tokens", "int", "model_runtime", minimum=0, maximum=131072, restart_required=True),
+        GridParameterSpec("--swa-full", "bool", "model_runtime", choices=(False, True), restart_required=True),
+        GridParameterSpec("--flash-attn", "enum", "model_runtime", choices=("auto", "on", "off"), restart_required=True),
+        GridParameterSpec("--spec-type", "enum", "model_runtime", choices=("none", "draft-simple", "draft-eagle3", "draft-mtp"), restart_required=True),
+        GridParameterSpec("--spec-draft-n-max", "int", "model_runtime", minimum=1, maximum=64, restart_required=True),
+        GridParameterSpec("--spec-draft-n-min", "int", "model_runtime", minimum=0, maximum=64, restart_required=True),
+        GridParameterSpec("--spec-draft-p-min", "float", "model_runtime", minimum=0.0, maximum=1.0, restart_required=True),
+        GridParameterSpec("--spec-draft-p-split", "float", "model_runtime", minimum=0.0, maximum=1.0, restart_required=True),
+        GridParameterSpec("--cache-type-k-draft", "enum", "model_runtime", choices=("f16", "q8_0", "q4_0", "q4_1", "iq4_nl"), restart_required=True),
+        GridParameterSpec("--cache-type-v-draft", "enum", "model_runtime", choices=("f16", "q8_0", "q4_0", "q4_1", "iq4_nl"), restart_required=True),
+        GridParameterSpec("--n-gpu-layers-draft", "int", "model_runtime", minimum=0, maximum=999, restart_required=True),
+        GridParameterSpec("--model-draft", "str", "model_runtime", restart_required=True),
     )
 
 
@@ -319,6 +319,55 @@ def default_request_grid_plan(settings: BenchmarkSettings) -> GridPlan:
     )
 
 
+def get_grid_settings_path() -> Path:
+    """Return the persisted GUI grid benchmark settings path."""
+    return get_state_dir() / "grid_benchmark_settings.json"
+
+
+def save_grid_plan(plan: GridPlan, path: Path | None = None) -> Path:
+    """Persist the Grid benchmark dialog configuration."""
+    settings_path = path or get_grid_settings_path()
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(
+        json.dumps(plan.to_json_dict(), indent=2, ensure_ascii=False),
+        encoding="utf-8",
+    )
+    return settings_path
+
+
+def load_grid_plan(path: Path | None = None) -> GridPlan:
+    """Load the persisted Grid benchmark dialog configuration."""
+    settings_path = path or get_grid_settings_path()
+    if not settings_path.exists():
+        return GridPlan(parameters=())
+    try:
+        data = json.loads(settings_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return GridPlan(parameters=())
+    parameters = []
+    for item in data.get("parameters", []):
+        if not isinstance(item, dict):
+            continue
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        parameters.append(
+            GridParameterRange(
+                name=name,
+                enabled=bool(item.get("enabled", True)),
+                minimum=item.get("minimum"),
+                maximum=item.get("maximum"),
+                step=item.get("step"),
+                values=tuple(item.get("values") or ()),
+            )
+        )
+    return GridPlan(
+        parameters=tuple(parameters),
+        confirm_limit=int(data.get("confirm_limit") or DEFAULT_GRID_CONFIRM_LIMIT),
+        hard_limit=int(data.get("hard_limit") or DEFAULT_GRID_HARD_LIMIT),
+    )
+
+
 def settings_for_combination(
     base_settings: BenchmarkSettings,
     combination: GridCombination,
@@ -333,6 +382,15 @@ def settings_for_combination(
     return replace(base_settings, **changes)
 
 
+def plan_requires_restart(plan: GridPlan) -> bool:
+    """Return True when any enabled parameter requires a runtime restart."""
+    specs = {spec.name: spec for spec in grid_parameter_catalog(settings=None)}
+    return any(
+        parameter.enabled and specs.get(parameter.name, GridParameterSpec(parameter.name, "str", "request")).restart_required
+        for parameter in plan.parameters
+    )
+
+
 def unsupported_execution_parameters(plan: GridPlan) -> tuple[str, ...]:
     """Return enabled parameters that cannot run in the current request-only runner."""
     supported = {
@@ -345,6 +403,26 @@ def unsupported_execution_parameters(plan: GridPlan) -> tuple[str, ...]:
         if parameter.enabled and not supported.get(parameter.name, True):
             unsupported.append(parameter.name)
     return tuple(unsupported)
+
+
+def apply_runtime_combination(config: InstanceConfig, combination: GridCombination) -> InstanceConfig:
+    """Apply restart-required grid values to an in-memory config copy."""
+    updated = config.model_copy(deep=True)
+    request_names = {spec.name for spec in sampling_parameter_catalog()}
+    for name, value in combination.parameters.items():
+        if name in request_names:
+            continue
+        if name == "model.context_size":
+            updated.model = updated.model.model_copy(update={"context_size": int(value)})
+        elif name == "model.batch_size":
+            updated.model = updated.model.model_copy(update={"batch_size": int(value)})
+        elif name == "server.parallel":
+            updated.server = updated.server.model_copy(update={"parallel": int(value)})
+        elif name == "gpu.layers":
+            updated.gpu = updated.gpu.model_copy(update={"layers": int(value)})
+        elif name.startswith("--"):
+            updated.args = _set_runtime_arg(updated.args, name, value)
+    return updated
 
 
 def init_grid_benchmark_db(db_path: Path | None = None) -> Path:
@@ -560,6 +638,8 @@ def run_request_grid_for_instance(
     db_path: Path | None = None,
 ) -> GridSweepRecord:
     """Run a request-only grid against one already reachable instance."""
+    if plan_requires_restart(plan):
+        raise ValueError("Request-only grid cannot execute restart-required parameters.")
     unsupported = unsupported_execution_parameters(plan)
     if unsupported:
         joined = ", ".join(unsupported)
@@ -592,6 +672,99 @@ def run_request_grid_for_instance(
             )
             try:
                 result = run_benchmark(config, settings_for_combination(base_settings, combination))
+            except Exception as exc:
+                record_grid_run_finish(
+                    run,
+                    status="failed",
+                    error=str(exc),
+                    db_path=db_path,
+                )
+                if post_message:
+                    post_message(
+                        f"[Grid benchmark] {combination.index}/{len(combinations)} failed: "
+                        f"{config.name}: {exc}"
+                    )
+                continue
+
+            record_grid_run_finish(
+                run,
+                status="ok" if result.status == "ok" else "failed",
+                metrics=_metrics_from_benchmark_result(result),
+                artifact_file=result.artifact_file,
+                error=result.error,
+                db_path=db_path,
+            )
+            if post_message:
+                post_message(
+                    f"[Grid benchmark] {combination.index}/{len(combinations)} "
+                    f"{result.status}: {config.name}"
+                )
+        finish_grid_sweep(sweep.sweep_id, status="stopped" if stopped else "ok", db_path=db_path)
+    except Exception as exc:
+        finish_grid_sweep(sweep.sweep_id, status="failed", error=str(exc), db_path=db_path)
+        raise
+    return sweep
+
+
+def run_grid_for_instance(
+    config: InstanceConfig,
+    *,
+    base_settings: BenchmarkSettings,
+    plan: GridPlan,
+    should_stop: Callable[[], bool] | None = None,
+    post_message: Callable[[str], None] | None = None,
+    run_benchmark: Callable[[InstanceConfig, BenchmarkSettings], BenchmarkResult] = quick_benchmark_instance,
+    restart_runtime: Callable[[InstanceConfig], None] | None = None,
+    db_path: Path | None = None,
+) -> GridSweepRecord:
+    """Run a grid, restarting the runtime before restart-required combinations."""
+    if plan_requires_restart(plan) and restart_runtime is None:
+        raise ValueError("Restart-required grid needs a restart_runtime callback.")
+    unsupported = unsupported_execution_parameters(plan)
+    if unsupported:
+        joined = ", ".join(unsupported)
+        raise ValueError(f"Grid cannot execute unsupported parameters: {joined}")
+
+    prompt_sha256 = _prompt_sha256(base_settings.prompt_file)
+    sweep = create_grid_sweep(
+        instance_names=(config.name,),
+        settings=base_settings,
+        prompt_sha256=prompt_sha256,
+        plan=plan,
+        db_path=db_path,
+    )
+    combinations = plan.combinations()
+    stopped = False
+    restart_needed = plan_requires_restart(plan)
+    try:
+        for combination in combinations:
+            if should_stop and should_stop():
+                stopped = True
+                break
+            run = record_grid_run_start(
+                sweep_id=sweep.sweep_id,
+                instance_name=config.name,
+                combination=combination,
+                db_path=db_path,
+            )
+            try:
+                runtime_config = apply_runtime_combination(config, combination)
+                if restart_needed and restart_runtime is not None:
+                    if post_message:
+                        post_message(
+                            f"[Grid benchmark] {combination.index}/{len(combinations)} "
+                            f"restarting: {config.name}"
+                        )
+                    restart_runtime(runtime_config)
+                if post_message:
+                    post_message(
+                        f"[Grid benchmark] {combination.index}/{len(combinations)} "
+                        f"running: {config.name}"
+                    )
+                result = run_benchmark(
+                    runtime_config,
+                    settings_for_combination(base_settings, combination),
+                )
             except Exception as exc:
                 record_grid_run_finish(
                     run,
@@ -680,6 +853,33 @@ def _enumerate_range(parameter: GridParameterRange) -> tuple[int | float | str |
         values.append(round(float(current), 10) if decimal else int(current))
         current = current + parameter.step
     return tuple(values)
+
+
+def _set_runtime_arg(
+    args: list[str],
+    flag: str,
+    value: int | float | str | bool,
+) -> list[str]:
+    cleaned: list[str] = []
+    skip_next = False
+    for index, item in enumerate(args):
+        if skip_next:
+            skip_next = False
+            continue
+        if item == flag:
+            if index + 1 < len(args) and not args[index + 1].startswith("--"):
+                skip_next = True
+            continue
+        cleaned.append(item)
+
+    if isinstance(value, bool):
+        if value:
+            cleaned.append(flag)
+        return cleaned
+    if value == "":
+        return cleaned
+    cleaned.extend([flag, str(value)])
+    return cleaned
 
 
 def _prompt_sha256(path: Path) -> str:

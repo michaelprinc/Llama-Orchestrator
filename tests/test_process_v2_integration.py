@@ -22,7 +22,12 @@ from llama_orchestrator.engine.process import (
     start_instance,
     stop_instance,
 )
-from llama_orchestrator.engine.state import HealthStatus, InstanceState, InstanceStatus, RuntimeState
+from llama_orchestrator.engine.state import (
+    HealthStatus,
+    InstanceState,
+    InstanceStatus,
+    RuntimeState,
+)
 from llama_orchestrator.health.checker import HealthCheckResult, HealthCheckStatus
 
 
@@ -305,6 +310,38 @@ def test_restart_instance_waits_by_default_and_can_skip_waiting() -> None:
     assert mock_save_state.call_count == 2
     assert mock_save_runtime.call_count == 2
     assert mock_log_event.call_count == 2
+
+
+def test_restart_instance_passes_config_override_to_start() -> None:
+    existing_state = InstanceState(
+        name="test-instance",
+        pid=1234,
+        status=InstanceStatus.RUNNING,
+        health=HealthStatus.HEALTHY,
+    )
+    restarted_state = InstanceState(
+        name="test-instance",
+        pid=2222,
+        status=InstanceStatus.RUNNING,
+        health=HealthStatus.HEALTHY,
+    )
+    override = InstanceConfig(name="test-instance", model=ModelConfig(path=Path("model.gguf")))
+
+    with patch("llama_orchestrator.engine.process.load_state", return_value=existing_state), \
+         patch("llama_orchestrator.engine.process.load_runtime", return_value=None), \
+         patch("llama_orchestrator.engine.process.stop_instance"), \
+         patch("llama_orchestrator.engine.process.start_instance", return_value=restarted_state) as mock_start, \
+         patch("llama_orchestrator.engine.process.save_state"), \
+         patch("llama_orchestrator.engine.process.save_runtime"), \
+         patch("llama_orchestrator.engine.process.log_event"), \
+         patch("llama_orchestrator.engine.process.time.sleep"):
+        restart_instance("test-instance", config_override=override)
+
+    assert mock_start.call_args.args == ("test-instance",)
+    assert mock_start.call_args.kwargs == {
+        "wait_for_ready": True,
+        "config_override": override,
+    }
 
 
 def test_stop_instance_uses_runtime_when_legacy_state_missing() -> None:

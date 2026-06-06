@@ -409,8 +409,9 @@ The GUI supports:
 - Running `Grid benchmark` from the selected row or queued rows. The dialog
   separates dynamic request parameters from restart-required runtime/model
   parameters, shows current/default values, supports `minimum`, `maximum`, and
-  `step` for numeric rows, previews the combination count, runs supported
-  request-only combinations serially in the background, and supports `Stop grid`
+  `step` for numeric rows, can save/reload the grid configuration, previews the
+  combination count, runs combinations serially in the background, restarts the
+  model between restart-required runtime combinations, and supports `Stop grid`
   between combinations.
 - Marking rows in the `Queue` column and running `Serial benchmark` in current
   visible table order, one model at a time, with row highlighting, progress
@@ -502,13 +503,13 @@ summary metrics stored in SQLite.
 artifact path when available. A per-sweep Markdown summary is written under
 `logs/<instance>/benchmarks/grid/<sweep_id>/summary.md`.
 
-The first grid implementation intentionally does not mutate persisted
-`instances/*/config.json` files. Runtime-static parameters such as context
-size, batch size, GPU layers, KV cache type, flash attention, and speculative
-decoding are represented in the dialog and backend catalog as restart-required
-planned parameters, but are not applied by the GUI runner yet. Enabling one of
-those rows is rejected before execution so the request-only runner cannot
-silently repeat benchmarks with unchanged runtime settings.
+Grid dialog configuration persists to `state/grid_benchmark_settings.json`.
+Runtime-static parameters such as context size, batch size, GPU layers, KV cache
+type, flash attention, and speculative decoding run through a temporary
+in-memory config. The runner restarts the model before each restart-required
+combination and restores the original runtime config after the sweep when the
+instance was already running. It does not mutate persisted
+`instances/*/config.json` files.
 
 `Quick benchmark` requires the selected instance to expose a live llama.cpp
 HTTP endpoint. GPU memory reporting is best-effort and prefers
