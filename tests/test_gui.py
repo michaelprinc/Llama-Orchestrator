@@ -37,6 +37,7 @@ from llama_orchestrator.gui import (
     format_serial_benchmark_progress,
     instance_alias_exists,
     load_gpu_aliases,
+    normalize_config_token,
     normalize_gpu_alias,
     normalize_model_path_for_config,
     ordered_visible_names,
@@ -49,6 +50,8 @@ from llama_orchestrator.gui import (
     resolve_models_directory_input,
     run_serial_benchmark_queue,
     save_gpu_aliases,
+    suggest_add_model_port,
+    unique_instance_name,
     update_instance_display_name,
 )
 from llama_orchestrator.hf_import import DownloadProgress
@@ -126,6 +129,48 @@ def test_parse_tag_string_normalizes_unique_tags() -> None:
         "qwen35-family",
         "rx480-test",
     ]
+
+
+def test_parse_tag_string_slugifies_huggingface_tags() -> None:
+    """Imported Hugging Face metadata should satisfy strict config tag validation."""
+
+    assert parse_tag_string("hf_repo__unsloth__qwen3.6-35b, GGUF iq3_S") == [
+        "hf_repo-unsloth-qwen3-6-35b",
+        "gguf",
+        "iq3_s",
+    ]
+
+
+def test_unique_instance_name_slugifies_display_label() -> None:
+    """Human model labels should become stable internal aliases."""
+
+    assert (
+        unique_instance_name(
+            "Qwen3.6 35B A3B MTP GGUF IQ3_S",
+            {"qwen3-6-35b-a3b-mtp-gguf-iq3_s"},
+        )
+        == "qwen3-6-35b-a3b-mtp-gguf-iq3_s_2"
+    )
+    assert normalize_config_token(" . ") == ""
+
+
+def test_suggest_add_model_port_excludes_configured_ports(monkeypatch) -> None:
+    """The Add model default port should skip ports already assigned in configs."""
+
+    configs = {
+        "a": InstanceConfig(name="a", model=ModelConfig(path=Path("a.gguf")), server={"port": 8074}),
+        "b": InstanceConfig(name="b", model=ModelConfig(path=Path("b.gguf")), server={"port": 8075}),
+    }
+
+    monkeypatch.setattr("llama_orchestrator.gui.load_all_instances", lambda: configs)
+    monkeypatch.setattr(
+        "llama_orchestrator.gui.find_free_port",
+        lambda start_port, end_port, host, exclude_ports: start_port
+        if start_port not in exclude_ports
+        else start_port + 2,
+    )
+
+    assert suggest_add_model_port(8074) == 8076
 
 
 def test_display_status_distinguishes_loading_from_ready() -> None:

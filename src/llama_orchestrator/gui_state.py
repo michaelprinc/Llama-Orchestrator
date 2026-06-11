@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import json
 import math
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Literal, TypeVar
+from typing import Any, Literal, TypeVar
 
 from llama_orchestrator.config import get_state_dir
 
@@ -30,6 +31,7 @@ class GuiSettings:
 
     visible_columns: tuple[str, ...]
     sort_order: tuple[SortSpec, ...] = ()
+    add_model_min_port: int = 8001
 
 
 def get_gui_settings_path() -> Path:
@@ -61,6 +63,7 @@ def load_gui_settings(valid_columns: tuple[str, ...] | list[str]) -> GuiSettings
     return GuiSettings(
         visible_columns=_coerce_visible_columns(data.get("visible_columns"), columns),
         sort_order=_coerce_sort_order(data.get("sort_order"), columns),
+        add_model_min_port=_coerce_port(data.get("add_model_min_port"), defaults.add_model_min_port),
     )
 
 
@@ -77,6 +80,7 @@ def save_gui_settings(settings: GuiSettings) -> Path:
                     {"column": spec.column, "direction": spec.direction}
                     for spec in settings.sort_order
                 ],
+                "add_model_min_port": settings.add_model_min_port,
             },
             indent=2,
         ),
@@ -181,6 +185,16 @@ def _coerce_sort_order(value: Any, valid_columns: tuple[str, ...]) -> tuple[Sort
         sort_order.append(SortSpec(column=column, direction=direction))
         seen.add(column)
     return tuple(sort_order)
+
+
+def _coerce_port(value: Any, default: int) -> int:
+    try:
+        port = int(value)
+    except (TypeError, ValueError):
+        return default
+    if 1024 <= port <= 65535:
+        return port
+    return default
 
 
 def _is_blank_sort_value(value: Any) -> bool:

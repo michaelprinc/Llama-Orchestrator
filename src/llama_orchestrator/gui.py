@@ -11,10 +11,12 @@ import difflib
 import json
 import os
 import queue
+import re
 import shlex
 import threading
 import time
 import tkinter as tk
+import unicodedata
 from collections.abc import Callable, Sequence
 from contextlib import suppress
 from dataclasses import dataclass, replace
@@ -96,7 +98,7 @@ from llama_orchestrator.gui_state import (
     stable_sort_rows,
 )
 from llama_orchestrator.health import check_instance_health
-from llama_orchestrator.health.ports import suggest_port_for_instance
+from llama_orchestrator.health.ports import find_free_port, suggest_port_for_instance
 from llama_orchestrator.hf_import import (
     DownloadCancelledError,
     DownloadProgress,
@@ -853,11 +855,33 @@ def parse_tag_string(value: str) -> list[str]:
     tags: list[str] = []
     seen: set[str] = set()
     for tag in value.replace(",", " ").split():
-        clean = tag.strip().lower()
+        clean = normalize_config_token(tag)
         if clean and clean not in seen:
             tags.append(clean)
             seen.add(clean)
     return tags
+
+
+def normalize_config_token(value: str, *, fallback: str = "") -> str:
+    """Convert user-facing text into the strict config token format."""
+
+    ascii_value = unicodedata.normalize("NFKD", value).encode("ascii", "ignore").decode("ascii")
+    clean = ascii_value.strip().lower()
+    clean = re.sub(r"[^a-z0-9_-]+", "-", clean)
+    clean = re.sub(r"[-_]{2,}", "-", clean).strip("-_")
+    return clean or fallback
+
+
+def unique_instance_name(label: str, existing_names: set[str], *, fallback: str = "model") -> str:
+    """Return a unique immutable alias derived from a human model label."""
+
+    base = normalize_config_token(label, fallback=fallback)
+    candidate = base
+    index = 2
+    while candidate in existing_names:
+        candidate = f"{base}_{index}"
+        index += 1
+    return candidate
 
 
 def normalize_model_path_for_config(path: Path) -> Path:
@@ -2850,6 +2874,7 @@ class LlamaOrchestratorGui(tk.Tk):
 
     def _on_model_saved(self, config: InstanceConfig) -> None:
         self._post_message(f"Configured model instance {config.name}.")
+        self.gui_settings = load_gui_settings(ALL_COLUMNS)
         self.refresh()
 
     def _open_binary_dialog(self) -> None:
@@ -2917,6 +2942,23 @@ class LlamaOrchestratorGui(tk.Tk):
         self.refresh()
 
 
+def suggest_add_model_port(min_port: int, host: str = "127.0.0.1") -> int:
+    """Find the next port suitable for a new GUI-created model."""
+
+    used_ports = {
+        config.server.port
+        for config in load_all_instances().values()
+        if min_port <= config.server.port <= 65535
+    }
+    port = find_free_port(
+        start_port=min_port,
+        end_port=65535,
+        host=host,
+        exclude_ports=used_ports,
+    )
+    return port or min_port
+
+
 class AddModelDialog(tk.Toplevel):
     """Dialog for creating a model instance config."""
 
@@ -2931,10 +2973,12 @@ class AddModelDialog(tk.Toplevel):
         self.transient(master)
         self.grab_set()
         self.on_saved = on_saved
+        self.gui_settings = master.gui_settings
 
         self.name_var = tk.StringVar()
         self.model_var = tk.StringVar()
-        self.port_var = tk.StringVar(value="8001")
+        self.port_var = tk.StringVar(value=str(suggest_add_model_port(self.gui_settings.add_model_min_port)))
+        self.min_port_var = tk.StringVar(value=str(self.gui_settings.add_model_min_port))
         self.backend_var = tk.StringVar(value="vulkan")
         self.device_var = tk.StringVar(value="0")
         self.layers_var = tk.StringVar(value="0")
@@ -2964,6 +3008,11 @@ class AddModelDialog(tk.Toplevel):
         model_entry.focus_set()
 
         self._entry(frame, "Port", self.port_var, 3)
+        ttk.Button(
+            frame,
+            text="Configure",
+            command=self._configure_port_scan,
+        ).grid(row=3, column=2, padx=(6, 0))
         backend = ttk.Combobox(
             frame,
             textvariable=self.backend_var,
@@ -3043,11 +3092,33 @@ class AddModelDialog(tk.Toplevel):
         )
         self.tags_var.set(", ".join(merged_tags))
 
+    def _configure_port_scan(self) -> None:
+        try:
+            current_min_port = int(self.min_port_var.get())
+        except ValueError:
+            current_min_port = self.gui_settings.add_model_min_port
+
+        dialog = AddModelPortSettingsDialog(self, current_min_port)
+        self.wait_window(dialog)
+        if dialog.result is None:
+            return
+
+        self.min_port_var.set(str(dialog.result))
+        self.gui_settings = replace(self.gui_settings, add_model_min_port=dialog.result)
+        save_gui_settings(self.gui_settings)
+        self.master.gui_settings = self.gui_settings  # type: ignore[attr-defined]
+        self.port_var.set(str(suggest_add_model_port(dialog.result)))
+
     def _save(self) -> None:
         try:
+            display_name = self.name_var.get().strip()
+            if not display_name:
+                raise ValueError("Name cannot be blank")
+            name = unique_instance_name(display_name, {existing for existing, _ in discover_instances()})
             model_path = normalize_model_path_for_config(Path(self.model_var.get().strip()))
             config = InstanceConfig(
-                name=self.name_var.get().strip(),
+                name=name,
+                display_name=display_name,
                 binary=BinaryConfig(version="latest", variant=VULKAN_VARIANT)
                 if self.backend_var.get() == "vulkan"
                 else None,
@@ -3083,6 +3154,47 @@ class AddModelDialog(tk.Toplevel):
             return
 
         self.on_saved(config)
+        self.destroy()
+
+
+class AddModelPortSettingsDialog(tk.Toplevel):
+    """Configure Add model port scanning preferences."""
+
+    def __init__(self, master: tk.Misc, min_port: int) -> None:
+        super().__init__(master)
+        self.title("Configure port scan")
+        self.resizable(False, False)
+        self.transient(master)
+        self.grab_set()
+        self.result: int | None = None
+        self.min_port_var = tk.StringVar(value=str(min_port))
+
+        frame = ttk.Frame(self, padding=14)
+        frame.grid(row=0, column=0, sticky="nsew")
+
+        ttk.Label(frame, text="Minimum port").grid(row=0, column=0, sticky="w", pady=4)
+        entry = ttk.Entry(frame, textvariable=self.min_port_var, width=18)
+        entry.grid(row=0, column=1, sticky="w", pady=4)
+
+        buttons = ttk.Frame(frame)
+        buttons.grid(row=1, column=0, columnspan=2, sticky="e", pady=(12, 0))
+        ttk.Button(buttons, text="Cancel", command=self.destroy).pack(side=tk.RIGHT)
+        ttk.Button(buttons, text="Save", command=self._save).pack(side=tk.RIGHT, padx=(0, 8))
+
+        entry.focus_set()
+
+    def _save(self) -> None:
+        try:
+            port = int(self.min_port_var.get().strip())
+        except ValueError:
+            messagebox.showerror("Invalid port", "Minimum port must be a number.")
+            return
+
+        if not 1024 <= port <= 65535:
+            messagebox.showerror("Invalid port", "Minimum port must be between 1024 and 65535.")
+            return
+
+        self.result = port
         self.destroy()
 
 

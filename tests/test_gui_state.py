@@ -35,12 +35,29 @@ def test_gui_settings_roundtrip(tmp_path, monkeypatch) -> None:
             SortSpec(column="tps", direction="desc"),
             SortSpec(column="name", direction="asc"),
         ),
+        add_model_min_port=8074,
     )
 
     save_gui_settings(settings)
     loaded = load_gui_settings(["name", "status", "tps", "latency"])
 
     assert loaded == settings
+
+
+def test_gui_settings_clamps_invalid_add_model_min_port(tmp_path, monkeypatch) -> None:
+    """Persisted Add model port settings should stay in user-space port range."""
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    monkeypatch.setattr("llama_orchestrator.gui_state.get_state_dir", lambda: state_dir)
+    (state_dir / "gui_settings.json").write_text(
+        '{"visible_columns":["name"],"add_model_min_port":80}',
+        encoding="utf-8",
+    )
+
+    loaded = load_gui_settings(["name", "status"])
+
+    assert loaded.add_model_min_port == 8001
 
 
 def test_cycle_sort_order_promotes_previous_primary_to_secondary() -> None:
