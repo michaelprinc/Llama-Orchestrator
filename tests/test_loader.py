@@ -187,6 +187,64 @@ class TestSaveConfig:
         assert saved_path.parent.parent == tmp_path / "instances"
         assert config.instance_no is not None
 
+    def test_save_new_config_allocates_after_existing_high_instance_no(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """New instance numbers should catch up to existing configs and directories."""
+        monkeypatch.setattr("llama_orchestrator.config.loader.get_project_root", lambda: tmp_path)
+        existing = InstanceConfig(
+            name="existing",
+            instance_no="00000071",
+            model=ModelConfig(path=Path("existing.gguf")),
+        )
+        save_config(existing, tmp_path / "instances" / existing.instance_dir_name / "config.json")
+
+        created = InstanceConfig(
+            name="created",
+            model=ModelConfig(path=Path("created.gguf")),
+        )
+        saved_path = save_config(created)
+
+        assert created.instance_no == "00000072"
+        assert saved_path.parent.name.startswith("00000072_")
+
+    def test_load_all_instances_repairs_duplicate_instance_no_before_catalog_sync(
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A failed prior add should not keep the GUI from loading all instances."""
+        monkeypatch.setattr("llama_orchestrator.config.loader.get_project_root", lambda: tmp_path)
+        existing = InstanceConfig(
+            name="existing",
+            instance_uid="11111111-1111-4111-8111-111111111111",
+            instance_no="00000070",
+            model=ModelConfig(path=Path("existing.gguf")),
+        )
+        save_config(existing, tmp_path / "instances" / existing.instance_dir_name / "config.json")
+
+        duplicate = InstanceConfig(
+            name="duplicate",
+            instance_uid="22222222-2222-4222-8222-222222222222",
+            instance_no="00000070",
+            model=ModelConfig(path=Path("duplicate.gguf")),
+        )
+        duplicate_path = tmp_path / "instances" / duplicate.instance_dir_name / "config.json"
+        duplicate_path.parent.mkdir(parents=True)
+        duplicate_path.write_text(
+            json.dumps(duplicate.model_dump(mode="json"), indent=4),
+            encoding="utf-8",
+        )
+
+        configs = load_all_instances()
+        repaired = json.loads(duplicate_path.read_text(encoding="utf-8"))
+
+        assert configs["existing"].instance_no == "00000070"
+        assert configs["duplicate"].instance_no == "00000071"
+        assert repaired["instance_no"] == "00000071"
+
     def test_save_loaded_legacy_config_preserves_existing_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test ordinary save-back does not rename a legacy directory."""
         monkeypatch.setattr("llama_orchestrator.config.loader.get_project_root", lambda: tmp_path)

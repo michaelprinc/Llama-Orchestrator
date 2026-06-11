@@ -2959,6 +2959,19 @@ def suggest_add_model_port(min_port: int, host: str = "127.0.0.1") -> int:
     return port or min_port
 
 
+def suggest_next_add_model_port(
+    current_port: int,
+    min_port: int,
+    host: str = "127.0.0.1",
+) -> int:
+    """Find the next suitable port after the current Add model port."""
+
+    start_port = max(current_port + 1, min_port, 1024)
+    if start_port > 65535:
+        start_port = max(min_port, 1024)
+    return suggest_add_model_port(start_port, host=host)
+
+
 class AddModelDialog(tk.Toplevel):
     """Dialog for creating a model instance config."""
 
@@ -3008,11 +3021,18 @@ class AddModelDialog(tk.Toplevel):
         model_entry.focus_set()
 
         self._entry(frame, "Port", self.port_var, 3)
+        port_buttons = ttk.Frame(frame)
+        port_buttons.grid(row=3, column=2, padx=(6, 0), sticky="w")
         ttk.Button(
-            frame,
+            port_buttons,
+            text="Find free",
+            command=self._find_free_port,
+        ).pack(side=tk.LEFT)
+        ttk.Button(
+            port_buttons,
             text="Configure",
             command=self._configure_port_scan,
-        ).grid(row=3, column=2, padx=(6, 0))
+        ).pack(side=tk.LEFT, padx=(6, 0))
         backend = ttk.Combobox(
             frame,
             textvariable=self.backend_var,
@@ -3108,6 +3128,19 @@ class AddModelDialog(tk.Toplevel):
         save_gui_settings(self.gui_settings)
         self.master.gui_settings = self.gui_settings  # type: ignore[attr-defined]
         self.port_var.set(str(suggest_add_model_port(dialog.result)))
+
+    def _find_free_port(self) -> None:
+        try:
+            current_port = int(self.port_var.get().strip())
+        except ValueError:
+            current_port = self.gui_settings.add_model_min_port - 1
+
+        try:
+            min_port = int(self.min_port_var.get().strip())
+        except ValueError:
+            min_port = self.gui_settings.add_model_min_port
+
+        self.port_var.set(str(suggest_next_add_model_port(current_port, min_port)))
 
     def _save(self) -> None:
         try:

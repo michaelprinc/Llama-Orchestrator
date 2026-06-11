@@ -8,6 +8,7 @@ all configured instances.
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -192,9 +193,38 @@ def _allocate_instance_no() -> str:
         conn.execute("BEGIN IMMEDIATE")
         row = conn.execute("SELECT next_val FROM instance_no_sequence").fetchone()
         next_val = int(row[0]) if row is not None else 1
-        conn.execute("UPDATE instance_no_sequence SET next_val = ?", (next_val + 1,))
+        existing_numbers = [
+            int(row[0])
+            for row in conn.execute(
+                """
+                SELECT instance_no FROM instances
+                WHERE instance_no GLOB '[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]'
+                """
+            ).fetchall()
+        ]
+        instances_dir = get_instances_dir()
+        if instances_dir.exists():
+            for instance_dir in instances_dir.iterdir():
+                if not instance_dir.is_dir():
+                    continue
+                if match := re.match(r"^(\d{8})(?:_|$)", instance_dir.name):
+                    existing_numbers.append(int(match.group(1)))
+                config_path = instance_dir / "config.json"
+                if not config_path.exists():
+                    continue
+                try:
+                    raw_instance_no = json.loads(config_path.read_text(encoding="utf-8")).get(
+                        "instance_no"
+                    )
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if isinstance(raw_instance_no, str) and re.fullmatch(r"\d{8}", raw_instance_no):
+                    existing_numbers.append(int(raw_instance_no))
+
+        allocated = max(next_val, max(existing_numbers, default=0) + 1)
+        conn.execute("UPDATE instance_no_sequence SET next_val = ?", (allocated + 1,))
         conn.commit()
-    return _format_instance_no(next_val)
+    return _format_instance_no(allocated)
 
 
 def _write_config_file(path: Path, data: dict) -> None:
@@ -249,6 +279,51 @@ def _sync_instance_catalog(config: InstanceConfig, path: Path) -> None:
             ),
         )
         conn.commit()
+
+
+def _catalog_uid_by_instance_no() -> dict[str, str]:
+    """Return catalog identity ownership keyed by instance number."""
+    with _get_catalog_connection() as conn:
+        return {
+            str(row[0]): str(row[1])
+            for row in conn.execute("SELECT instance_no, instance_uid FROM instances").fetchall()
+        }
+
+
+def _repair_duplicate_instance_numbers() -> None:
+    """Renumber unsynced duplicate instance configs before catalog sync."""
+    by_number: dict[str, list[tuple[Path, dict]]] = {}
+    for config_path in _iter_config_paths():
+        try:
+            raw_data = json.loads(config_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        instance_no = raw_data.get("instance_no")
+        if isinstance(instance_no, str) and re.fullmatch(r"\d{8}", instance_no):
+            by_number.setdefault(instance_no, []).append((config_path, raw_data))
+
+    duplicate_groups = {
+        instance_no: records
+        for instance_no, records in by_number.items()
+        if len(records) > 1
+    }
+    if not duplicate_groups:
+        return
+
+    catalog_owners = _catalog_uid_by_instance_no()
+    for instance_no, records in sorted(duplicate_groups.items()):
+        catalog_uid = catalog_owners.get(instance_no)
+        sorted_records = sorted(
+            records,
+            key=lambda item: (
+                item[1].get("instance_uid") != catalog_uid if catalog_uid else False,
+                str(item[0]),
+            ),
+        )
+        for config_path, raw_data in sorted_records[1:]:
+            raw_data["instance_no"] = _allocate_instance_no()
+            raw_data["updated_at"] = _utc_now_iso()
+            _write_config_file(config_path, raw_data)
 
 
 def _prepare_loaded_config(
@@ -311,6 +386,7 @@ def resolve_instance_selector(token: str) -> Path:
     Resolution precedence is instance_uid, instance_no, immutable alias `name`,
     then unique display_name.
     """
+    _repair_duplicate_instance_numbers()
     uid_matches: list[Path] = []
     no_matches: list[Path] = []
     name_matches: list[Path] = []
@@ -422,6 +498,7 @@ def discover_instances() -> Iterator[tuple[str, Path]]:
     Yields:
         Tuples of (instance_name, config_path) for each found instance
     """
+    _repair_duplicate_instance_numbers()
     for config_path in _iter_config_paths():
         config = load_config(config_path)
         yield config.name, config_path
@@ -437,6 +514,7 @@ def load_all_instances() -> dict[str, InstanceConfig]:
     Raises:
         ConfigLoadError: If any instance config is invalid
     """
+    _repair_duplicate_instance_numbers()
     instances: dict[str, InstanceConfig] = {}
     
     seen_uids: dict[str, Path] = {}

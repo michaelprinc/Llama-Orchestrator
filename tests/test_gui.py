@@ -51,6 +51,7 @@ from llama_orchestrator.gui import (
     run_serial_benchmark_queue,
     save_gpu_aliases,
     suggest_add_model_port,
+    suggest_next_add_model_port,
     unique_instance_name,
     update_instance_display_name,
 )
@@ -171,6 +172,24 @@ def test_suggest_add_model_port_excludes_configured_ports(monkeypatch) -> None:
     )
 
     assert suggest_add_model_port(8074) == 8076
+
+
+def test_suggest_next_add_model_port_starts_after_current_port(monkeypatch) -> None:
+    """The Add model Find free action should advance past the visible port value."""
+
+    configs = {
+        "a": InstanceConfig(name="a", model=ModelConfig(path=Path("a.gguf")), server={"port": 8076}),
+    }
+
+    monkeypatch.setattr("llama_orchestrator.gui.load_all_instances", lambda: configs)
+    monkeypatch.setattr(
+        "llama_orchestrator.gui.find_free_port",
+        lambda start_port, end_port, host, exclude_ports: start_port
+        if start_port not in exclude_ports
+        else start_port + 1,
+    )
+
+    assert suggest_next_add_model_port(current_port=8075, min_port=8074) == 8077
 
 
 def test_display_status_distinguishes_loading_from_ready() -> None:
