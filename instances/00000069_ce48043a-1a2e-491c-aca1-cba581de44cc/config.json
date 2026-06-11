@@ -16,7 +16,7 @@
     },
     "model": {
         "path": "models\\gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf",
-        "context_size": 8192,
+        "context_size": 262144,
         "batch_size": 512,
         "threads": 16
     },
@@ -76,7 +76,7 @@
         "--gpu-layers-draft",
         "all",
         "--spec-draft-n-max",
-        "2",
+        "1",
         "--spec-draft-n-min",
         "0",
         "--draft-p-min",

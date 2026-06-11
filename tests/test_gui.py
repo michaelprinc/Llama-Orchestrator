@@ -30,6 +30,7 @@ from llama_orchestrator.gui import (
     format_cpu_indicator,
     format_detected_gpu_summary,
     format_download_progress,
+    format_kv_cache_profile_summary,
     format_model_size_gb,
     format_queue_checkbox,
     format_runtime_gpu_display,
@@ -215,6 +216,14 @@ def test_parse_grid_number_supports_numeric_ranges() -> None:
     assert parse_grid_number("", "int") is None
 
 
+def test_kv_cache_profile_summary_distinguishes_default_and_custom() -> None:
+    """KV Cache should appear as one composite row in the main grid."""
+    assert format_kv_cache_profile_summary(
+        ("f16_baseline", "q8_pair", "q4_0_pair", "q4_1_pair", "iq4_nl_pair")
+    ) == "Paired profiles: 5 selected"
+    assert format_kv_cache_profile_summary(("f16_baseline", "q8_pair")) == "Custom: 2 selected"
+
+
 def test_grid_benchmark_targets_are_silent_without_selection_or_queue() -> None:
     """Grid target lookup should not call the noisy selected-instance helper."""
     gui = _queue_only_gui(("alpha", "beta"))
@@ -274,6 +283,9 @@ def test_format_benchmark_memory_includes_total_and_shared_ram_warning() -> None
         dedicated_vram_mb=16261.3,
         shared_ram_mb=175.2,
         total_gpu_memory_mb=16436.5,
+        memory_source="windows_process_counter",
+        memory_scope="process",
+        memory_confidence="high",
         artifact_file="logs/demo/benchmarks/run.md",
     )
 
@@ -304,6 +316,110 @@ def test_format_benchmark_memory_keeps_legacy_vram_rows_readable() -> None:
     assert format_benchmark_memory(result) == "4861 total (VRAM 4861)"
     assert benchmark_shared_ram_warning(result) == ""
     assert "Memory: 4861 total (VRAM 4861)." in format_benchmark_message(result)
+
+
+def test_format_benchmark_memory_labels_device_fallback_ram_unknown() -> None:
+    """Device-wide fallback memory should not imply shared RAM was measured as zero."""
+    result = BenchmarkResult(
+        instance_name="device",
+        timestamp="2026-05-19T12:00:00+0000",
+        config_hash="cfg",
+        prompt_file="default.txt",
+        prompt_sha256="sha",
+        prompt_chars=10,
+        output_tokens=20,
+        tokens_per_second=12.0,
+        latency_ms=80.0,
+        elapsed_ms=1400.0,
+        vram_mb=4861.28,
+        status="ok",
+        dedicated_vram_mb=4861.28,
+        total_gpu_memory_mb=4861.28,
+        memory_source="vendor_device_cli",
+        memory_scope="device",
+        memory_confidence="low",
+    )
+
+    assert format_benchmark_memory(result) == "4861 VRAM (device-level; RAM unknown)"
+    assert benchmark_shared_ram_warning(result) == ""
+
+
+def test_format_benchmark_memory_labels_log_estimates() -> None:
+    """Log-derived model-buffer values should be visibly labeled as estimates."""
+    result = BenchmarkResult(
+        instance_name="log",
+        timestamp="2026-05-19T12:00:00+0000",
+        config_hash="cfg",
+        prompt_file="default.txt",
+        prompt_sha256="sha",
+        prompt_chars=10,
+        output_tokens=20,
+        tokens_per_second=12.0,
+        latency_ms=80.0,
+        elapsed_ms=1400.0,
+        vram_mb=6.69,
+        status="ok",
+        dedicated_vram_mb=6.69,
+        total_gpu_memory_mb=6.69,
+        memory_source="log_model_buffer",
+        memory_scope="log_estimate",
+        memory_confidence="low",
+    )
+
+    assert format_benchmark_memory(result) == "7 model buffer (log estimate; RAM unknown)"
+    assert benchmark_shared_ram_warning(result) == ""
+
+
+def test_format_benchmark_memory_labels_log_device_delta_estimates() -> None:
+    """Log-derived free-memory deltas should not be shown as process memory."""
+    result = BenchmarkResult(
+        instance_name="log-delta",
+        timestamp="2026-05-19T12:00:00+0000",
+        config_hash="cfg",
+        prompt_file="default.txt",
+        prompt_sha256="sha",
+        prompt_chars=10,
+        output_tokens=20,
+        tokens_per_second=12.0,
+        latency_ms=80.0,
+        elapsed_ms=1400.0,
+        vram_mb=5670.0,
+        status="ok",
+        dedicated_vram_mb=5670.0,
+        total_gpu_memory_mb=5670.0,
+        memory_source="log_device_free_delta",
+        memory_scope="log_estimate",
+        memory_confidence="low",
+    )
+
+    assert format_benchmark_memory(result) == "5670 device delta (log estimate; RAM unknown)"
+    assert benchmark_shared_ram_warning(result) == ""
+
+
+def test_shared_ram_warning_requires_process_memory_provenance() -> None:
+    """Slowdown warning should not fire for non-process or unknown-provenance memory."""
+    result = BenchmarkResult(
+        instance_name="fallback",
+        timestamp="2026-05-19T12:00:00+0000",
+        config_hash="cfg",
+        prompt_file="default.txt",
+        prompt_sha256="sha",
+        prompt_chars=10,
+        output_tokens=20,
+        tokens_per_second=12.0,
+        latency_ms=80.0,
+        elapsed_ms=1400.0,
+        vram_mb=1000.0,
+        status="ok",
+        dedicated_vram_mb=1000.0,
+        shared_ram_mb=100.0,
+        total_gpu_memory_mb=1100.0,
+        memory_source="vendor_device_cli",
+        memory_scope="device",
+        memory_confidence="low",
+    )
+
+    assert benchmark_shared_ram_warning(result) == ""
 
 
 def test_gui_columns_include_gpu_cpu_and_model_size() -> None:

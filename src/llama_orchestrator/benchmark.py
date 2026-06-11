@@ -69,6 +69,12 @@ class BenchmarkResult:
     dedicated_vram_mb: float | None = None
     shared_ram_mb: float | None = None
     total_gpu_memory_mb: float | None = None
+    memory_source: str | None = None
+    memory_scope: str | None = None
+    memory_confidence: str | None = None
+    sampled_pid: int | None = None
+    sampled_device_label: str | None = None
+    memory_sample_error: str | None = None
     error: str | None = None
     artifact_file: str | None = None
     prompt_tokens: int | None = None
@@ -94,6 +100,12 @@ class GpuMemorySample:
     dedicated_vram_mb: float | None
     shared_ram_mb: float | None
     total_gpu_memory_mb: float | None
+    memory_source: str = "unavailable"
+    memory_scope: str = "unavailable"
+    memory_confidence: str = "low"
+    sampled_pid: int | None = None
+    sampled_device_label: str | None = None
+    sample_error: str | None = None
 
 
 def get_validated_benchmark_pid(instance_name: str) -> int | None:
@@ -107,6 +119,13 @@ def get_validated_benchmark_pid(instance_name: str) -> int | None:
 def _normalize_gpu_memory_sample(
     dedicated_vram_mb: float | None,
     shared_ram_mb: float | None,
+    *,
+    memory_source: str = "unknown",
+    memory_scope: str = "unknown",
+    memory_confidence: str = "low",
+    sampled_pid: int | None = None,
+    sampled_device_label: str | None = None,
+    sample_error: str | None = None,
 ) -> GpuMemorySample:
     total_gpu_memory_mb: float | None = None
     if dedicated_vram_mb is not None:
@@ -117,6 +136,12 @@ def _normalize_gpu_memory_sample(
         dedicated_vram_mb=dedicated_vram_mb,
         shared_ram_mb=shared_ram_mb,
         total_gpu_memory_mb=total_gpu_memory_mb,
+        memory_source=memory_source,
+        memory_scope=memory_scope,
+        memory_confidence=memory_confidence,
+        sampled_pid=sampled_pid,
+        sampled_device_label=sampled_device_label,
+        sample_error=sample_error,
     )
 
 
@@ -338,6 +363,12 @@ def init_benchmark_db(db_path: Path | None = None) -> Path:
                 dedicated_vram_mb REAL,
                 shared_ram_mb REAL,
                 total_gpu_memory_mb REAL,
+                memory_source TEXT,
+                memory_scope TEXT,
+                memory_confidence TEXT,
+                sampled_pid INTEGER,
+                sampled_device_label TEXT,
+                memory_sample_error TEXT,
                 prompt_tokens INTEGER,
                 tokens_cached INTEGER,
                 cache_hit_rate REAL,
@@ -365,6 +396,12 @@ def init_benchmark_db(db_path: Path | None = None) -> Path:
             "dedicated_vram_mb",
             "shared_ram_mb",
             "total_gpu_memory_mb",
+            "memory_source",
+            "memory_scope",
+            "memory_confidence",
+            "sampled_pid",
+            "sampled_device_label",
+            "memory_sample_error",
             "prompt_tokens",
             "tokens_cached",
             "cache_hit_rate",
@@ -379,15 +416,25 @@ def init_benchmark_db(db_path: Path | None = None) -> Path:
             "artifact_file",
         ):
             if column_name not in existing_columns:
-                if column_name in {"artifact_file", "speculative_mode"}:
-                    column_type = "TEXT"
-                elif column_name in {"instance_uid", "instance_no", "display_name"}:
+                if column_name in {
+                    "artifact_file",
+                    "speculative_mode",
+                    "memory_source",
+                    "memory_scope",
+                    "memory_confidence",
+                    "sampled_device_label",
+                    "memory_sample_error",
+                    "instance_uid",
+                    "instance_no",
+                    "display_name",
+                }:
                     column_type = "TEXT"
                 elif column_name in {
                     "prompt_tokens",
                     "tokens_cached",
                     "draft_tokens",
                     "draft_tokens_accepted",
+                    "sampled_pid",
                 }:
                     column_type = "INTEGER"
                 else:
@@ -438,12 +485,14 @@ def record_benchmark_result(
                 timestamp, instance_name, instance_uid, instance_no, display_name, config_hash, prompt_file, prompt_sha256,
                 prompt_chars, output_tokens, tokens_per_second, latency_ms,
                 elapsed_ms, vram_mb, dedicated_vram_mb, shared_ram_mb,
-                total_gpu_memory_mb, prompt_tokens, tokens_cached, cache_hit_rate,
-                prompt_ms, prompt_tokens_per_second, time_per_output_token_ms,
-                end_to_end_tokens_per_second, speculative_mode, draft_tokens,
-                draft_tokens_accepted, draft_acceptance_rate, status, error,
-                artifact_file
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                total_gpu_memory_mb, memory_source, memory_scope,
+                memory_confidence, sampled_pid, sampled_device_label,
+                memory_sample_error, prompt_tokens, tokens_cached,
+                cache_hit_rate, prompt_ms, prompt_tokens_per_second,
+                time_per_output_token_ms, end_to_end_tokens_per_second,
+                speculative_mode, draft_tokens, draft_tokens_accepted,
+                draft_acceptance_rate, status, error, artifact_file
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 result.timestamp,
@@ -463,6 +512,12 @@ def record_benchmark_result(
                 result.dedicated_vram_mb,
                 result.shared_ram_mb,
                 result.total_gpu_memory_mb,
+                result.memory_source,
+                result.memory_scope,
+                result.memory_confidence,
+                result.sampled_pid,
+                result.sampled_device_label,
+                result.memory_sample_error,
                 result.prompt_tokens,
                 result.tokens_cached,
                 result.cache_hit_rate,
@@ -528,6 +583,12 @@ def latest_benchmark_results(db_path: Path | None = None) -> dict[str, Benchmark
             dedicated_vram_mb=dedicated_vram_mb,
             shared_ram_mb=shared_ram_mb,
             total_gpu_memory_mb=total_gpu_memory_mb,
+            memory_source=row_data.get("memory_source") or ("legacy_unknown" if row_data.get("vram_mb") is not None else None),
+            memory_scope=row_data.get("memory_scope"),
+            memory_confidence=row_data.get("memory_confidence"),
+            sampled_pid=row_data.get("sampled_pid"),
+            sampled_device_label=row_data.get("sampled_device_label"),
+            memory_sample_error=row_data.get("memory_sample_error"),
             error=row_data["error"],
             artifact_file=row_data.get("artifact_file"),
             prompt_tokens=row_data.get("prompt_tokens"),
@@ -609,17 +670,122 @@ def _sample_windows_gpu_process_memory(pid: int) -> GpuMemorySample | None:
         shared_ram_mb = payload.get("shared_ram_mb")
         if not isinstance(dedicated_vram_mb, (int, float)) or not isinstance(shared_ram_mb, (int, float)):
             continue
-        return _normalize_gpu_memory_sample(float(dedicated_vram_mb), float(shared_ram_mb))
+        return _normalize_gpu_memory_sample(
+            float(dedicated_vram_mb),
+            float(shared_ram_mb),
+            memory_source="windows_process_counter",
+            memory_scope="process",
+            memory_confidence="high",
+            sampled_pid=pid,
+        )
 
     return None
 
 
 def _parse_vram_from_text(text: str) -> float | None:
-    numbers = re.findall(r"(?<![\w.])(\d+(?:\.\d+)?)\s*(MiB|MB|GiB|GB)?", text, re.IGNORECASE)
-    if not numbers:
+    """Parse explicit memory-used text without accepting arbitrary numbers."""
+    patterns = (
+        r"(?:memory\s+used|used\s+memory|vram\s+used|gpu\s+memory\s+used)\D+(\d+(?:\.\d+)?)\s*(MiB|MB|GiB|GB)?",
+        r"^\s*(\d+(?:\.\d+)?)\s*(MiB|MB|GiB|GB)?\s*$",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return _normalize_vram_value(float(match.group(1)), match.group(2))
+    return None
+
+
+def parse_nvidia_smi_memory_used(text: str) -> float | None:
+    """Parse `nvidia-smi --query-gpu=memory.used` output."""
+    return _parse_vram_from_text(text)
+
+
+def parse_amd_smi_memory_used(text: str, device_id: int) -> float | None:
+    """Parse common `amd-smi metric -m --json` memory-used payloads."""
+    return _parse_vendor_json_memory_used(text, device_id)
+
+
+def parse_rocm_smi_memory_used(text: str, device_id: int) -> float | None:
+    """Parse common `rocm-smi --showmemuse --json` memory-used payloads."""
+    return _parse_vendor_json_memory_used(text, device_id)
+
+
+def _parse_vendor_json_memory_used(text: str, device_id: int) -> float | None:
+    try:
+        payload = json.loads(text)
+    except json.JSONDecodeError:
         return None
-    value, unit = numbers[0]
-    return _normalize_vram_value(float(value), unit)
+
+    candidates = _select_vendor_device_payloads(payload, device_id)
+    for candidate in candidates:
+        value = _find_memory_used_value(candidate)
+        if value is not None:
+            return value
+    return _find_memory_used_value(payload)
+
+
+def _select_vendor_device_payloads(payload: Any, device_id: int) -> list[Any]:
+    candidates: list[Any] = []
+    if isinstance(payload, dict):
+        for key in (str(device_id), f"gpu{device_id}", f"GPU{device_id}", f"card{device_id}"):
+            if key in payload:
+                candidates.append(payload[key])
+        for value in payload.values():
+            if _payload_matches_device_id(value, device_id):
+                candidates.append(value)
+            candidates.extend(_select_vendor_device_payloads(value, device_id))
+    elif isinstance(payload, list):
+        for value in payload:
+            if _payload_matches_device_id(value, device_id):
+                candidates.append(value)
+            candidates.extend(_select_vendor_device_payloads(value, device_id))
+    return candidates
+
+
+def _payload_matches_device_id(payload: Any, device_id: int) -> bool:
+    if not isinstance(payload, dict):
+        return False
+    for key in ("gpu", "gpu_id", "device_id", "card", "card_id", "id"):
+        value = payload.get(key)
+        if isinstance(value, int) and value == device_id:
+            return True
+        if isinstance(value, str) and value.strip().lower() in {str(device_id), f"gpu{device_id}", f"card{device_id}"}:
+            return True
+    return False
+
+
+def _find_memory_used_value(payload: Any) -> float | None:
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            key_text = str(key).lower()
+            if ("memory" in key_text or "vram" in key_text) and any(
+                marker in key_text for marker in ("used", "use", "busy")
+            ):
+                parsed = _coerce_memory_value(value, key_text)
+                if parsed is not None:
+                    return parsed
+        for value in payload.values():
+            parsed = _find_memory_used_value(value)
+            if parsed is not None:
+                return parsed
+    elif isinstance(payload, list):
+        for value in payload:
+            parsed = _find_memory_used_value(value)
+            if parsed is not None:
+                return parsed
+    return None
+
+
+def _coerce_memory_value(value: Any, key_text: str = "") -> float | None:
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int | float):
+        if "(b)" in key_text or "bytes" in key_text:
+            return float(value) / (1024 * 1024)
+        return float(value)
+    if isinstance(value, str):
+        return _parse_vram_from_text(value)
+    return None
 
 
 def _normalize_vram_value(value: float, unit: str | None) -> float:
@@ -635,17 +801,50 @@ def sample_vram_mb_from_log(
     device_id: int,
 ) -> float | None:
     """Best-effort VRAM estimate from llama.cpp stderr when vendor CLIs are unavailable."""
+    sample = sample_gpu_memory_from_log(stderr_log, backend=backend, device_id=device_id)
+    return sample.dedicated_vram_mb
+
+
+def sample_gpu_memory_from_log(
+    stderr_log: Path,
+    *,
+    backend: str,
+    device_id: int,
+) -> GpuMemorySample:
+    """Return source-labeled GPU memory estimates from llama.cpp stderr."""
     if not stderr_log.exists():
-        return None
+        return _normalize_gpu_memory_sample(
+            None,
+            None,
+            memory_source="unavailable",
+            memory_scope="unavailable",
+            memory_confidence="low",
+            sample_error="stderr_log_missing",
+        )
 
     device_label = get_backend_device_label(backend, device_id)
     if device_label is None:
-        return None
+        return _normalize_gpu_memory_sample(
+            None,
+            None,
+            memory_source="unavailable",
+            memory_scope="unavailable",
+            memory_confidence="low",
+            sample_error="device_label_unavailable",
+        )
 
     try:
         lines = stderr_log.read_text(encoding="utf-8", errors="ignore").splitlines()
     except OSError:
-        return None
+        return _normalize_gpu_memory_sample(
+            None,
+            None,
+            memory_source="unavailable",
+            memory_scope="unavailable",
+            memory_confidence="low",
+            sampled_device_label=device_label,
+            sample_error="stderr_log_unreadable",
+        )
 
     buffer_pattern = re.compile(
         rf"{re.escape(device_label)}\s+model buffer size\s*=\s*(\d+(?:\.\d+)?)\s*(MiB|MB|GiB|GB)",
@@ -663,7 +862,14 @@ def sample_vram_mb_from_log(
     for line in reversed(lines):
         match = buffer_pattern.search(line)
         if match:
-            return _normalize_vram_value(float(match.group(1)), match.group(2))
+            return _normalize_gpu_memory_sample(
+                _normalize_vram_value(float(match.group(1)), match.group(2)),
+                None,
+                memory_source="log_model_buffer",
+                memory_scope="log_estimate",
+                memory_confidence="low",
+                sampled_device_label=device_label,
+            )
 
     latest_free_mb: float | None = None
     total_mb: float | None = None
@@ -677,9 +883,24 @@ def sample_vram_mb_from_log(
             if match:
                 total_mb = _normalize_vram_value(float(match.group(1)), match.group(2))
         if latest_free_mb is not None and total_mb is not None:
-            return max(0.0, total_mb - latest_free_mb)
+            return _normalize_gpu_memory_sample(
+                max(0.0, total_mb - latest_free_mb),
+                None,
+                memory_source="log_device_free_delta",
+                memory_scope="log_estimate",
+                memory_confidence="low",
+                sampled_device_label=device_label,
+            )
 
-    return None
+    return _normalize_gpu_memory_sample(
+        None,
+        None,
+        memory_source="unavailable",
+        memory_scope="unavailable",
+        memory_confidence="low",
+        sampled_device_label=device_label,
+        sample_error="no_log_memory_match",
+    )
 
 
 def sample_vram_mb(
@@ -689,18 +910,37 @@ def sample_vram_mb(
     stderr_log: Path | None = None,
 ) -> float | None:
     """Best-effort current GPU memory sampling for common Windows GPU tools."""
+    return sample_gpu_memory_from_vendor_or_log(
+        device_id,
+        backend=backend,
+        stderr_log=stderr_log,
+    ).dedicated_vram_mb
+
+
+def sample_gpu_memory_from_vendor_or_log(
+    device_id: int = 0,
+    *,
+    backend: str | None = None,
+    stderr_log: Path | None = None,
+) -> GpuMemorySample:
+    """Best-effort dedicated memory fallback with explicit provenance."""
     commands = [
-        [
-            "nvidia-smi",
-            f"--id={device_id}",
-            "--query-gpu=memory.used",
-            "--format=csv,noheader,nounits",
-        ],
-        ["amd-smi", "metric", "-g", str(device_id), "-m", "--json"],
-        ["rocm-smi", "--showmemuse", "--json"],
+        (
+            [
+                "nvidia-smi",
+                f"--id={device_id}",
+                "--query-gpu=memory.used",
+                "--format=csv,noheader,nounits",
+            ],
+            lambda text: parse_nvidia_smi_memory_used(text),
+        ),
+        (["amd-smi", "metric", "-g", str(device_id), "-m", "--json"], lambda text: parse_amd_smi_memory_used(text, device_id)),
+        (["rocm-smi", "--showmemuse", "--json"], lambda text: parse_rocm_smi_memory_used(text, device_id)),
     ]
 
-    for command in commands:
+    errors: list[str] = []
+    device_label = get_backend_device_label(backend, device_id) if backend else None
+    for command, parser in commands:
         try:
             proc = subprocess.run(
                 command,
@@ -710,17 +950,46 @@ def sample_vram_mb(
                 check=False,
             )
         except (OSError, subprocess.TimeoutExpired):
+            errors.append(f"{command[0]} unavailable")
             continue
         if proc.returncode != 0 or not proc.stdout.strip():
+            errors.append(f"{command[0]} returned no memory data")
             continue
-        parsed = _parse_vram_from_text(proc.stdout)
+        parsed = parser(proc.stdout)
         if parsed is not None:
-            return parsed
+            return _normalize_gpu_memory_sample(
+                parsed,
+                None,
+                memory_source="vendor_device_cli",
+                memory_scope="device",
+                memory_confidence="low",
+                sampled_device_label=device_label,
+            )
+        errors.append(f"{command[0]} output did not match memory-used schema")
 
     if backend and stderr_log is not None:
-        return sample_vram_mb_from_log(stderr_log, backend=backend, device_id=device_id)
+        sample = sample_gpu_memory_from_log(stderr_log, backend=backend, device_id=device_id)
+        if sample.sample_error is None and errors:
+            return _normalize_gpu_memory_sample(
+                sample.dedicated_vram_mb,
+                sample.shared_ram_mb,
+                memory_source=sample.memory_source,
+                memory_scope=sample.memory_scope,
+                memory_confidence=sample.memory_confidence,
+                sampled_device_label=sample.sampled_device_label,
+                sample_error="; ".join(errors),
+            )
+        return sample
 
-    return None
+    return _normalize_gpu_memory_sample(
+        None,
+        None,
+        memory_source="unavailable",
+        memory_scope="unavailable",
+        memory_confidence="low",
+        sampled_device_label=device_label,
+        sample_error="; ".join(errors) if errors else "no_memory_source_available",
+    )
 
 
 def sample_gpu_memory(
@@ -736,12 +1005,26 @@ def sample_gpu_memory(
         if windows_sample is not None:
             return windows_sample
 
-    dedicated_vram_mb = sample_vram_mb(
+    fallback_sample = sample_gpu_memory_from_vendor_or_log(
         device_id,
         backend=backend,
         stderr_log=stderr_log,
     )
-    return _normalize_gpu_memory_sample(dedicated_vram_mb, None)
+    if pid is not None and fallback_sample.sample_error:
+        sample_error = f"process_counter_unavailable; {fallback_sample.sample_error}"
+    elif pid is not None:
+        sample_error = "process_counter_unavailable"
+    else:
+        sample_error = fallback_sample.sample_error
+    return _normalize_gpu_memory_sample(
+        fallback_sample.dedicated_vram_mb,
+        fallback_sample.shared_ram_mb,
+        memory_source=fallback_sample.memory_source,
+        memory_scope=fallback_sample.memory_scope,
+        memory_confidence=fallback_sample.memory_confidence,
+        sampled_device_label=fallback_sample.sampled_device_label,
+        sample_error=sample_error,
+    )
 
 
 def _resolve_benchmark_sampling_device_id(config: InstanceConfig) -> int:
@@ -1119,6 +1402,12 @@ def write_benchmark_artifact(
         ("Dedicated VRAM MB", _format_optional_metric(result.dedicated_vram_mb)),
         ("Shared RAM MB", _format_optional_metric(result.shared_ram_mb)),
         ("Total sampled GPU memory MB", _format_optional_metric(result.total_gpu_memory_mb)),
+        ("Memory source", _format_optional_metric(result.memory_source)),
+        ("Memory scope", _format_optional_metric(result.memory_scope)),
+        ("Memory confidence", _format_optional_metric(result.memory_confidence)),
+        ("Sampled PID", _format_optional_metric(result.sampled_pid)),
+        ("Sampled device", _format_optional_metric(result.sampled_device_label)),
+        ("Memory sample note", _format_optional_metric(result.memory_sample_error)),
     ]
     speculative_metric_rows = [
         ("Speculative mode", _format_optional_metric(speculative_mode)),
@@ -1294,6 +1583,12 @@ def quick_benchmark_instance(
             dedicated_vram_mb=memory_sample.dedicated_vram_mb,
             shared_ram_mb=memory_sample.shared_ram_mb,
             total_gpu_memory_mb=memory_sample.total_gpu_memory_mb,
+            memory_source=memory_sample.memory_source,
+            memory_scope=memory_sample.memory_scope,
+            memory_confidence=memory_sample.memory_confidence,
+            sampled_pid=memory_sample.sampled_pid,
+            sampled_device_label=memory_sample.sampled_device_label,
+            memory_sample_error=memory_sample.sample_error,
             prompt_tokens=telemetry["prompt_tokens"],
             tokens_cached=telemetry["tokens_cached"],
             cache_hit_rate=telemetry["cache_hit_rate"],
@@ -1359,6 +1654,12 @@ def quick_benchmark_instance(
                 "dedicated_vram_mb": memory_sample.dedicated_vram_mb,
                 "shared_ram_mb": memory_sample.shared_ram_mb,
                 "total_gpu_memory_mb": memory_sample.total_gpu_memory_mb,
+                "memory_source": memory_sample.memory_source,
+                "memory_scope": memory_sample.memory_scope,
+                "memory_confidence": memory_sample.memory_confidence,
+                "sampled_pid": memory_sample.sampled_pid,
+                "sampled_device_label": memory_sample.sampled_device_label,
+                "memory_sample_error": memory_sample.sample_error,
             }
         )
 

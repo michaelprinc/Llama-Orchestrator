@@ -4,10 +4,14 @@ from pathlib import Path
 
 from llama_orchestrator.benchmark import BenchmarkResult, BenchmarkSettings
 from llama_orchestrator.benchmark_grid import (
+    DEFAULT_KV_CACHE_PROFILE_IDS,
+    KV_CACHE_PARAMETER_NAME,
     GridParameterRange,
     GridPlan,
     apply_runtime_combination,
     default_request_grid_plan,
+    format_cli_overrides,
+    format_grid_plan_preview,
     grid_parameter_catalog,
     latest_grid_runs,
     load_grid_plan,
@@ -124,8 +128,9 @@ def test_runtime_catalog_marks_restart_required_parameters() -> None:
 
     assert specs["model.context_size"].restart_required is True
     assert specs["gpu.layers"].restart_required is True
-    assert specs["--cache-type-k"].category == "model_runtime"
-    assert "q4_0" in specs["--cache-type-k"].choices
+    assert specs[KV_CACHE_PARAMETER_NAME].category == "model_runtime"
+    assert specs[KV_CACHE_PARAMETER_NAME].kind == "composite"
+    assert "q4_0_pair" in specs[KV_CACHE_PARAMETER_NAME].choices
     assert specs["--spec-type"].restart_required is True
     assert specs["--spec-draft-n-max"].value_type == "int"
     assert specs["--spec-draft-n-max"].execution_supported is True
@@ -138,6 +143,7 @@ def test_grid_catalog_separates_runtime_sampling_and_metadata(tmp_path: Path) ->
     assert specs["temperature"].category == "request"
     assert specs["model.context_size"].restart_required is True
     assert specs["--spec-draft-n-max"].category == "model_runtime"
+    assert specs["--spec-draft-n-max"].execution_supported is False
     assert specs["architecture"].read_only is True
 
 
@@ -202,6 +208,52 @@ def test_grid_plan_settings_roundtrip(tmp_path: Path) -> None:
     assert loaded.to_json_dict() == plan.to_json_dict()
 
 
+def test_kv_cache_profiles_expand_to_targeted_cli_pairs() -> None:
+    plan = GridPlan(
+        parameters=(
+            GridParameterRange(KV_CACHE_PARAMETER_NAME, values=DEFAULT_KV_CACHE_PROFILE_IDS),
+        )
+    )
+
+    combinations = plan.combinations()
+
+    assert plan.combination_count() == 5
+    assert combinations[0].parameters == {
+        "kv_cache_profile": "f16_baseline",
+        "--cache-type-k": "f16",
+        "--cache-type-v": "f16",
+    }
+    assert combinations[-1].parameters["--cache-type-k"] == "iq4_nl"
+    assert combinations[-1].parameters["--cache-type-v"] == "iq4_nl"
+    assert plan_requires_restart(plan) is True
+
+
+def test_kv_cache_profiles_multiply_other_dimensions_without_kv_matrix() -> None:
+    plan = GridPlan(
+        parameters=(
+            GridParameterRange("temperature", values=(0.0, 0.2)),
+            GridParameterRange(KV_CACHE_PARAMETER_NAME, values=DEFAULT_KV_CACHE_PROFILE_IDS),
+        )
+    )
+
+    assert plan.combination_count() == 10
+
+
+def test_grid_preview_lists_cli_overrides_and_restart_count() -> None:
+    plan = GridPlan(
+        parameters=(
+            GridParameterRange(KV_CACHE_PARAMETER_NAME, values=("f16_baseline", "q8_pair")),
+        )
+    )
+
+    preview = format_grid_plan_preview(plan)
+
+    assert "Combinations: 2" in preview
+    assert "Model restarts: 2" in preview
+    assert "Run 1 f16_baseline: --cache-type-k f16 --cache-type-v f16" in preview
+    assert format_cli_overrides(plan.combinations()[1]) == "--cache-type-k q8_0 --cache-type-v q8_0"
+
+
 def test_apply_runtime_combination_updates_in_memory_config_without_mutating_original() -> None:
     config = InstanceConfig(name="demo", model=ModelConfig(path=Path("model.gguf")))
     config.args = ["--flash-attn", "auto"]
@@ -219,6 +271,19 @@ def test_apply_runtime_combination_updates_in_memory_config_without_mutating_ori
     assert updated.args == ["--spec-draft-n-max", "4", "--flash-attn", "on"]
     assert config.model.context_size == 4096
     assert config.args == ["--flash-attn", "auto"]
+
+
+def test_apply_runtime_combination_uses_expanded_kv_cache_profile() -> None:
+    config = InstanceConfig(name="demo", model=ModelConfig(path=Path("model.gguf")))
+    config.args = ["--cache-type-k", "q4_0", "--threads", "8"]
+    combination = GridPlan(
+        parameters=(GridParameterRange(KV_CACHE_PARAMETER_NAME, values=("q8_pair",)),)
+    ).combinations()[0]
+
+    updated = apply_runtime_combination(config, combination)
+
+    assert updated.args == ["--threads", "8", "--cache-type-k", "q8_0", "--cache-type-v", "q8_0"]
+    assert config.args == ["--cache-type-k", "q4_0", "--threads", "8"]
 
 
 def test_grid_db_helpers_store_failed_run(tmp_path: Path) -> None:

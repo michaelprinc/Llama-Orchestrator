@@ -29,11 +29,25 @@ GridParameterCategory = Literal[
     "blocked",
 ]
 GridValueType = Literal["int", "float", "bool", "enum", "str"]
+ParameterKind = Literal["scalar_range", "enum_list", "boolean", "composite", "read_only_metadata"]
 GridRunStatus = Literal["pending", "running", "ok", "failed", "stopped"]
 GridSweepStatus = Literal["running", "ok", "failed", "stopped"]
 
 DEFAULT_GRID_CONFIRM_LIMIT = 100
 DEFAULT_GRID_HARD_LIMIT = 1000
+KV_CACHE_PARAMETER_NAME = "kv_cache"
+KV_CACHE_PROFILE_PARAMETER_NAME = "kv_cache_profile"
+KV_CACHE_TYPES = ("f16", "q8_0", "q4_0", "q4_1", "iq4_nl")
+DRAFT_GRID_PARAMETER_NAMES = {
+    "--cache-type-k-draft",
+    "--cache-type-v-draft",
+    "--n-gpu-layers-draft",
+    "--model-draft",
+    "--spec-draft-n-max",
+    "--spec-draft-n-min",
+    "--spec-draft-p-min",
+    "--spec-draft-p-split",
+}
 
 
 @dataclass(frozen=True)
@@ -51,6 +65,8 @@ class GridParameterSpec:
     read_only: bool = False
     description: str = ""
     execution_supported: bool = True
+    kind: ParameterKind = "scalar_range"
+    display_name: str = ""
 
 
 @dataclass(frozen=True)
@@ -63,6 +79,35 @@ class GridParameterRange:
     maximum: int | float | None = None
     step: int | float | None = None
     values: tuple[int | float | str | bool, ...] = ()
+
+
+@dataclass(frozen=True)
+class KvCacheProfile:
+    """One named K/V cache benchmark profile."""
+
+    id: str
+    label: str
+    cache_type_k: str
+    cache_type_v: str
+    enabled: bool = True
+    cache_type_k_draft: str | None = None
+    cache_type_v_draft: str | None = None
+    notes: str = ""
+
+
+DEFAULT_KV_CACHE_PROFILES: tuple[KvCacheProfile, ...] = (
+    KvCacheProfile("f16_baseline", "f16 / f16 baseline", "f16", "f16", notes="baseline"),
+    KvCacheProfile("q8_pair", "q8_0 / q8_0", "q8_0", "q8_0", notes="safe quantized"),
+    KvCacheProfile("q4_0_pair", "q4_0 / q4_0", "q4_0", "q4_0", notes="memory saving"),
+    KvCacheProfile("q4_1_pair", "q4_1 / q4_1", "q4_1", "q4_1", notes="alternative q4"),
+    KvCacheProfile("iq4_nl_pair", "iq4_nl / iq4_nl", "iq4_nl", "iq4_nl", notes="low memory"),
+)
+ASYMMETRIC_KV_CACHE_PROFILES: tuple[KvCacheProfile, ...] = (
+    KvCacheProfile("q8_k_q4_v", "q8_0 / q4_0", "q8_0", "q4_0", enabled=False, notes="asymmetric test"),
+    KvCacheProfile("f16_k_q4_v", "f16 / q4_0", "f16", "q4_0", enabled=False, notes="asymmetric test"),
+    KvCacheProfile("q8_k_iq4_v", "q8_0 / iq4_nl", "q8_0", "iq4_nl", enabled=False, notes="asymmetric test"),
+)
+DEFAULT_KV_CACHE_PROFILE_IDS = tuple(profile.id for profile in DEFAULT_KV_CACHE_PROFILES)
 
 
 @dataclass(frozen=True)
@@ -98,13 +143,14 @@ class GridPlan:
 
         combinations: list[GridCombination] = []
         for index, values in enumerate(itertools.product(*value_sets), start=1):
+            raw_parameters = {
+                parameter.name: value
+                for parameter, value in zip(enabled_ranges, values, strict=True)
+            }
             combinations.append(
                 GridCombination(
                     index=index,
-                    parameters={
-                        parameter.name: value
-                        for parameter, value in zip(enabled_ranges, values, strict=True)
-                    },
+                    parameters=_expand_composite_parameters(raw_parameters),
                 )
             )
         return tuple(combinations)
@@ -218,6 +264,7 @@ def sampling_parameter_catalog(settings: BenchmarkSettings | None = None) -> tup
             category="request",
             default=active.endpoint if active else "chat_completions",
             choices=("chat_completions", "completion"),
+            kind="enum_list",
             description="HTTP endpoint used by the benchmark request.",
         ),
         GridParameterSpec(
@@ -226,6 +273,7 @@ def sampling_parameter_catalog(settings: BenchmarkSettings | None = None) -> tup
             category="request",
             default=active.ignore_eos if active else False,
             choices=(False, True),
+            kind="boolean",
             description="Ask llama.cpp to ignore EOS for the request.",
         ),
     )
@@ -236,16 +284,120 @@ def request_parameter_catalog(settings: BenchmarkSettings | None = None) -> tupl
     return sampling_parameter_catalog(settings)
 
 
+def all_kv_cache_profiles() -> tuple[KvCacheProfile, ...]:
+    """Return default, asymmetric, and full-matrix KV cache profile definitions."""
+    generated: list[KvCacheProfile] = []
+    known_ids = {
+        profile.id
+        for profile in (*DEFAULT_KV_CACHE_PROFILES, *ASYMMETRIC_KV_CACHE_PROFILES)
+    }
+    for cache_type_k in KV_CACHE_TYPES:
+        for cache_type_v in KV_CACHE_TYPES:
+            profile_id = _kv_cache_matrix_profile_id(cache_type_k, cache_type_v)
+            if profile_id in known_ids:
+                continue
+            generated.append(
+                KvCacheProfile(
+                    profile_id,
+                    f"{cache_type_k} / {cache_type_v}",
+                    cache_type_k,
+                    cache_type_v,
+                    enabled=cache_type_k == cache_type_v,
+                    notes="full matrix",
+                )
+            )
+    return (*DEFAULT_KV_CACHE_PROFILES, *ASYMMETRIC_KV_CACHE_PROFILES, *generated)
+
+
+def kv_cache_profile_from_id(profile_id: str) -> KvCacheProfile:
+    """Resolve a persisted KV cache profile id."""
+    for profile in all_kv_cache_profiles():
+        if profile.id == profile_id:
+            return profile
+    raise ValueError(f"Unknown KV cache profile: {profile_id}")
+
+
+def kv_cache_profiles_for_preset(preset: str) -> tuple[KvCacheProfile, ...]:
+    """Return profiles for the supported GUI preset modes."""
+    if preset == "baseline":
+        return DEFAULT_KV_CACHE_PROFILES[:1]
+    if preset == "paired":
+        return DEFAULT_KV_CACHE_PROFILES
+    if preset == "memory":
+        return tuple(
+            profile
+            for profile in DEFAULT_KV_CACHE_PROFILES
+            if profile.cache_type_k in {"q4_0", "q4_1", "iq4_nl"}
+        )
+    if preset == "asymmetric":
+        return (*DEFAULT_KV_CACHE_PROFILES, *ASYMMETRIC_KV_CACHE_PROFILES)
+    if preset == "full":
+        return tuple(
+            KvCacheProfile(
+                _kv_cache_matrix_profile_id(cache_type_k, cache_type_v),
+                f"{cache_type_k} / {cache_type_v}",
+                cache_type_k,
+                cache_type_v,
+                notes="full matrix",
+            )
+            for cache_type_k in KV_CACHE_TYPES
+            for cache_type_v in KV_CACHE_TYPES
+        )
+    raise ValueError(f"Unknown KV cache preset: {preset}")
+
+
 def runtime_static_parameter_catalog() -> tuple[GridParameterSpec, ...]:
     """Return curated restart-required runtime parameters for the GUI catalog."""
+    return _runtime_static_parameter_catalog()
+
+
+def _runtime_static_parameter_catalog(
+    config: InstanceConfig | None = None,
+    *,
+    include_expert_raw_kv: bool = False,
+) -> tuple[GridParameterSpec, ...]:
+    draft_supported = config is None or _config_has_draft_runtime(config)
+    draft_status = "" if draft_supported else "Requires --model-draft or speculative decoding."
+    raw_kv_specs: tuple[GridParameterSpec, ...] = ()
+    if include_expert_raw_kv:
+        raw_kv_specs = (
+            GridParameterSpec(
+                "--cache-type-k",
+                "enum",
+                "model_runtime",
+                choices=KV_CACHE_TYPES,
+                restart_required=True,
+                kind="enum_list",
+                description="Expert raw K cache override.",
+            ),
+            GridParameterSpec(
+                "--cache-type-v",
+                "enum",
+                "model_runtime",
+                choices=KV_CACHE_TYPES,
+                restart_required=True,
+                kind="enum_list",
+                description="Expert raw V cache override.",
+            ),
+        )
     return (
         GridParameterSpec("model.context_size", "int", "runtime_static", minimum=512, maximum=262144, restart_required=True),
         GridParameterSpec("model.batch_size", "int", "runtime_static", minimum=1, maximum=8192, restart_required=True),
         GridParameterSpec("server.parallel", "int", "runtime_static", minimum=1, maximum=64, restart_required=True),
         GridParameterSpec("gpu.layers", "int", "runtime_static", minimum=0, maximum=999, restart_required=True),
         GridParameterSpec("--ubatch-size", "int", "model_runtime", minimum=1, maximum=8192, restart_required=True),
-        GridParameterSpec("--cache-type-k", "enum", "model_runtime", choices=("f16", "q8_0", "q4_0", "q4_1", "iq4_nl"), restart_required=True),
-        GridParameterSpec("--cache-type-v", "enum", "model_runtime", choices=("f16", "q8_0", "q4_0", "q4_1", "iq4_nl"), restart_required=True),
+        GridParameterSpec(
+            KV_CACHE_PARAMETER_NAME,
+            "enum",
+            "model_runtime",
+            default="Custom",
+            choices=DEFAULT_KV_CACHE_PROFILE_IDS,
+            restart_required=True,
+            kind="composite",
+            display_name="KV Cache profiles",
+            description="Named K/V cache combinations expanded to --cache-type-k and --cache-type-v.",
+        ),
+        *raw_kv_specs,
         GridParameterSpec("--kv-offload", "bool", "model_runtime", choices=(False, True), restart_required=True),
         GridParameterSpec("--kv-unified", "bool", "model_runtime", choices=(False, True), restart_required=True),
         GridParameterSpec("--cache-ram", "int", "model_runtime", minimum=0, maximum=1048576, restart_required=True),
@@ -255,25 +407,27 @@ def runtime_static_parameter_catalog() -> tuple[GridParameterSpec, ...]:
         GridParameterSpec("--swa-full", "bool", "model_runtime", choices=(False, True), restart_required=True),
         GridParameterSpec("--flash-attn", "enum", "model_runtime", choices=("auto", "on", "off"), restart_required=True),
         GridParameterSpec("--spec-type", "enum", "model_runtime", choices=("none", "draft-simple", "draft-eagle3", "draft-mtp"), restart_required=True),
-        GridParameterSpec("--spec-draft-n-max", "int", "model_runtime", minimum=1, maximum=64, restart_required=True),
-        GridParameterSpec("--spec-draft-n-min", "int", "model_runtime", minimum=0, maximum=64, restart_required=True),
-        GridParameterSpec("--spec-draft-p-min", "float", "model_runtime", minimum=0.0, maximum=1.0, restart_required=True),
-        GridParameterSpec("--spec-draft-p-split", "float", "model_runtime", minimum=0.0, maximum=1.0, restart_required=True),
-        GridParameterSpec("--cache-type-k-draft", "enum", "model_runtime", choices=("f16", "q8_0", "q4_0", "q4_1", "iq4_nl"), restart_required=True),
-        GridParameterSpec("--cache-type-v-draft", "enum", "model_runtime", choices=("f16", "q8_0", "q4_0", "q4_1", "iq4_nl"), restart_required=True),
-        GridParameterSpec("--n-gpu-layers-draft", "int", "model_runtime", minimum=0, maximum=999, restart_required=True),
-        GridParameterSpec("--model-draft", "str", "model_runtime", restart_required=True),
+        GridParameterSpec("--spec-draft-n-max", "int", "model_runtime", minimum=1, maximum=64, restart_required=True, execution_supported=draft_supported, description=draft_status),
+        GridParameterSpec("--spec-draft-n-min", "int", "model_runtime", minimum=0, maximum=64, restart_required=True, execution_supported=draft_supported, description=draft_status),
+        GridParameterSpec("--spec-draft-p-min", "float", "model_runtime", minimum=0.0, maximum=1.0, restart_required=True, execution_supported=draft_supported, description=draft_status),
+        GridParameterSpec("--spec-draft-p-split", "float", "model_runtime", minimum=0.0, maximum=1.0, restart_required=True, execution_supported=draft_supported, description=draft_status),
+        GridParameterSpec("--cache-type-k-draft", "enum", "model_runtime", choices=KV_CACHE_TYPES, restart_required=True, execution_supported=draft_supported, kind="enum_list", description=draft_status),
+        GridParameterSpec("--cache-type-v-draft", "enum", "model_runtime", choices=KV_CACHE_TYPES, restart_required=True, execution_supported=draft_supported, kind="enum_list", description=draft_status),
+        GridParameterSpec("--n-gpu-layers-draft", "int", "model_runtime", minimum=0, maximum=999, restart_required=True, execution_supported=draft_supported, description=draft_status),
+        GridParameterSpec("--model-draft", "str", "model_runtime", restart_required=True, execution_supported=draft_supported, description=draft_status),
     )
 
 
 def grid_parameter_catalog(
     config: InstanceConfig | None = None,
     settings: BenchmarkSettings | None = None,
+    *,
+    include_expert_raw_kv: bool = False,
 ) -> tuple[GridParameterSpec, ...]:
     """Return the full curated Grid benchmark dialog catalog."""
     metadata_specs = model_metadata_catalog(config) if config is not None else ()
     return (
-        *runtime_static_parameter_catalog(),
+        *_runtime_static_parameter_catalog(config, include_expert_raw_kv=include_expert_raw_kv),
         *sampling_parameter_catalog(settings),
         *metadata_specs,
     )
@@ -304,6 +458,7 @@ def model_metadata_catalog(config: InstanceConfig) -> tuple[GridParameterSpec, .
             category="model_metadata",
             default=value,
             read_only=True,
+            kind="read_only_metadata",
             description="Read-only GGUF/model metadata.",
         )
         for name, value in values.items()
@@ -384,7 +539,10 @@ def settings_for_combination(
 
 def plan_requires_restart(plan: GridPlan) -> bool:
     """Return True when any enabled parameter requires a runtime restart."""
-    specs = {spec.name: spec for spec in grid_parameter_catalog(settings=None)}
+    specs = {
+        spec.name: spec
+        for spec in grid_parameter_catalog(settings=None, include_expert_raw_kv=True)
+    }
     return any(
         parameter.enabled and specs.get(parameter.name, GridParameterSpec(parameter.name, "str", "request")).restart_required
         for parameter in plan.parameters
@@ -395,7 +553,7 @@ def unsupported_execution_parameters(plan: GridPlan) -> tuple[str, ...]:
     """Return enabled parameters that cannot run in the current request-only runner."""
     supported = {
         spec.name: spec.execution_supported
-        for spec in grid_parameter_catalog(settings=None)
+        for spec in grid_parameter_catalog(settings=None, include_expert_raw_kv=True)
         if not spec.read_only
     }
     unsupported: list[str] = []
@@ -423,6 +581,50 @@ def apply_runtime_combination(config: InstanceConfig, combination: GridCombinati
         elif name.startswith("--"):
             updated.args = _set_runtime_arg(updated.args, name, value)
     return updated
+
+
+def format_cli_overrides(combination: GridCombination) -> str:
+    """Return a deterministic CLI override preview for one combination."""
+    parts: list[str] = []
+    for name, value in combination.parameters.items():
+        if not name.startswith("--"):
+            continue
+        if isinstance(value, bool):
+            if value:
+                parts.append(name)
+            continue
+        if value == "":
+            continue
+        parts.extend([name, str(value)])
+    return " ".join(parts)
+
+
+def format_grid_plan_preview(
+    plan: GridPlan,
+    *,
+    instance_count: int = 1,
+    max_runs: int = 3,
+) -> str:
+    """Format a concise, executable preview for the GUI dialog."""
+    combinations = plan.combinations()
+    total_runs = len(combinations) * max(instance_count, 1)
+    restart_count = total_runs if plan_requires_restart(plan) else 0
+    request_count = total_runs
+    lines = [
+        f"Combinations: {len(combinations)}",
+        f"Model restarts: {restart_count}",
+        f"Requests: {request_count}",
+    ]
+    for combination in combinations[:max_runs]:
+        profile = combination.parameters.get(KV_CACHE_PROFILE_PARAMETER_NAME)
+        prefix = f"Run {combination.index}"
+        if profile:
+            prefix = f"{prefix} {profile}"
+        overrides = format_cli_overrides(combination) or "(request-only)"
+        lines.append(f"{prefix}: {overrides}")
+    if len(combinations) > max_runs:
+        lines.append(f"... {len(combinations) - max_runs} more run(s)")
+    return "\n".join(lines)
 
 
 def init_grid_benchmark_db(db_path: Path | None = None) -> Path:
@@ -853,6 +1055,43 @@ def _enumerate_range(parameter: GridParameterRange) -> tuple[int | float | str |
         values.append(round(float(current), 10) if decimal else int(current))
         current = current + parameter.step
     return tuple(values)
+
+
+def _expand_composite_parameters(
+    parameters: dict[str, int | float | str | bool],
+) -> dict[str, int | float | str | bool]:
+    expanded: dict[str, int | float | str | bool] = {}
+    for name, value in parameters.items():
+        if name != KV_CACHE_PARAMETER_NAME:
+            expanded[name] = value
+            continue
+        profile = kv_cache_profile_from_id(str(value))
+        expanded[KV_CACHE_PROFILE_PARAMETER_NAME] = profile.id
+        expanded["--cache-type-k"] = profile.cache_type_k
+        expanded["--cache-type-v"] = profile.cache_type_v
+        if profile.cache_type_k_draft:
+            expanded["--cache-type-k-draft"] = profile.cache_type_k_draft
+        if profile.cache_type_v_draft:
+            expanded["--cache-type-v-draft"] = profile.cache_type_v_draft
+    return expanded
+
+
+def _config_has_draft_runtime(config: InstanceConfig) -> bool:
+    args = tuple(config.args)
+    for index, item in enumerate(args):
+        if item == "--model-draft":
+            return True
+        if item == "--spec-type" and index + 1 < len(args):
+            return args[index + 1] not in {"", "none", "disabled", "off"}
+    metadata = config.model_metadata
+    if metadata is None:
+        return False
+    speculative = metadata.speculative_decoding
+    return bool(speculative.builtin_mtp or speculative.external_draft or speculative.dflash)
+
+
+def _kv_cache_matrix_profile_id(cache_type_k: str, cache_type_v: str) -> str:
+    return f"k_{cache_type_k}__v_{cache_type_v}"
 
 
 def _set_runtime_arg(

@@ -319,6 +319,51 @@ def test_estimate_instance_memory_uses_larger_ubatch_size_for_overhead(tmp_path:
     assert estimate.estimated_runtime_overhead_mb == 1536.0
 
 
+def test_estimate_instance_memory_marks_complex_runtime_inputs_low_confidence(tmp_path: Path) -> None:
+    """Estimator should stay advisory for split, draft, and CPU-MoE runtimes."""
+    model_path = tmp_path / "demo.gguf"
+    _write_test_gguf(
+        model_path,
+        {
+            "general.architecture": "llama",
+            "llama.context_length": 65536,
+            "llama.block_count": 32,
+            "llama.embedding_length": 4096,
+            "llama.attention.head_count": 32,
+            "llama.attention.head_count_kv": 8,
+        },
+    )
+    config = _make_config(
+        model_path,
+        args=[
+            "--device",
+            "Vulkan1,Vulkan2",
+            "--split-mode",
+            "layer",
+            "--tensor-split",
+            "70,30",
+            "--model-draft",
+            "draft.gguf",
+            "--n-cpu-moe",
+            "12",
+        ],
+        context_size=4096,
+    )
+
+    estimate = estimate_instance_memory(
+        config,
+        model_size_bytes=6 * 1024 * 1024 * 1024,
+        dedicated_vram_budget_mb=16000.0,
+    )
+
+    assert estimate.confidence == "low"
+    assert "multi_gpu_device_list" in estimate.unsupported_inputs
+    assert "split_mode:layer" in estimate.unsupported_inputs
+    assert "tensor_split" in estimate.unsupported_inputs
+    assert "speculative_draft_runtime" in estimate.unsupported_inputs
+    assert "n_cpu_moe" in estimate.unsupported_inputs
+
+
 def test_estimate_instance_memory_uses_effective_command_device_for_budget_log(tmp_path: Path) -> None:
     model_path = tmp_path / "demo.gguf"
     stderr_log = tmp_path / "stderr.log"

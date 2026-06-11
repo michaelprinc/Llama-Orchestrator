@@ -33,10 +33,15 @@ from llama_orchestrator.benchmark import (
     save_benchmark_settings,
 )
 from llama_orchestrator.benchmark_grid import (
+    DEFAULT_KV_CACHE_PROFILE_IDS,
+    KV_CACHE_PARAMETER_NAME,
     GridParameterRange,
     GridParameterSpec,
     GridPlan,
+    all_kv_cache_profiles,
+    format_grid_plan_preview,
     grid_parameter_catalog,
+    kv_cache_profiles_for_preset,
     latest_grid_runs,
     load_grid_plan,
     plan_requires_restart,
@@ -246,6 +251,16 @@ class GridDialogParameterVars:
     step_or_values: tk.StringVar
 
 
+def format_kv_cache_profile_summary(profile_ids: Sequence[str]) -> str:
+    """Return the compact main-grid label for selected KV cache profiles."""
+    count = len(tuple(profile_ids))
+    if count == 0:
+        return "Custom: 0 selected"
+    if tuple(profile_ids) == DEFAULT_KV_CACHE_PROFILE_IDS:
+        return f"Paired profiles: {count} selected"
+    return f"Custom: {count} selected"
+
+
 def parse_grid_values(text: str, value_type: str) -> tuple[int | float | str | bool, ...]:
     """Parse comma-separated grid values from the dialog."""
     raw_values = [part.strip() for part in text.split(",") if part.strip()]
@@ -318,8 +333,131 @@ def _grid_dialog_status(spec: GridParameterSpec) -> str:
     if spec.read_only:
         return "read-only"
     if not spec.execution_supported:
-        return "planned"
+        return "disabled"
     return "ready"
+
+
+def _grid_spec_label(spec: GridParameterSpec) -> str:
+    return spec.display_name or spec.name
+
+
+class KvCacheProfileDialog(tk.Toplevel):
+    """Dialog for exact KV cache benchmark profile selection."""
+
+    def __init__(self, parent: tk.Misc, selected_profile_ids: Sequence[str]) -> None:
+        super().__init__(parent)
+        self.title("KV Cache combinations")
+        self.resizable(True, True)
+        self.result: tuple[str, ...] | None = None
+        selected = set(selected_profile_ids) or set(DEFAULT_KV_CACHE_PROFILE_IDS)
+        self._profile_vars: dict[str, tk.BooleanVar] = {}
+        self._profiles = all_kv_cache_profiles()
+        self._mode = tk.StringVar(value="paired")
+
+        body = ttk.Frame(self, padding=10)
+        body.grid(row=0, column=0, sticky="nsew")
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+        body.columnconfigure(0, weight=1)
+
+        mode_frame = ttk.LabelFrame(body, text="Mode")
+        mode_frame.grid(row=0, column=0, sticky="ew")
+        modes = (
+            ("Paired profiles", "paired"),
+            ("Matrix selection", "matrix"),
+            ("Exact custom list", "custom"),
+            ("Full factorial K x V", "full"),
+        )
+        for index, (label, value) in enumerate(modes):
+            ttk.Radiobutton(
+                mode_frame,
+                text=label,
+                value=value,
+                variable=self._mode,
+                command=self._apply_mode,
+            ).grid(row=0, column=index, sticky="w", padx=4)
+
+        preset_frame = ttk.Frame(body)
+        preset_frame.grid(row=1, column=0, sticky="w", pady=(8, 6))
+        ttk.Button(preset_frame, text="Baseline", command=lambda: self._select_preset("baseline")).pack(side=tk.LEFT, padx=2)
+        ttk.Button(preset_frame, text="Paired", command=lambda: self._select_preset("paired")).pack(side=tk.LEFT, padx=2)
+        ttk.Button(preset_frame, text="Memory saving", command=lambda: self._select_preset("memory")).pack(side=tk.LEFT, padx=2)
+        ttk.Button(preset_frame, text="Add asymmetric", command=lambda: self._select_preset("asymmetric")).pack(side=tk.LEFT, padx=2)
+        ttk.Button(preset_frame, text="Full K x V", command=lambda: self._select_preset("full")).pack(side=tk.LEFT, padx=2)
+        ttk.Button(preset_frame, text="Clear", command=self._clear_all).pack(side=tk.LEFT, padx=2)
+
+        table = ttk.Frame(body)
+        table.grid(row=2, column=0, sticky="nsew")
+        body.rowconfigure(2, weight=1)
+        headers = ("Enabled", "Name", "K cache", "V cache", "Draft K", "Draft V", "Notes")
+        for column, header in enumerate(headers):
+            ttk.Label(table, text=header).grid(row=0, column=column, sticky="w", padx=4)
+
+        for row, profile in enumerate(self._profiles, start=1):
+            variable = tk.BooleanVar(value=profile.id in selected)
+            self._profile_vars[profile.id] = variable
+            ttk.Checkbutton(table, variable=variable, command=self._update_summary).grid(row=row, column=0, sticky="w", padx=4)
+            ttk.Label(table, text=profile.label).grid(row=row, column=1, sticky="w", padx=4)
+            ttk.Label(table, text=profile.cache_type_k).grid(row=row, column=2, sticky="w", padx=4)
+            ttk.Label(table, text=profile.cache_type_v).grid(row=row, column=3, sticky="w", padx=4)
+            ttk.Label(table, text=profile.cache_type_k_draft or "-").grid(row=row, column=4, sticky="w", padx=4)
+            ttk.Label(table, text=profile.cache_type_v_draft or "-").grid(row=row, column=5, sticky="w", padx=4)
+            ttk.Label(table, text=profile.notes or "-").grid(row=row, column=6, sticky="w", padx=4)
+
+        self.summary_var = tk.StringVar()
+        ttk.Label(body, textvariable=self.summary_var).grid(row=3, column=0, sticky="w", pady=(8, 0))
+
+        buttons = ttk.Frame(body)
+        buttons.grid(row=4, column=0, sticky="e", pady=(10, 0))
+        ttk.Button(buttons, text="Cancel", command=self._cancel).pack(side=tk.LEFT, padx=4)
+        ttk.Button(buttons, text="Apply", command=self._accept).pack(side=tk.LEFT, padx=4)
+
+        self.transient(parent)
+        self.grab_set()
+        self.protocol("WM_DELETE_WINDOW", self._cancel)
+        self._update_summary()
+
+    def _selected_profile_ids(self) -> tuple[str, ...]:
+        return tuple(profile.id for profile in self._profiles if self._profile_vars[profile.id].get())
+
+    def _select_preset(self, preset: str) -> None:
+        selected = {profile.id for profile in kv_cache_profiles_for_preset(preset)}
+        for profile_id, variable in self._profile_vars.items():
+            variable.set(profile_id in selected)
+        self._mode.set("full" if preset == "full" else "paired" if preset == "paired" else "custom")
+        self._update_summary()
+
+    def _apply_mode(self) -> None:
+        if self._mode.get() == "paired":
+            self._select_preset("paired")
+        elif self._mode.get() == "full":
+            self._select_preset("full")
+        else:
+            self._update_summary()
+
+    def _clear_all(self) -> None:
+        for variable in self._profile_vars.values():
+            variable.set(False)
+        self._mode.set("custom")
+        self._update_summary()
+
+    def _update_summary(self) -> None:
+        selected = self._selected_profile_ids()
+        self.summary_var.set(
+            f"Selected KV profiles: {len(selected)} | Estimated total benchmark runs: {len(selected)} x other enabled dimensions"
+        )
+
+    def _accept(self) -> None:
+        selected = self._selected_profile_ids()
+        if not selected:
+            messagebox.showerror("KV Cache combinations", "Select at least one KV cache profile.", parent=self)
+            return
+        self.result = selected
+        self.destroy()
+
+    def _cancel(self) -> None:
+        self.result = None
+        self.destroy()
 
 
 class GridBenchmarkDialog(tk.Toplevel):
@@ -337,6 +475,7 @@ class GridBenchmarkDialog(tk.Toplevel):
         self.result: GridPlan | None = None
         self._parameter_vars: dict[str, GridDialogParameterVars] = {}
         saved_ranges = {parameter.name: parameter for parameter in load_grid_plan().parameters}
+        has_saved_ranges = bool(saved_ranges)
 
         body = ttk.Frame(self, padding=10)
         body.grid(row=0, column=0, sticky="nsew")
@@ -360,7 +499,15 @@ class GridBenchmarkDialog(tk.Toplevel):
 
         for row, spec in enumerate(grid_parameter_catalog(config, settings), start=1):
             saved = saved_ranges.get(spec.name)
-            enabled = tk.BooleanVar(value=bool(saved.enabled) if saved else False)
+            enabled = tk.BooleanVar(
+                value=(
+                    bool(saved.enabled)
+                    if saved
+                    else spec.name == KV_CACHE_PARAMETER_NAME and not has_saved_ranges
+                )
+            )
+            if spec.read_only or not spec.execution_supported:
+                enabled.set(False)
             min_value = tk.StringVar(
                 value=(
                     str(saved.minimum)
@@ -386,6 +533,8 @@ class GridBenchmarkDialog(tk.Toplevel):
                     )
                 )
             )
+            if spec.name == KV_CACHE_PARAMETER_NAME and saved is None:
+                step_or_values.set(_format_grid_values(DEFAULT_KV_CACHE_PROFILE_IDS))
             self._parameter_vars[spec.name] = GridDialogParameterVars(
                 spec=spec,
                 enabled=enabled,
@@ -396,9 +545,9 @@ class GridBenchmarkDialog(tk.Toplevel):
             ttk.Checkbutton(
                 body,
                 variable=enabled,
-                state=tk.DISABLED if spec.read_only else tk.NORMAL,
+                state=tk.DISABLED if spec.read_only or not spec.execution_supported else tk.NORMAL,
             ).grid(row=row, column=0, sticky="w", padx=4)
-            ttk.Label(body, text=spec.name).grid(row=row, column=1, sticky="w", padx=4)
+            ttk.Label(body, text=_grid_spec_label(spec)).grid(row=row, column=1, sticky="w", padx=4)
             ttk.Label(body, text=_default_grid_values_for_spec(spec.default) or "-").grid(
                 row=row,
                 column=2,
@@ -412,12 +561,31 @@ class GridBenchmarkDialog(tk.Toplevel):
             ttk.Entry(body, textvariable=max_value, width=10, state=numeric_state).grid(
                 row=row, column=4, sticky="ew", padx=4
             )
-            ttk.Entry(
-                body,
-                textvariable=step_or_values,
-                width=24,
-                state=tk.NORMAL if not spec.read_only else tk.DISABLED,
-            ).grid(row=row, column=5, sticky="ew", padx=4)
+            if spec.kind == "composite" and spec.name == KV_CACHE_PARAMETER_NAME:
+                selected_profile_ids = tuple(str(value) for value in parse_grid_values(step_or_values.get(), "enum"))
+                step_or_values._kv_cache_profile_ids = selected_profile_ids
+                composite_frame = ttk.Frame(body)
+                composite_frame.grid(row=row, column=5, sticky="ew", padx=4)
+                composite_frame.columnconfigure(0, weight=1)
+                ttk.Entry(
+                    composite_frame,
+                    textvariable=step_or_values,
+                    width=24,
+                    state=tk.DISABLED,
+                ).grid(row=0, column=0, sticky="ew")
+                ttk.Button(
+                    composite_frame,
+                    text="Configure...",
+                    command=lambda target=step_or_values: self._configure_kv_cache(target),
+                ).grid(row=0, column=1, sticky="e", padx=(4, 0))
+                step_or_values.set(format_kv_cache_profile_summary(selected_profile_ids))
+            else:
+                ttk.Entry(
+                    body,
+                    textvariable=step_or_values,
+                    width=24,
+                    state=tk.NORMAL if not spec.read_only and spec.execution_supported else tk.DISABLED,
+                ).grid(row=row, column=5, sticky="ew", padx=4)
             ttk.Label(body, text=spec.category).grid(row=row, column=6, sticky="w", padx=4)
             ttk.Label(body, text="yes" if spec.restart_required else "no").grid(
                 row=row,
@@ -455,6 +623,16 @@ class GridBenchmarkDialog(tk.Toplevel):
                 continue
             if vars_.spec.read_only:
                 raise ValueError(f"{name} is read-only metadata and cannot be benchmarked.")
+            if not vars_.spec.execution_supported:
+                raise ValueError(f"{name} is disabled for this model/runtime.")
+            if vars_.spec.kind == "composite" and name == KV_CACHE_PARAMETER_NAME:
+                ranges.append(
+                    GridParameterRange(
+                        name=name,
+                        values=self._selected_kv_cache_profile_ids(vars_.step_or_values.get()),
+                    )
+                )
+                continue
             if vars_.spec.value_type in {"int", "float"}:
                 minimum = parse_grid_number(vars_.minimum.get(), vars_.spec.value_type)
                 maximum = parse_grid_number(vars_.maximum.get(), vars_.spec.value_type)
@@ -480,9 +658,29 @@ class GridBenchmarkDialog(tk.Toplevel):
         try:
             plan = self._build_plan()
             suffix = " confirmation required" if plan.needs_confirmation() else ""
-            self.preview_var.set(f"Combinations: {plan.combination_count()}{suffix}")
+            self.preview_var.set(f"{format_grid_plan_preview(plan)}{suffix}")
         except Exception as exc:
             self.preview_var.set(f"Invalid grid: {exc}")
+
+    def _selected_kv_cache_profile_ids(self, text: str) -> tuple[str, ...]:
+        if "selected" in text:
+            vars_ = self._parameter_vars[KV_CACHE_PARAMETER_NAME]
+            stored = getattr(vars_.step_or_values, "_kv_cache_profile_ids", None)
+            if stored:
+                return tuple(stored)
+        values = parse_grid_values(text, "enum")
+        return tuple(str(value) for value in values)
+
+    def _configure_kv_cache(self, target: tk.StringVar) -> None:
+        selected = self._selected_kv_cache_profile_ids(target.get())
+        dialog = KvCacheProfileDialog(self, selected)
+        self.wait_window(dialog)
+        if dialog.result is None:
+            return
+        target._kv_cache_profile_ids = tuple(dialog.result)
+        target.set(format_kv_cache_profile_summary(dialog.result))
+        self._parameter_vars[KV_CACHE_PARAMETER_NAME].enabled.set(True)
+        self._update_preview()
 
     def _accept(self) -> None:
         try:
@@ -888,6 +1086,8 @@ def benchmark_shared_ram_warning(result: BenchmarkResult) -> str:
     """Return a user-facing warning when benchmarked inference uses shared RAM."""
     if result.shared_ram_mb is None or result.shared_ram_mb <= 0:
         return ""
+    if result.memory_source != "windows_process_counter" or result.memory_scope != "process":
+        return ""
     return "Shared RAM in use; inference may be slower."
 
 
@@ -896,6 +1096,8 @@ def format_benchmark_memory(result: BenchmarkResult) -> str:
     dedicated_vram_mb = result.dedicated_vram_mb if result.dedicated_vram_mb is not None else result.vram_mb
     total_gpu_memory_mb = result.total_gpu_memory_mb
     shared_ram_mb = result.shared_ram_mb
+    memory_source = result.memory_source or ("legacy_unknown" if result.vram_mb is not None else None)
+    memory_scope = result.memory_scope
 
     if dedicated_vram_mb is None and total_gpu_memory_mb is None:
         return "-"
@@ -904,9 +1106,15 @@ def format_benchmark_memory(result: BenchmarkResult) -> str:
     if shared_ram_mb is None:
         if dedicated_vram_mb is None:
             return f"{format_metric(total_gpu_memory_mb, 0)} total"
+        if memory_source == "vendor_device_cli":
+            return f"{format_metric(dedicated_vram_mb, 0)} VRAM (device-level; RAM unknown)"
+        if memory_source in {"log_model_buffer", "log_device_free_delta"}:
+            label = "model buffer" if memory_source == "log_model_buffer" else "device delta"
+            return f"{format_metric(dedicated_vram_mb, 0)} {label} (log estimate; RAM unknown)"
         return (
             f"{format_metric(total_gpu_memory_mb, 0)} total "
-            f"(VRAM {format_metric(dedicated_vram_mb, 0)})"
+            f"(VRAM {format_metric(dedicated_vram_mb, 0)}"
+            f"{'; RAM unknown' if memory_scope not in {'process', None} else ''})"
         )
     suffix = " slow" if shared_ram_mb > 0 else ""
     return (

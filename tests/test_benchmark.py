@@ -8,6 +8,7 @@ from pathlib import Path
 from llama_orchestrator.benchmark import (
     BenchmarkResult,
     BenchmarkSettings,
+    GpuMemorySample,
     _extract_benchmark_telemetry,
     _extract_token_count,
     _parse_vram_from_text,
@@ -20,8 +21,11 @@ from llama_orchestrator.benchmark import (
     init_benchmark_db,
     latest_benchmark_results,
     load_benchmark_settings,
+    parse_amd_smi_memory_used,
+    parse_rocm_smi_memory_used,
     record_benchmark_result,
     sample_gpu_memory,
+    sample_gpu_memory_from_log,
     sample_vram_mb_from_log,
     save_benchmark_settings,
     write_benchmark_artifact,
@@ -211,6 +215,11 @@ def test_benchmark_history_latest_per_instance(tmp_path: Path) -> None:
         draft_tokens=12,
         draft_tokens_accepted=9,
         draft_acceptance_rate=75.0,
+        memory_source="windows_process_counter",
+        memory_scope="process",
+        memory_confidence="high",
+        sampled_pid=12212,
+        sampled_device_label="Vulkan2",
     )
 
     record_benchmark_result(first, db_path)
@@ -236,6 +245,11 @@ def test_benchmark_history_latest_per_instance(tmp_path: Path) -> None:
     assert latest["bench"].draft_tokens == 12
     assert latest["bench"].draft_tokens_accepted == 9
     assert latest["bench"].draft_acceptance_rate == 75.0
+    assert latest["bench"].memory_source == "windows_process_counter"
+    assert latest["bench"].memory_scope == "process"
+    assert latest["bench"].memory_confidence == "high"
+    assert latest["bench"].sampled_pid == 12212
+    assert latest["bench"].sampled_device_label == "Vulkan2"
 
 
 def test_benchmark_history_additive_schema_keeps_legacy_rows(tmp_path: Path) -> None:
@@ -305,6 +319,11 @@ def test_benchmark_history_additive_schema_keeps_legacy_rows(tmp_path: Path) -> 
     assert latest["legacy"].draft_tokens is None
     assert latest["legacy"].draft_tokens_accepted is None
     assert latest["legacy"].draft_acceptance_rate is None
+    assert latest["legacy"].memory_source == "legacy_unknown"
+    assert latest["legacy"].memory_scope is None
+    assert latest["legacy"].memory_confidence is None
+    assert latest["legacy"].sampled_pid is None
+    assert latest["legacy"].sampled_device_label is None
 
 
 def test_extract_benchmark_telemetry_uses_payload_cache_and_speculative_metrics() -> None:
@@ -479,6 +498,10 @@ def test_sample_gpu_memory_prefers_windows_process_counters(monkeypatch) -> None
     assert sample.dedicated_vram_mb == 16261.3
     assert sample.shared_ram_mb == 175.2
     assert sample.total_gpu_memory_mb == 16436.5
+    assert sample.memory_source == "windows_process_counter"
+    assert sample.memory_scope == "process"
+    assert sample.memory_confidence == "high"
+    assert sample.sampled_pid == 12212
 
 
 def test_get_validated_benchmark_pid_returns_none_for_invalid_process(monkeypatch) -> None:
@@ -505,8 +528,16 @@ def test_sample_gpu_memory_falls_back_to_dedicated_only_when_process_counters_ar
         lambda pid: None,
     )
     monkeypatch.setattr(
-        "llama_orchestrator.benchmark.sample_vram_mb",
-        lambda *args, **kwargs: 4861.28,
+        "llama_orchestrator.benchmark.sample_gpu_memory_from_vendor_or_log",
+        lambda *args, **kwargs: GpuMemorySample(
+            dedicated_vram_mb=4861.28,
+            shared_ram_mb=None,
+            total_gpu_memory_mb=4861.28,
+            memory_source="vendor_device_cli",
+            memory_scope="device",
+            memory_confidence="low",
+            sampled_device_label="Vulkan1",
+        ),
     )
 
     sample = sample_gpu_memory(pid=12212, device_id=1, backend="vulkan")
@@ -514,6 +545,11 @@ def test_sample_gpu_memory_falls_back_to_dedicated_only_when_process_counters_ar
     assert sample.dedicated_vram_mb == 4861.28
     assert sample.shared_ram_mb is None
     assert sample.total_gpu_memory_mb == 4861.28
+    assert sample.memory_source == "vendor_device_cli"
+    assert sample.memory_scope == "device"
+    assert sample.memory_confidence == "low"
+    assert sample.sampled_device_label == "Vulkan1"
+    assert sample.sample_error == "process_counter_unavailable"
 
 
 def test_sample_vram_mb_from_log_uses_matching_vulkan_buffer_size(tmp_path: Path) -> None:
@@ -532,6 +568,11 @@ def test_sample_vram_mb_from_log_uses_matching_vulkan_buffer_size(tmp_path: Path
     )
 
     assert sample_vram_mb_from_log(stderr_log, backend="vulkan", device_id=1) == 4861.28
+    sample = sample_gpu_memory_from_log(stderr_log, backend="vulkan", device_id=1)
+    assert sample.memory_source == "log_model_buffer"
+    assert sample.memory_scope == "log_estimate"
+    assert sample.memory_confidence == "low"
+    assert sample.sampled_device_label == "Vulkan1"
 
 
 def test_sample_vram_mb_from_log_falls_back_to_total_minus_free(tmp_path: Path) -> None:
@@ -548,6 +589,34 @@ def test_sample_vram_mb_from_log_falls_back_to_total_minus_free(tmp_path: Path) 
     )
 
     assert sample_vram_mb_from_log(stderr_log, backend="vulkan", device_id=1) == 5670.0
+    sample = sample_gpu_memory_from_log(stderr_log, backend="vulkan", device_id=1)
+    assert sample.memory_source == "log_device_free_delta"
+    assert sample.memory_scope == "log_estimate"
+
+
+def test_amd_smi_json_parser_uses_memory_field_not_first_number() -> None:
+    """AMD JSON parsing should not treat the GPU id as MB."""
+    payload = {
+        "gpu_data": [
+            {
+                "gpu": 1,
+                "VRAM Total Memory (B)": 17163091968,
+                "VRAM Total Used Memory (B)": 2149580800,
+            }
+        ]
+    }
+
+    assert parse_amd_smi_memory_used(json.dumps(payload), device_id=1) == 2050.0
+
+
+def test_rocm_smi_json_parser_selects_requested_card() -> None:
+    """ROCm fallback should select the requested card and explicit memory-use value."""
+    payload = {
+        "card0": {"GPU use (%)": "12", "VRAM Total Used Memory (B)": 1048576},
+        "card2": {"GPU use (%)": "99", "VRAM Total Used Memory (B)": 536870912},
+    }
+
+    assert parse_rocm_smi_memory_used(json.dumps(payload), device_id=2) == 512.0
 
 
 def test_resolve_benchmark_sampling_device_id_prefers_explicit_main_gpu_arg() -> None:
