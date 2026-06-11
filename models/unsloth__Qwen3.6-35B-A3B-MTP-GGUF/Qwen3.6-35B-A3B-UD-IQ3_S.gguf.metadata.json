@@ -1,0 +1,41 @@
+{
+  "gguf_metadata": {
+    "architecture": "qwen35moe",
+    "attention_head_count": 16,
+    "attention_head_count_kv": 2,
+    "basename": "Qwen3.6-35B-A3B",
+    "block_count": 41,
+    "chat_template_present": true,
+    "context_length": 262144,
+    "embedding_length": 2048,
+    "file_type": "IQ3_S",
+    "file_type_value": 23,
+    "name": "Qwen3.6-35B-A3B",
+    "nextn_predict_layers": 1,
+    "quantization_version": 2,
+    "rope_freq_base": 10000000.0
+  },
+  "model_card_metadata": {
+    "claimed_architecture": null,
+    "claimed_chat_template": null,
+    "claimed_context_length": null,
+    "claimed_model": null,
+    "claimed_mtp_support": null,
+    "recommended_runtime": null
+  },
+  "schema_version": "1",
+  "source": {
+    "fetched_at": "2026-06-11T18:24:14Z",
+    "filename": "Qwen3.6-35B-A3B-UD-IQ3_S.gguf",
+    "provider": "huggingface",
+    "repo_id": "unsloth/Qwen3.6-35B-A3B-MTP-GGUF",
+    "revision": "main"
+  },
+  "validation": {
+    "confidence": "medium",
+    "status": "warning",
+    "warnings": [
+      "GGUF architecture is not evident from the Hugging Face repo or filename."
+    ]
+  }
+}
