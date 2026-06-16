@@ -148,6 +148,10 @@ def is_llama_server_process(cmdline: str | None, expected_binary: str | None = N
     # Check for common llama.cpp patterns
     if "llama.cpp" in cmdline_lower:
         return True
+        
+    # Check for diffusion adapter or runner processes
+    if "diffusion_http_adapter" in cmdline_lower or "llama-diffusion" in cmdline_lower:
+        return True
     
     return False
 

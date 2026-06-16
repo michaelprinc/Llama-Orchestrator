@@ -44,7 +44,7 @@ def build_command(config: InstanceConfig) -> list[str]:
 
     if config.env.get("LLAMA_ORCH_RUNTIME") == "diffusion-gemma":
         runner = server_exe.parent / "llama-diffusion-gemma-visual-server.exe"
-        return [
+        cmd_args = [
             sys.executable,
             "-m",
             "llama_orchestrator.diffusion_http_adapter",
@@ -55,6 +55,9 @@ def build_command(config: InstanceConfig) -> list[str]:
             "--max-tokens", str(config.model.context_size),
             "--gpu-layers", str(config.gpu.layers),
         ]
+        if config.args:
+            cmd_args.extend(config.args)
+        return cmd_args
 
     args = [
         str(server_exe),

@@ -262,11 +262,18 @@ class BinaryManager:
         if config.version is not None:
             # Handle 'latest' by finding newest installation
             if config.version == "latest":
-                # Find all binaries with matching variant, sort by install date
+                import re
+                # Find all standard binaries with matching variant, sort by install date
                 matches = [
                     b for b in self.registry.list_all()
-                    if b.variant == config.variant
+                    if b.variant == config.variant and re.match(r"^b\d+$", b.version)
                 ]
+                if not matches:
+                    # Fall back to any binary with matching variant
+                    matches = [
+                        b for b in self.registry.list_all()
+                        if b.variant == config.variant
+                    ]
                 if matches:
                     # Return most recently installed
                     return max(matches, key=lambda b: b.installed_at)

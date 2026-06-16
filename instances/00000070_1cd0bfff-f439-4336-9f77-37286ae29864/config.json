@@ -16,7 +16,7 @@
     },
     "model": {
         "path": "models\\unsloth__Qwen3.6-35B-A3B-MTP-GGUF\\Qwen3.6-35B-A3B-UD-IQ3_S.gguf",
-        "context_size": 220000,
+        "context_size": 230000,
         "batch_size": 512,
         "threads": 8
     },
@@ -70,9 +70,8 @@
         "--spec-type",
         "draft-mtp",
         "--spec-draft-n-max",
-        "3",
-        "--spec-draft-n-min",
-        "1",
+        "2",
+        
         "--metrics"
     ],
     "parameter_mutability": {

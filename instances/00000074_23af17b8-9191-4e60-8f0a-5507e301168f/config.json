@@ -16,7 +16,7 @@
     },
     "model": {
         "path": "models\\OFFELLIA_IQ4_XS_diffusiongemma-26B-A4B-it.gguf",
-        "context_size": 100000,
+        "context_size": 2048,
         "batch_size": 512,
         "threads": 16
     },
@@ -28,15 +28,28 @@
     },
     "gpu": {
         "backend": "vulkan",
-        "device_id": 0,
+        "device_id": 2,
         "layers": 999
     },
     "env": {
         "LLAMA_ORCH_RUNTIME": "diffusion-gemma",
         "LLAMA_ORCH_REQUESTED_KV_CACHE": "q4_0",
-        "GGML_VULKAN_DEVICE": "0"
+        "GGML_VULKAN_DEVICE": "2"
     },
-    "args": [],
+    "args": [
+        "--parallel", "1",
+        "--device", "Vulkan2",
+        "--main-gpu", "0",
+        "--split-mode", "none",
+        "--no-mmap",
+        "--cache-type-k", "q4_0",
+        "--cache-type-v", "q4_0",
+        "--flash-attn", "on",
+        "--reasoning", "on",
+        "--jinja",
+        "--n-predict", "64",
+        "--no-mmproj"
+    ],
     "parameter_mutability": {
         "static": [
             "name",

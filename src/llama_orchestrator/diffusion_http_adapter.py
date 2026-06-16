@@ -20,13 +20,16 @@ from typing import Any
 class DiffusionRunner:
     """Own one persistent upstream visual-server process."""
 
-    def __init__(self, runner: Path, model: Path, max_tokens: int, gpu_layers: int) -> None:
+    def __init__(self, runner: Path, model: Path, max_tokens: int, gpu_layers: int, extra_args: list[str] | None = None) -> None:
         self.model = model
         self.lock = threading.Lock()
         env = dict(os.environ)
         env.update({"MAXTOK": str(max_tokens), "NGL": str(gpu_layers), "FA": "1"})
+        cmd = [str(runner), str(model)]
+        if extra_args:
+            cmd.extend(extra_args)
         self.proc = subprocess.Popen(
-            [str(runner), str(model)],
+            cmd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -139,8 +142,7 @@ class AdapterHandler(BaseHTTPRequestHandler):
         try:
             size = int(self.headers.get("Content-Length", "0"))
             body = json.loads(self.rfile.read(size))
-            if body.get("stream"):
-                raise ValueError("Streaming is not supported by the experimental diffusion adapter")
+            stream = bool(body.get("stream"))
             messages = body.get("messages")
             if not isinstance(messages, list) or not messages:
                 raise ValueError("messages must be a non-empty list")
@@ -150,15 +152,66 @@ class AdapterHandler(BaseHTTPRequestHandler):
             content, stats = self.runner.complete(messages, max_tokens, seed)
             prompt_tokens = int(stats.get("prompt_n", 0))
             completion_tokens = int(stats.get("predicted_n", 0))
-            self._json(200, {
-                "id": f"chatcmpl-{uuid.uuid4().hex}",
-                "object": "chat.completion",
-                "created": int(started),
-                "model": self.runner.model.stem,
-                "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
-                "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens, "total_tokens": prompt_tokens + completion_tokens},
-                "diffusion_stats": stats,
-            })
+            
+            if stream:
+                self.send_response(200)
+                self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+                self.send_header("Cache-Control", "no-cache")
+                self.send_header("Connection", "keep-alive")
+                self.end_headers()
+                
+                chat_id = f"chatcmpl-{uuid.uuid4().hex}"
+                model_name = self.runner.model.stem
+                
+                # First chunk with metadata and starting token
+                chunk1 = {
+                    "id": chat_id,
+                    "object": "chat.completion.chunk",
+                    "created": int(started),
+                    "model": model_name,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {"role": "assistant", "content": content},
+                        "finish_reason": None
+                    }]
+                }
+                self.wfile.write(f"data: {json.dumps(chunk1, ensure_ascii=False)}\n\n".encode("utf-8"))
+                self.wfile.flush()
+                
+                # Second chunk with stop and usage metrics
+                chunk2 = {
+                    "id": chat_id,
+                    "object": "chat.completion.chunk",
+                    "created": int(started),
+                    "model": model_name,
+                    "choices": [{
+                        "index": 0,
+                        "delta": {},
+                        "finish_reason": "stop"
+                    }],
+                    "usage": {
+                        "prompt_tokens": prompt_tokens,
+                        "completion_tokens": completion_tokens,
+                        "total_tokens": prompt_tokens + completion_tokens
+                    },
+                    "completion_tokens": completion_tokens
+                }
+                self.wfile.write(f"data: {json.dumps(chunk2, ensure_ascii=False)}\n\n".encode("utf-8"))
+                self.wfile.flush()
+                
+                # Done marker
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+            else:
+                self._json(200, {
+                    "id": f"chatcmpl-{uuid.uuid4().hex}",
+                    "object": "chat.completion",
+                    "created": int(started),
+                    "model": self.runner.model.stem,
+                    "choices": [{"index": 0, "message": {"role": "assistant", "content": content}, "finish_reason": "stop"}],
+                    "usage": {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens, "total_tokens": prompt_tokens + completion_tokens},
+                    "diffusion_stats": stats,
+                })
         except (ValueError, TypeError, json.JSONDecodeError) as exc:
             self._json(400, {"error": {"message": str(exc)}})
         except Exception as exc:
@@ -176,9 +229,9 @@ def main() -> int:
     parser.add_argument("--port", type=int, required=True)
     parser.add_argument("--max-tokens", type=int, required=True)
     parser.add_argument("--gpu-layers", type=int, default=0)
-    args = parser.parse_args()
+    args, extra_args = parser.parse_known_args()
 
-    runner = DiffusionRunner(args.runner, args.model, args.max_tokens, args.gpu_layers)
+    runner = DiffusionRunner(args.runner, args.model, args.max_tokens, args.gpu_layers, extra_args=extra_args)
     server = ThreadingHTTPServer((args.host, args.port), AdapterHandler)
     server.runner = runner  # type: ignore[attr-defined]
     try:

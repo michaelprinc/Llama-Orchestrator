@@ -1,0 +1,451 @@
+{
+    "name": "qwen3-6-27b-iq4-xs-pure-with-mtp-gguf-iq4_xs",
+    "schema_version": "2",
+    "instance_uid": "1b6539f4-2bca-42c4-a8ad-5fdc815c4d09",
+    "instance_no": "00000076",
+    "display_name": "Qwen3.6 27B IQ4 XS pure with MTP GGUF IQ4_XS",
+    "created_at": "2026-06-16T12:53:13Z",
+    "updated_at": "2026-06-16T12:53:13Z",
+    "sort_order": null,
+    "binary": {
+        "binary_id": null,
+        "version": "latest",
+        "variant": "win-vulkan-x64",
+        "source_url": null,
+        "sha256": null
+    },
+    "model": {
+        "path": "models\\GianniDPC__Qwen3.6-27B-IQ4_XS-pure-with-MTP-GGUF\\qwen3.6-27b-IQ4_XS-pure-with-MTP-IQ4.gguf",
+        "context_size": 120000,
+        "batch_size": 512,
+        "threads": 8
+    },
+    "server": {
+        "host": "127.0.0.1",
+        "port": 8011,
+        "timeout": 600,
+        "parallel": 1
+    },
+    "gpu": {
+        "backend": "vulkan",
+        "device_id": 2,
+        "layers": 999
+    },
+    "env": {},
+    "args": [
+        "--parallel",
+        "1",
+        "--device",
+        "Vulkan2",
+        "--main-gpu",
+        "0",
+        "--split-mode",
+        "none",
+        "--no-mmap",
+        "--cache-type-k",
+        "q4_0",
+        "--cache-type-v",
+        "q4_0",
+        "--cache-type-k-draft",
+        "q4_0",
+        "--cache-type-v-draft",
+        "q4_0",
+        "--no-mmproj",
+        "--jinja",
+        "--reasoning",
+        "on",
+        "--flash-attn",
+        "on",
+        "--ubatch-size",
+        "256",
+        "--spec-type",
+        "draft-mtp",
+        "--spec-draft-n-max",
+        "3",
+        "--spec-draft-n-min",
+        "1"
+    ],
+    "parameter_mutability": {
+        "static": [
+            "name",
+            "binary.binary_id",
+            "binary.version",
+            "binary.variant",
+            "binary.source_url",
+            "binary.sha256",
+            "model.path",
+            "model.context_size",
+            "model.batch_size",
+            "model.threads",
+            "server.host",
+            "server.port",
+            "server.timeout",
+            "server.parallel",
+            "gpu.backend",
+            "gpu.device_id",
+            "gpu.layers",
+            "env",
+            "args",
+            "logs.stdout",
+            "logs.stderr",
+            "logs.max_size_mb",
+            "logs.rotation"
+        ],
+        "dynamic": [
+            "tags",
+            "model_metadata",
+            "healthcheck.type",
+            "healthcheck.path",
+            "healthcheck.expected_status",
+            "healthcheck.expected_body",
+            "healthcheck.custom_script",
+            "healthcheck.interval",
+            "healthcheck.timeout",
+            "healthcheck.retries",
+            "healthcheck.retry_delay",
+            "healthcheck.start_period",
+            "healthcheck.backoff_enabled",
+            "healthcheck.backoff_base",
+            "healthcheck.backoff_max",
+            "healthcheck.backoff_jitter",
+            "restart_policy.enabled",
+            "restart_policy.max_retries",
+            "restart_policy.backoff_multiplier",
+            "restart_policy.initial_delay",
+            "restart_policy.max_delay"
+        ]
+    },
+    "model_metadata": {
+        "identity": {
+            "display_name": "Qwen3.6 27B IQ4 XS pure with MTP GGUF IQ4_XS",
+            "family": "qwen3.6",
+            "publisher": "GianniDPC",
+            "architecture": "qwen35",
+            "parameter_count_total": null,
+            "parameter_count_active": null
+        },
+        "source": {
+            "hub": "huggingface",
+            "repo_id": "GianniDPC/Qwen3.6-27B-IQ4_XS-pure-with-MTP-GGUF",
+            "revision": "",
+            "commit_hash": "",
+            "filename": "qwen3.6-27b-IQ4_XS-pure-with-MTP-IQ4.gguf",
+            "url": "https://huggingface.co/GianniDPC/Qwen3.6-27B-IQ4_XS-pure-with-MTP-GGUF/resolve/main/qwen3.6-27b-IQ4_XS-pure-with-MTP-IQ4.gguf",
+            "fetched_at": "2026-06-16T12:53:13Z"
+        },
+        "artifact": {
+            "format": "gguf",
+            "remote_size_bytes": 14574525440,
+            "local_size_bytes": 14574525440,
+            "etag": null,
+            "sha256_expected": null,
+            "sha256_actual": null,
+            "verification_status": null
+        },
+        "quantization": {
+            "name": "IQ4_XS",
+            "family": "iq4",
+            "variant": "IQ4_XS",
+            "nominal_bits": null,
+            "imatrix": false
+        },
+        "license": {
+            "id": "",
+            "source": "",
+            "verified_at": ""
+        },
+        "context": {
+            "native_context_length": 262144,
+            "recommended_min_context_length": 150000,
+            "source": "gguf"
+        },
+        "capabilities": {
+            "text_generation": true,
+            "reasoning": null,
+            "tool_use": null,
+            "multilingual": null,
+            "vision_declared": null,
+            "vision_requires_mmproj": null
+        },
+        "speculative_decoding": {
+            "builtin_mtp": {
+                "available": true,
+                "compatible": true,
+                "runtime_requirements": [
+                    "llama.cpp_mtp_support"
+                ],
+                "experimental": null
+            },
+            "external_draft": {
+                "available": false,
+                "compatible": null,
+                "runtime_requirements": [],
+                "experimental": true
+            },
+            "dflash": {
+                "available": false,
+                "compatible": null,
+                "runtime_requirements": [],
+                "experimental": true
+            }
+        },
+        "gguf_extracted": {
+            "general_name": "Qwen3.6-27B",
+            "general_basename": "Qwen3.6-27B",
+            "n_layers": 65,
+            "n_embd": 5120,
+            "n_attention_heads": 24,
+            "n_kv_heads": 4,
+            "head_dim_k": 256,
+            "head_dim_v": 256,
+            "rope_scaling": null,
+            "tokenizer_model": "gpt2",
+            "chat_template": "{# =========================\n   Qwen 3.6 Multimodal Interleaved-Thinking Chat Template (Enhanced)\n   - Multimodal: image/video tokens\n   - Tools: XML tool_call + tool_response wrapping\n   - M2.5-style interleaved thinking:\n     * historical assistant reasoning before the last real user query is hidden\n       (UNLESS preserve_thinking=true is passed)\n     * assistant turns after the last real user query keep <think>\n     * generation always starts in <think>\n   - Enhanced Tool Prompt: Better instructions for tool usage and updates\n   - Robust Argument Parsing: Handles both dict and JSON string arguments\n   ========================= #}\n{%- set image_count = namespace(value=0) -%}\n{%- set video_count = namespace(value=0) -%}\n{%- macro render_tool_parameter(args_name, args_value) -%}\n    {{- '<parameter=' ~ args_name ~ '>\\n' -}}\n    {# Qwen 3.6 simplified serialization logic + ensure_ascii=False #}\n    {%- set args_value = args_value | string if args_value is string else args_value | tojson(ensure_ascii=False) | safe -%}\n    {{- args_value -}}\n    {{- '\\n</parameter>\\n' -}}\n{%- endmacro -%}\n{%- macro render_tool_arguments(arguments) -%}\n    {%- if arguments is undefined or arguments is none -%}\n    {%- elif arguments is mapping -%}\n        {%- for args_name, args_value in arguments|items -%}\n            {{- render_tool_parameter(args_name, args_value) -}}\n        {%- endfor -%}\n    {%- elif arguments is string -%}\n        {%- set trimmed_arguments = arguments | trim -%}\n        {%- if trimmed_arguments -%}\n            {%- set parsed = trimmed_arguments | from_json -%}\n            {%- if parsed is mapping -%}\n                {%- for args_name, args_value in parsed | items -%}\n                    {{- render_tool_parameter(args_name, args_value) -}}\n                {%- endfor -%}\n            {%- else -%}\n                {{- trimmed_arguments -}}\n                {%- if not trimmed_arguments.endswith('\\n') -%}\n                    {{- '\\n' -}}\n                {%- endif -%}\n            {%- endif -%}\n        {%- endif -%}\n    {%- else -%}\n        {{- raise_exception('Unexpected tool_call.arguments type.') -}}\n    {%- endif -%}\n{%- endmacro -%}\n{%- macro render_content(content, do_vision_count, is_system_content=false) -%}\n    {%- if content is string -%}\n        {{- content -}}\n    {%- elif content is iterable and content is not mapping -%}\n        {%- for item in content -%}\n            {%- if 'image' in item or 'image_url' in item or item.type == 'image' -%}\n                {%- if is_system_content -%}\n                    {{- raise_exception('System message cannot contain images.') -}}\n                {%- endif -%}\n                {%- if do_vision_count -%}\n                    {%- set image_count.value = image_count.value + 1 -%}\n                {%- endif -%}\n                {%- if add_vision_id -%}\n                    {{- 'Picture ' ~ image_count.value ~ ': ' -}}\n                {%- endif -%}\n                {{- '<|vision_start|><|image_pad|><|vision_end|>' -}}\n            {%- elif 'video' in item or item.type == 'video' -%}\n                {%- if is_system_content -%}\n                    {{- raise_exception('System message cannot contain videos.') -}}\n                {%- endif -%}\n                {%- if do_vision_count -%}\n                    {%- set video_count.value = video_count.value + 1 -%}\n                {%- endif -%}\n                {%- if add_vision_id -%}\n                    {{- 'Video ' ~ video_count.value ~ ': ' -}}\n                {%- endif -%}\n                {{- '<|vision_start|><|video_pad|><|vision_end|>' -}}\n            {%- elif 'text' in item -%}\n                {{- item.text -}}\n            {%- else -%}\n                {{- raise_exception('Unexpected item type in content.') -}}\n            {%- endif -%}\n        {%- endfor -%}\n    {%- elif content is none or content is undefined -%}\n        {{- '' -}}\n    {%- else -%}\n        {{- raise_exception('Unexpected content type.') -}}\n    {%- endif -%}\n{%- endmacro -%}\n{%- if not messages -%}\n    {{- raise_exception('No messages provided.') -}}\n{%- endif -%}\n{# -------- Tools & System Header -------- #}\n{%- if tools and tools is iterable and tools is not mapping -%}\n    {{- '<|im_start|>system\\n' -}}\n    {{- \"# Tools\\n\\nYou have access to the following functions:\\n\\n<tools>\" -}}\n    {%- for tool in tools -%}\n        {{- \"\\n\" -}}\n        {{- tool | tojson(ensure_ascii=False) -}}\n    {%- endfor -%}\n    {{- \"\\n</tools>\" -}}\n    {{- '\\n\\nWhen calling a tool, output one or more XML blocks in exactly this format and nothing after the final </tool_call>:\\n\\n<tool_call>\\n<function=example_function_name>\\n<parameter=example_parameter_1>\\nvalue_1\\n</parameter>\\n<parameter=example_parameter_2>\\nThis is the value for the second parameter\\nthat can span\\nmultiple lines\\n</parameter>\\n</function>\\n</tool_call>\\n\\nRules:\\n- If a suitable tool exists for the user request, use it instead of answering from memory.\\n- If the user is modifying an existing object and a prior tool response contains its id, prefer the matching update_* tool and reuse that id.\\n- Put any reasoning or natural language BEFORE the first <tool_call>, never after the last </tool_call>.\\n- Include every required parameter.\\n- Preserve user-provided string values verbatim when possible for ids, names, titles, subjects, emails, and search queries.\\n- For object or array parameter values, write valid JSON inside the parameter body.\\n- If no tool is needed, answer normally.\\n\\nFollow-up update example:\\n<tool_response>\\n{\"status\":\"scheduled\",\"id\":\"r-100\"}\\n</tool_response>\\nIf the user then says \"Actually make it 10:00 instead.\", call:\\n<tool_call>\\n<function=update_reminder>\\n<parameter=id>\\nr-100\\n</parameter>\\n<parameter=datetime>\\n2026-03-12T10:00:00\\n</parameter>\\n<parameter=timezone>\\nAsia/Taipei\\n</parameter>\\n</function>\\n</tool_call>' -}}\n    {%- if messages[0].role == 'system' -%}\n        {%- set sysc = render_content(messages[0].content, false, true)|trim -%}\n        {%- if sysc -%}\n            {{- '\\n\\n' ~ sysc -}}\n        {%- endif -%}\n    {%- endif -%}\n    {{- '<|im_end|>\\n' -}}\n{%- else -%}\n    {%- if messages[0].role == 'system' -%}\n        {%- set sysc = render_content(messages[0].content, false, true)|trim -%}\n        {{- '<|im_start|>system\\n' ~ sysc ~ '<|im_end|>\\n' -}}\n    {%- endif -%}\n{%- endif -%}\n{# -------- Interleaved-thinking boundary: last REAL user query -------- #}\n{%- set ns = namespace(last_user_index=-1) -%}\n{%- for m in messages -%}\n    {%- if m.role == \"user\" -%}\n        {%- set uc = render_content(m.content, false)|trim -%}\n        {%- if not (uc.startswith('<tool_response>') and uc.endswith('</tool_response>')) -%}\n            {%- set ns.last_user_index = loop.index0 -%}\n        {%- endif -%}\n    {%- endif -%}\n{%- endfor -%}\n{# -------- Render messages -------- #}\n{%- for message in messages -%}\n    {%- set content = render_content(message.content, true)|trim -%}\n    {%- if message.role == \"system\" -%}\n        {%- if not loop.first -%}\n            {{- raise_exception('System message must be at the beginning.') -}}\n        {%- endif -%}\n    {%- elif message.role == \"user\" -%}\n        {{- '<|im_start|>user\\n' ~ content ~ '<|im_end|>\\n' -}}\n    {%- elif message.role == \"assistant\" -%}\n        {%- set reasoning_content = '' -%}\n        {%- if message.reasoning_content is string -%}\n            {%- set reasoning_content = message.reasoning_content -%}\n        {%- else -%}\n            {%- if '</think>' in content -%}\n                {%- set reasoning_content = content.split('</think>')[0].rstrip('\\n').split('<think>')[-1].lstrip('\\n') -%}\n                {%- set content = content.split('</think>')[-1].lstrip('\\n') -%}\n            {%- endif -%}\n        {%- endif -%}\n        {%- set reasoning_content = reasoning_content|trim -%}\n        {# Qwen 3.6 preserve_thinking logic added here #}\n        {%- if reasoning_content and ((preserve_thinking is defined and preserve_thinking is true) or loop.index0 > ns.last_user_index) -%}\n            {{- '<|im_start|>assistant\\n<think>\\n' ~ reasoning_content ~ '\\n</think>\\n\\n' ~ content -}}\n        {%- else -%}\n            {{- '<|im_start|>assistant\\n' ~ content -}}\n        {%- endif -%}\n        {%- if message.tool_calls and message.tool_calls is iterable and message.tool_calls is not mapping -%}\n            {%- for tool_call in message.tool_calls -%}\n                {%- if tool_call.function is defined -%}\n                    {%- set tool_call = tool_call.function -%}\n                {%- endif -%}\n                {%- if loop.first -%}\n                    {%- if content|trim -%}\n                        {{- '\\n\\n<tool_call>\\n<function=' ~ tool_call.name ~ '>\\n' -}}\n                    {%- else -%}\n                        {{- '<tool_call>\\n<function=' ~ tool_call.name ~ '>\\n' -}}\n                    {%- endif -%}\n                {%- else -%}\n                    {{- '\\n<tool_call>\\n<function=' ~ tool_call.name ~ '>\\n' -}}\n                {%- endif -%}\n                {{- render_tool_arguments(tool_call.arguments) -}}\n                {{- '</function>\\n</tool_call>' -}}\n            {%- endfor -%}\n        {%- endif -%}\n        {{- '<|im_end|>\\n' -}}\n    {%- elif message.role == \"tool\" -%}\n        {%- if loop.index0 == 0 or messages[loop.index0 - 1].role != \"tool\" -%}\n            {{- '<|im_start|>user' -}}\n        {%- endif -%}\n        {{- '\\n<tool_response>\\n' ~ content ~ '\\n</tool_response>' -}}\n        {%- if loop.last or messages[loop.index0 + 1].role != \"tool\" -%}\n            {{- '\\n<|im_end|>\\n' -}}\n        {%- endif -%}\n    {%- else -%}\n        {{- raise_exception('Unexpected message role.') -}}\n    {%- endif -%}\n{%- endfor -%}\n{# -------- Generation prompt -------- #}\n{%- if add_generation_prompt -%}\n    {{- '<|im_start|>assistant\\n' -}}\n    {%- if enable_thinking is defined and enable_thinking is false -%}\n        {{- '<think>\\n\\n</think>\\n\\n' -}}\n    {%- else -%}\n        {{- '<think>\\n' -}}\n    {%- endif -%}\n{%- endif -%}\n",
+            "n_experts": null,
+            "n_experts_used": null,
+            "file_type": 30,
+            "quantization_version": 2,
+            "nextn_predict_layers": 1
+        },
+        "derived": {
+            "formula_version": "kv_cache_v1_gqa",
+            "memory_model": {
+                "status": "ok",
+                "inputs": {
+                    "layers": 65,
+                    "kv_heads": 4,
+                    "head_dim_k": 256,
+                    "head_dim_v": 256
+                },
+                "supported_cache_types": [
+                    "f16",
+                    "q8_0",
+                    "q4_0",
+                    "q3_turbo",
+                    "q2_turbo"
+                ],
+                "scenarios": {
+                    "f16": {
+                        "kv_bytes_per_token": 532480,
+                        "contexts": {
+                            "8k": {
+                                "context_length": 8192,
+                                "bytes": 4362076160,
+                                "mb": 4160.0,
+                                "gb": 4.062
+                            },
+                            "32k": {
+                                "context_length": 32768,
+                                "bytes": 17448304640,
+                                "mb": 16640.0,
+                                "gb": 16.25
+                            },
+                            "64k": {
+                                "context_length": 65536,
+                                "bytes": 34896609280,
+                                "mb": 33280.0,
+                                "gb": 32.5
+                            },
+                            "128k": {
+                                "context_length": 131072,
+                                "bytes": 69793218560,
+                                "mb": 66560.0,
+                                "gb": 65.0
+                            },
+                            "256k": {
+                                "context_length": 262144,
+                                "bytes": 139586437120,
+                                "mb": 133120.0,
+                                "gb": 130.0
+                            }
+                        }
+                    },
+                    "q8_0": {
+                        "kv_bytes_per_token": 266240,
+                        "contexts": {
+                            "8k": {
+                                "context_length": 8192,
+                                "bytes": 2181038080,
+                                "mb": 2080.0,
+                                "gb": 2.031
+                            },
+                            "32k": {
+                                "context_length": 32768,
+                                "bytes": 8724152320,
+                                "mb": 8320.0,
+                                "gb": 8.125
+                            },
+                            "64k": {
+                                "context_length": 65536,
+                                "bytes": 17448304640,
+                                "mb": 16640.0,
+                                "gb": 16.25
+                            },
+                            "128k": {
+                                "context_length": 131072,
+                                "bytes": 34896609280,
+                                "mb": 33280.0,
+                                "gb": 32.5
+                            },
+                            "256k": {
+                                "context_length": 262144,
+                                "bytes": 69793218560,
+                                "mb": 66560.0,
+                                "gb": 65.0
+                            }
+                        }
+                    },
+                    "q4_0": {
+                        "kv_bytes_per_token": 133120,
+                        "contexts": {
+                            "8k": {
+                                "context_length": 8192,
+                                "bytes": 1090519040,
+                                "mb": 1040.0,
+                                "gb": 1.016
+                            },
+                            "32k": {
+                                "context_length": 32768,
+                                "bytes": 4362076160,
+                                "mb": 4160.0,
+                                "gb": 4.062
+                            },
+                            "64k": {
+                                "context_length": 65536,
+                                "bytes": 8724152320,
+                                "mb": 8320.0,
+                                "gb": 8.125
+                            },
+                            "128k": {
+                                "context_length": 131072,
+                                "bytes": 17448304640,
+                                "mb": 16640.0,
+                                "gb": 16.25
+                            },
+                            "256k": {
+                                "context_length": 262144,
+                                "bytes": 34896609280,
+                                "mb": 33280.0,
+                                "gb": 32.5
+                            }
+                        }
+                    },
+                    "q3_turbo": {
+                        "kv_bytes_per_token": 99840,
+                        "contexts": {
+                            "8k": {
+                                "context_length": 8192,
+                                "bytes": 817889280,
+                                "mb": 780.0,
+                                "gb": 0.762
+                            },
+                            "32k": {
+                                "context_length": 32768,
+                                "bytes": 3271557120,
+                                "mb": 3120.0,
+                                "gb": 3.047
+                            },
+                            "64k": {
+                                "context_length": 65536,
+                                "bytes": 6543114240,
+                                "mb": 6240.0,
+                                "gb": 6.094
+                            },
+                            "128k": {
+                                "context_length": 131072,
+                                "bytes": 13086228480,
+                                "mb": 12480.0,
+                                "gb": 12.188
+                            },
+                            "256k": {
+                                "context_length": 262144,
+                                "bytes": 26172456960,
+                                "mb": 24960.0,
+                                "gb": 24.375
+                            }
+                        }
+                    },
+                    "q2_turbo": {
+                        "kv_bytes_per_token": 66560,
+                        "contexts": {
+                            "8k": {
+                                "context_length": 8192,
+                                "bytes": 545259520,
+                                "mb": 520.0,
+                                "gb": 0.508
+                            },
+                            "32k": {
+                                "context_length": 32768,
+                                "bytes": 2181038080,
+                                "mb": 2080.0,
+                                "gb": 2.031
+                            },
+                            "64k": {
+                                "context_length": 65536,
+                                "bytes": 4362076160,
+                                "mb": 4160.0,
+                                "gb": 4.062
+                            },
+                            "128k": {
+                                "context_length": 131072,
+                                "bytes": 8724152320,
+                                "mb": 8320.0,
+                                "gb": 8.125
+                            },
+                            "256k": {
+                                "context_length": 262144,
+                                "bytes": 17448304640,
+                                "mb": 16640.0,
+                                "gb": 16.25
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "user_metadata": {
+            "notes": "",
+            "rating": null,
+            "favorite": false,
+            "tags": []
+        }
+    },
+    "tags": [
+        "hf",
+        "hf_repo-giannidpc-qwen3-6-27b-iq4_xs-pure-with-mtp-gguf",
+        "gguf",
+        "iq4_xs",
+        "27b"
+    ],
+    "healthcheck": {
+        "type": "http",
+        "path": "/health",
+        "expected_status": [
+            200
+        ],
+        "expected_body": null,
+        "custom_script": null,
+        "interval": 10,
+        "timeout": 5,
+        "retries": 3,
+        "retry_delay": 1.0,
+        "start_period": 60,
+        "backoff_enabled": true,
+        "backoff_base": 1.0,
+        "backoff_max": 60.0,
+        "backoff_jitter": 0.1
+    },
+    "restart_policy": {
+        "enabled": true,
+        "max_retries": 5,
+        "backoff_multiplier": 2.0,
+        "initial_delay": 1.0,
+        "max_delay": 300.0
+    },
+    "logs": {
+        "stdout": "logs/{name}/stdout.log",
+        "stderr": "logs/{name}/stderr.log",
+        "max_size_mb": 100,
+        "rotation": 5
+    }
+}
