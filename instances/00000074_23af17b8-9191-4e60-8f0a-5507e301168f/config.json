@@ -1,0 +1,217 @@
+{
+    "name": "diffusiongemma_26b_a4b_iq4_xs",
+    "schema_version": "2",
+    "instance_uid": "23af17b8-9191-4e60-8f0a-5507e301168f",
+    "instance_no": "00000074",
+    "display_name": "DiffusionGemma 26B A4B IQ4_XS",
+    "created_at": "2026-06-13T16:47:34Z",
+    "updated_at": "2026-06-13T16:57:16Z",
+    "sort_order": null,
+    "binary": {
+        "binary_id": "ebef8b3b-3f0b-4695-9750-879912d98b27",
+        "version": "diffusion-gemma-pr24423-49fc3723",
+        "variant": "win-vulkan-x64",
+        "source_url": null,
+        "sha256": null
+    },
+    "model": {
+        "path": "models\\OFFELLIA_IQ4_XS_diffusiongemma-26B-A4B-it.gguf",
+        "context_size": 100000,
+        "batch_size": 512,
+        "threads": 16
+    },
+    "server": {
+        "host": "127.0.0.1",
+        "port": 8041,
+        "timeout": 1800,
+        "parallel": 1
+    },
+    "gpu": {
+        "backend": "vulkan",
+        "device_id": 0,
+        "layers": 999
+    },
+    "env": {
+        "LLAMA_ORCH_RUNTIME": "diffusion-gemma",
+        "LLAMA_ORCH_REQUESTED_KV_CACHE": "q4_0",
+        "GGML_VULKAN_DEVICE": "0"
+    },
+    "args": [],
+    "parameter_mutability": {
+        "static": [
+            "name",
+            "binary.binary_id",
+            "binary.version",
+            "binary.variant",
+            "binary.source_url",
+            "binary.sha256",
+            "model.path",
+            "model.context_size",
+            "model.batch_size",
+            "model.threads",
+            "server.host",
+            "server.port",
+            "server.timeout",
+            "server.parallel",
+            "gpu.backend",
+            "gpu.device_id",
+            "gpu.layers",
+            "env",
+            "args",
+            "logs.stdout",
+            "logs.stderr",
+            "logs.max_size_mb",
+            "logs.rotation"
+        ],
+        "dynamic": [
+            "tags",
+            "model_metadata",
+            "healthcheck.type",
+            "healthcheck.path",
+            "healthcheck.expected_status",
+            "healthcheck.expected_body",
+            "healthcheck.custom_script",
+            "healthcheck.interval",
+            "healthcheck.timeout",
+            "healthcheck.retries",
+            "healthcheck.retry_delay",
+            "healthcheck.start_period",
+            "healthcheck.backoff_enabled",
+            "healthcheck.backoff_base",
+            "healthcheck.backoff_max",
+            "healthcheck.backoff_jitter",
+            "restart_policy.enabled",
+            "restart_policy.max_retries",
+            "restart_policy.backoff_multiplier",
+            "restart_policy.initial_delay",
+            "restart_policy.max_delay"
+        ]
+    },
+    "model_metadata": {
+        "identity": {
+            "display_name": "DiffusionGemma 26B A4B IQ4_XS",
+            "family": "DiffusionGemma",
+            "publisher": "Brunobkr",
+            "architecture": "diffusion-gemma",
+            "parameter_count_total": 25200000000,
+            "parameter_count_active": 3800000000
+        },
+        "source": {
+            "hub": "huggingface",
+            "repo_id": "Brunobkr/OFFELLIA_IQ4_XS_diffusiongemma-26B-A4B-it.gguf",
+            "revision": "",
+            "commit_hash": "",
+            "filename": "ΩFFΣLLIα_IQ4_XS_diffusiongemma-26B-A4B-it.gguf",
+            "url": "https://huggingface.co/Brunobkr/OFFELLIA_IQ4_XS_diffusiongemma-26B-A4B-it.gguf",
+            "fetched_at": ""
+        },
+        "artifact": {
+            "format": "gguf",
+            "remote_size_bytes": null,
+            "local_size_bytes": 14073488640,
+            "etag": null,
+            "sha256_expected": null,
+            "sha256_actual": "422a97a128f67a6eaa037d7453c3110ba9c9ec94781eb61acc8ebdf6531c20d4",
+            "verification_status": "verified"
+        },
+        "quantization": {
+            "name": "IQ4_XS",
+            "family": "IQ4",
+            "variant": "",
+            "nominal_bits": null,
+            "imatrix": null
+        },
+        "license": {
+            "id": "",
+            "source": "",
+            "verified_at": ""
+        },
+        "context": {
+            "native_context_length": 262144,
+            "recommended_min_context_length": null,
+            "source": "model-card"
+        },
+        "capabilities": {
+            "text_generation": true,
+            "reasoning": true,
+            "tool_use": true,
+            "multilingual": true,
+            "vision_declared": true,
+            "vision_requires_mmproj": null
+        },
+        "speculative_decoding": {
+            "builtin_mtp": {},
+            "external_draft": {},
+            "dflash": {}
+        },
+        "gguf_extracted": {
+            "general_name": null,
+            "general_basename": null,
+            "n_layers": null,
+            "n_embd": null,
+            "n_attention_heads": null,
+            "n_kv_heads": null,
+            "head_dim_k": null,
+            "head_dim_v": null,
+            "rope_scaling": null,
+            "tokenizer_model": null,
+            "chat_template": null,
+            "n_experts": null,
+            "n_experts_used": null,
+            "file_type": null,
+            "quantization_version": null,
+            "nextn_predict_layers": null
+        },
+        "derived": {
+            "formula_version": "kv_cache_v1_gqa",
+            "memory_model": {}
+        },
+        "user_metadata": {
+            "notes": "Experimental PR #24423 runtime. Requested Q4_0 KV cache is recorded but unsupported by the diffusion runner.",
+            "rating": null,
+            "favorite": false,
+            "tags": [
+                "diffusion",
+                "pr24423"
+            ]
+        }
+    },
+    "tags": [
+        "diffusiongemma",
+        "gemma4",
+        "moe",
+        "experimental",
+        "iq4_xs"
+    ],
+    "healthcheck": {
+        "type": "http",
+        "path": "/health",
+        "expected_status": [
+            200
+        ],
+        "expected_body": null,
+        "custom_script": null,
+        "interval": 15,
+        "timeout": 10,
+        "retries": 3,
+        "retry_delay": 2.0,
+        "start_period": 600,
+        "backoff_enabled": true,
+        "backoff_base": 1.0,
+        "backoff_max": 60.0,
+        "backoff_jitter": 0.1
+    },
+    "restart_policy": {
+        "enabled": false,
+        "max_retries": 5,
+        "backoff_multiplier": 2.0,
+        "initial_delay": 1.0,
+        "max_delay": 300.0
+    },
+    "logs": {
+        "stdout": "logs/{name}/stdout.log",
+        "stderr": "logs/{name}/stderr.log",
+        "max_size_mb": 100,
+        "rotation": 5
+    }
+}

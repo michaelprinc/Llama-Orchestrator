@@ -983,6 +983,34 @@
         "commit_sha": "d2462f8f7ac6d80070a587ffebf6cd73730f4280",
         "html_url": "https://github.com/ggml-org/llama.cpp/releases/tag/b9590"
       }
+    },
+    {
+      "id": "ebef8b3b-3f0b-4695-9750-879912d98b27",
+      "version": "diffusion-gemma-pr24423-49fc3723",
+      "variant": "win-vulkan-x64",
+      "download_url": "https://github.com/ggml-org/llama.cpp/pull/24423",
+      "sha256": "172a5875b0626e88ada734cc58a75367d62b2454938b61c50c8539d06f28d3e9",
+      "installed_at": "2026-06-13T16:45:58.631882+00:00",
+      "path": "ebef8b3b-3f0b-4695-9750-879912d98b27",
+      "size_bytes": 86969344,
+      "executables": [
+        "ggml-base.dll",
+        "ggml-cpu.dll",
+        "ggml-vulkan.dll",
+        "ggml.dll",
+        "llama-common.dll",
+        "llama-diffusion-cli.exe",
+        "llama-diffusion-gemma-server.exe",
+        "llama-diffusion-gemma-visual-server.exe",
+        "llama-server.exe",
+        "llama.dll"
+      ],
+      "github_release_info": {
+        "tag_name": "source-build",
+        "published_at": null,
+        "commit_sha": "49fc3723ca84b729fa64bf93b88b858360bc2ffa",
+        "html_url": "https://github.com/ggml-org/llama.cpp/pull/24423"
+      }
     }
   ],
   "default_binary_id": "4f047d33-3322-4961-bc6f-2daee8798158"
