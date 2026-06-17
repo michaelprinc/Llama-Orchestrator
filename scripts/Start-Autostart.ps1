@@ -25,9 +25,9 @@
     .\Start-Autostart.ps1 -StartInstances -InstanceNames gpt-oss
 
 .NOTES
-    Autor: MichaelPrinc & Codex
-    Datum: 2026-05-02
-    Verze: 1.0
+    Author: MichaelPrinc & Codex
+    Date: 2026-05-02
+    Version: 1.0
 #>
 
 [CmdletBinding(SupportsShouldProcess)]
@@ -42,6 +42,7 @@ param(
     [string]$AuditLogPath
 )
 
+Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $ProjectRoot = Split-Path -Parent $ScriptDir
