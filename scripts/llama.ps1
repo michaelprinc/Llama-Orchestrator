@@ -31,7 +31,13 @@ Write-Verbose "llama.ps1 running from: $ScriptDir"
 Write-Verbose "Project root: $ProjectRoot"
 
 # Check for virtual environment
-$VenvPath = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+$VenvPath = Join-Path $ProjectRoot ".venv-windows\Scripts\python.exe"
+$DefaultVenvDir = Join-Path $ProjectRoot ".venv-windows"
+
+if (-not (Test-Path $VenvPath)) {
+    $VenvPath = Join-Path $ProjectRoot ".venv\Scripts\python.exe"
+    $DefaultVenvDir = Join-Path $ProjectRoot ".venv"
+}
 
 if (Test-Path $VenvPath) {
     # Use venv Python directly
@@ -42,8 +48,22 @@ if (Test-Path $VenvPath) {
     Write-Verbose "Using uv run"
     Push-Location $ProjectRoot
     try {
+        $previousUvProjectEnvironment = $env:UV_PROJECT_ENVIRONMENT
+        $setUvProjectEnvironment = $false
+        if (-not $env:UV_PROJECT_ENVIRONMENT) {
+            $env:UV_PROJECT_ENVIRONMENT = ".venv-windows"
+            $setUvProjectEnvironment = $true
+            Write-Verbose "Isolating Windows virtual environment using UV_PROJECT_ENVIRONMENT=.venv-windows"
+        }
         uv run python -m llama_orchestrator @Arguments
     } finally {
+        if ($setUvProjectEnvironment) {
+            if ($null -eq $previousUvProjectEnvironment) {
+                Remove-Item Env:\UV_PROJECT_ENVIRONMENT -ErrorAction SilentlyContinue
+            } else {
+                $env:UV_PROJECT_ENVIRONMENT = $previousUvProjectEnvironment
+            }
+        }
         Pop-Location
     }
 } elseif (Get-Command python -ErrorAction SilentlyContinue) {
@@ -59,3 +79,5 @@ if (Test-Path $VenvPath) {
     Write-Error "Python not found. Please install Python 3.11+ or uv."
     exit 1
 }
+
+exit $LASTEXITCODE

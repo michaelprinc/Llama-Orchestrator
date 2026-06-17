@@ -4,6 +4,7 @@ import threading
 from pathlib import Path
 from unittest.mock import patch
 
+import llama_orchestrator.gui as gui_module
 from llama_orchestrator.benchmark import BenchmarkResult, BenchmarkSettings
 from llama_orchestrator.config import InstanceConfig, ModelConfig
 from llama_orchestrator.engine.detection import DetectedGpu
@@ -56,6 +57,14 @@ from llama_orchestrator.gui import (
     update_instance_display_name,
 )
 from llama_orchestrator.hf_import import DownloadProgress
+
+
+def test_gui_package_uses_app_implementation_by_default() -> None:
+    """The package entrypoint should prefer gui/app.py over the legacy fallback."""
+    from llama_orchestrator.gui.app import LlamaOrchestratorGui as AppGui
+
+    assert gui_module.GUI_IMPLEMENTATION_SOURCE == "app.py"
+    assert gui_module.LlamaOrchestratorGui is AppGui
 
 
 class _FakeQueueTree:
@@ -917,3 +926,24 @@ def test_resolve_models_directory_input_anchors_relative_paths_to_project_root(m
 
     assert resolve_models_directory_input("models-alt") == project_root / "models-alt"
     assert resolve_models_directory_input("") == project_root / "models"
+
+
+def test_create_progressbar_with_gridded_parent() -> None:
+    import tkinter as tk
+    from tkinter import ttk
+    from llama_orchestrator.gui.usability import create_progress_bar
+
+    root = tk.Tk()
+    try:
+        # grid a widget inside root to lock geometry manager to grid
+        frame = ttk.Frame(root)
+        frame.grid(row=0, column=0)
+
+        # create a footer frame, grid it, and pass it to create_progress_bar
+        footer = ttk.Frame(root)
+        footer.grid(row=1, column=0)
+
+        progress = create_progress_bar(footer)
+        assert isinstance(progress, ttk.Progressbar)
+    finally:
+        root.destroy()

@@ -35,6 +35,10 @@ DEFAULT_ENDPOINT = "chat_completions"
 BENCHMARK_ENDPOINTS = {"chat_completions", "completion"}
 
 
+# Cache for latest benchmark results: db_path -> (mtime, size, dict[instance_name, BenchmarkResult])
+_LATEST_BENCHMARK_RESULTS_CACHE: dict[Path, tuple[float, int, dict[str, BenchmarkResult]]] = {}
+
+
 @dataclass(frozen=True)
 class BenchmarkSettings:
     """User-editable quick benchmark settings."""
@@ -467,7 +471,10 @@ def record_benchmark_result(
     db_path: Path | None = None,
 ) -> None:
     """Append a benchmark result to SQLite history."""
-    path = init_benchmark_db(db_path)
+    path = db_path or get_benchmark_db_path()
+    path = Path(path).resolve()
+    _LATEST_BENCHMARK_RESULTS_CACHE.pop(path, None)
+    path = init_benchmark_db(path)
     instance_uid, instance_no, display_name = (
         result.instance_uid,
         result.instance_no,
@@ -538,7 +545,30 @@ def record_benchmark_result(
 
 def latest_benchmark_results(db_path: Path | None = None) -> dict[str, BenchmarkResult]:
     """Return the latest benchmark result per instance."""
-    path = init_benchmark_db(db_path)
+    path = db_path or get_benchmark_db_path()
+    path = Path(path).resolve()
+
+    try:
+        if path.exists():
+            stat = path.stat()
+            mtime = stat.st_mtime
+            size = stat.st_size
+            cached_val = _LATEST_BENCHMARK_RESULTS_CACHE.get(path)
+            if cached_val is not None:
+                cached_mtime, cached_size, cached_results = cached_val
+                if cached_mtime == mtime and cached_size == size:
+                    return cached_results
+    except OSError:
+        pass
+
+    path = init_benchmark_db(path)
+    try:
+        stat = path.stat()
+        mtime = stat.st_mtime
+        size = stat.st_size
+    except OSError:
+        mtime, size = 0.0, 0
+
     with sqlite3.connect(path) as conn:
         conn.row_factory = sqlite3.Row
         rows = conn.execute(
@@ -604,6 +634,7 @@ def latest_benchmark_results(db_path: Path | None = None) -> dict[str, Benchmark
             draft_acceptance_rate=row_data.get("draft_acceptance_rate"),
         )
 
+    _LATEST_BENCHMARK_RESULTS_CACHE[path] = (mtime, size, results)
     return results
 
 
@@ -611,7 +642,10 @@ def sync_benchmark_instance_identity(rows: list[dict[str, str]], db_path: Path |
     """Backfill additive instance identity columns for benchmark history rows."""
     if not rows:
         return
-    path = init_benchmark_db(db_path)
+    path = db_path or get_benchmark_db_path()
+    path = Path(path).resolve()
+    _LATEST_BENCHMARK_RESULTS_CACHE.pop(path, None)
+    path = init_benchmark_db(path)
     with sqlite3.connect(path) as conn:
         for row in rows:
             conn.execute(

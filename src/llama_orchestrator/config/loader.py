@@ -27,6 +27,10 @@ if TYPE_CHECKING:
 CURRENT_SCHEMA_VERSION = "2"
 
 
+# Cache for configuration files: Path -> (mtime, size, InstanceConfig)
+_CONFIG_CACHE: dict[Path, tuple[float, int, InstanceConfig]] = {}
+
+
 def _utc_now_iso() -> str:
     """Return a stable UTC timestamp for persisted config metadata."""
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -292,15 +296,15 @@ def _catalog_uid_by_instance_no() -> dict[str, str]:
 
 def _repair_duplicate_instance_numbers() -> None:
     """Renumber unsynced duplicate instance configs before catalog sync."""
-    by_number: dict[str, list[tuple[Path, dict]]] = {}
+    by_number: dict[str, list[tuple[Path, InstanceConfig]]] = {}
     for config_path in _iter_config_paths():
         try:
-            raw_data = json.loads(config_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError):
+            config = load_config(config_path, sync_catalog=False)
+        except ConfigLoadError:
             continue
-        instance_no = raw_data.get("instance_no")
+        instance_no = config.instance_no
         if isinstance(instance_no, str) and re.fullmatch(r"\d{8}", instance_no):
-            by_number.setdefault(instance_no, []).append((config_path, raw_data))
+            by_number.setdefault(instance_no, []).append((config_path, config))
 
     duplicate_groups = {
         instance_no: records
@@ -316,14 +320,14 @@ def _repair_duplicate_instance_numbers() -> None:
         sorted_records = sorted(
             records,
             key=lambda item: (
-                item[1].get("instance_uid") != catalog_uid if catalog_uid else False,
+                item[1].instance_uid != catalog_uid if catalog_uid else False,
                 str(item[0]),
             ),
         )
-        for config_path, raw_data in sorted_records[1:]:
-            raw_data["instance_no"] = _allocate_instance_no()
-            raw_data["updated_at"] = _utc_now_iso()
-            _write_config_file(config_path, raw_data)
+        for config_path, config in sorted_records[1:]:
+            config.instance_no = _allocate_instance_no()
+            config.updated_at = _utc_now_iso()
+            save_config(config, config_path)
 
 
 def _prepare_loaded_config(
@@ -332,6 +336,7 @@ def _prepare_loaded_config(
     path: Path,
     *,
     persist_backfill: bool = True,
+    sync_catalog: bool = True,
 ) -> InstanceConfig:
     """Apply lazy metadata backfill for legacy configs and track source path."""
     changed = False
@@ -362,7 +367,7 @@ def _prepare_loaded_config(
     if changed and persist_backfill:
         _write_config_file(path, config.model_dump(mode="json"))
 
-    if managed_path:
+    if managed_path and sync_catalog:
         _sync_instance_catalog(config, path)
     return config
 
@@ -417,12 +422,19 @@ def resolve_instance_selector(token: str) -> Path:
     raise ConfigLoadError(get_instances_dir(), f"Instance '{token}' not found")
 
 
-def load_config(path: Path, *, persist_backfill: bool = True) -> InstanceConfig:
+def load_config(
+    path: Path,
+    *,
+    persist_backfill: bool = True,
+    sync_catalog: bool = True,
+) -> InstanceConfig:
     """
     Load an instance configuration from a JSON file.
     
     Args:
         path: Path to the config.json file
+        persist_backfill: Save resolved metadata updates back to file
+        sync_catalog: Mirror metadata into the sqlite catalog
         
     Returns:
         Validated InstanceConfig model
@@ -433,10 +445,25 @@ def load_config(path: Path, *, persist_backfill: bool = True) -> InstanceConfig:
     path = Path(path).resolve()
 
     if not path.exists():
+        _CONFIG_CACHE.pop(path, None)
         raise ConfigLoadError(path, "Configuration file not found")
 
     if not path.is_file():
+        _CONFIG_CACHE.pop(path, None)
         raise ConfigLoadError(path, "Path is not a file")
+
+    try:
+        stat = path.stat()
+        mtime = stat.st_mtime
+        size = stat.st_size
+    except OSError as e:
+        raise ConfigLoadError(path, f"Cannot get file stats: {e}", e) from e
+
+    cached_val = _CONFIG_CACHE.get(path)
+    if cached_val is not None:
+        cached_mtime, cached_size, cached_config = cached_val
+        if cached_mtime == mtime and cached_size == size:
+            return cached_config
 
     try:
         with open(path, encoding="utf-8") as f:
@@ -460,7 +487,22 @@ def load_config(path: Path, *, persist_backfill: bool = True) -> InstanceConfig:
             path, f"Validation failed:\n{error_str}", e
         ) from e
 
-    return _prepare_loaded_config(config, data, path, persist_backfill=persist_backfill)
+    config = _prepare_loaded_config(
+        config,
+        data,
+        path,
+        persist_backfill=persist_backfill,
+        sync_catalog=sync_catalog,
+    )
+
+    if sync_catalog:
+        try:
+            stat = path.stat()
+            _CONFIG_CACHE[path] = (stat.st_mtime, stat.st_size, config)
+        except OSError:
+            pass
+
+    return config
 
 
 def load_config_from_dict(data: dict, name: str = "inline") -> InstanceConfig:
@@ -583,6 +625,9 @@ def save_config(config: InstanceConfig, path: Path | None = None) -> Path:
             if config.instance_no is None:
                 config.instance_no = _allocate_instance_no()
             path = instances_dir / config.instance_dir_name / "config.json"
+
+    path = Path(path).resolve()
+    _CONFIG_CACHE.pop(path, None)
 
     managed_path = _is_managed_instance_config_path(path)
     if managed_path and config.instance_no is None:

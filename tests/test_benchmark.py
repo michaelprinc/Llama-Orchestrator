@@ -645,3 +645,68 @@ def test_resolve_benchmark_sampling_device_id_ignores_draft_only_device_override
     )
 
     assert _resolve_benchmark_sampling_device_id(config) == 2
+
+
+def test_benchmark_results_caching(tmp_path: Path) -> None:
+    """Verify that latest_benchmark_results correctly caches database queries and invalidates on write."""
+    db_path = tmp_path / "benchmarks.sqlite"
+    
+    # 1. Clear active cache first to avoid pollution
+    from llama_orchestrator.benchmark import _LATEST_BENCHMARK_RESULTS_CACHE
+    _LATEST_BENCHMARK_RESULTS_CACHE.clear()
+
+    # 2. Add first benchmark result
+    first = BenchmarkResult(
+        instance_name="bench-cache",
+        timestamp="2026-05-16T10:00:00+0000",
+        config_hash="a",
+        prompt_file="default.txt",
+        prompt_sha256="sha",
+        prompt_chars=10,
+        output_tokens=10,
+        tokens_per_second=5.0,
+        latency_ms=100.0,
+        elapsed_ms=2000.0,
+        vram_mb=1024.0,
+        status="ok",
+    )
+    record_benchmark_result(first, db_path)
+
+    # 3. Query once to populate cache
+    results1 = latest_benchmark_results(db_path)
+    assert "bench-cache" in results1
+    assert results1["bench-cache"].tokens_per_second == 5.0
+    
+    # Verify path was cached
+    resolved_path = db_path.resolve()
+    assert resolved_path in _LATEST_BENCHMARK_RESULTS_CACHE
+
+    # 4. Query again to get cache hit
+    results2 = latest_benchmark_results(db_path)
+    assert results2 is results1  # Verify exact same dict reference (cache hit)
+
+    # 5. Insert another record (which should invalidate the cache)
+    second = BenchmarkResult(
+        instance_name="bench-cache",
+        timestamp="2026-05-16T10:05:00+0000",
+        config_hash="b",
+        prompt_file="default.txt",
+        prompt_sha256="sha",
+        prompt_chars=10,
+        output_tokens=10,
+        tokens_per_second=12.0,
+        latency_ms=80.0,
+        elapsed_ms=1500.0,
+        vram_mb=1024.0,
+        status="ok",
+    )
+    record_benchmark_result(second, db_path)
+
+    # Verify path was evicted from cache
+    assert resolved_path not in _LATEST_BENCHMARK_RESULTS_CACHE
+
+    # 6. Query again to get a new result (cache miss)
+    results3 = latest_benchmark_results(db_path)
+    assert results3 is not results1
+    assert results3["bench-cache"].tokens_per_second == 12.0
+

@@ -341,3 +341,52 @@ class TestProjectPaths:
         """Test getting instances directory."""
         instances_dir = get_instances_dir()
         assert instances_dir.name == "instances"
+
+
+class TestConfigLoaderCaching:
+    """Tests for configuration loader caching."""
+
+    def test_config_loader_caching(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Verify load_config cache hits, misses, and invalidation on save."""
+        monkeypatch.setattr("llama_orchestrator.config.loader.get_project_root", lambda: tmp_path)
+        
+        # 1. Create a config file
+        config_data = {
+            "name": "cache-test",
+            "model": {
+                "path": "models/test.gguf",
+            },
+        }
+        config_dir = tmp_path / "instances" / "00000001_uid"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        config_path = config_dir / "config.json"
+        with open(config_path, "w", encoding="utf-8") as f:
+            json.dump(config_data, f)
+            
+        # Clear the cache first to ensure no cross-test pollution
+        from llama_orchestrator.config.loader import _CONFIG_CACHE
+        _CONFIG_CACHE.clear()
+        
+        # 2. First load (cache miss)
+        config1 = load_config(config_path)
+        assert config1.name == "cache-test"
+        
+        # Verify it was cached
+        assert config_path.resolve() in _CONFIG_CACHE
+        
+        # 3. Second load (cache hit)
+        config2 = load_config(config_path)
+        assert config2 is config1  # Exact same object reference!
+        
+        # 4. Save config (cache invalidation)
+        config2.display_name = "New Display Name"
+        save_config(config2, config_path)
+        
+        # Verify it was evicted from cache
+        assert config_path.resolve() not in _CONFIG_CACHE
+        
+        # 5. Third load (cache miss again)
+        config3 = load_config(config_path)
+        assert config3 is not config1
+        assert config3.display_name == "New Display Name"
+

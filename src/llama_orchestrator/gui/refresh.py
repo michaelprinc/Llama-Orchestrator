@@ -32,7 +32,10 @@ from collections.abc import Callable
 
 from llama_orchestrator.benchmark import BenchmarkSettings
 from llama_orchestrator.engine.detection import DetectedGpu
-from llama_orchestrator.gui import RUNNING_BENCHMARK_ROW_TAG, GuiRefreshSnapshot, TableRow
+from llama_orchestrator.gui.usability import get_status_tag, get_health_tag
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from llama_orchestrator.gui import RUNNING_BENCHMARK_ROW_TAG, GuiRefreshSnapshot, TableRow
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +132,7 @@ class RefreshController:
 
     def _default_collect(self) -> GuiRefreshSnapshot:
         """Default data collection (callable is overridden by the GUI)."""
+        from llama_orchestrator.gui import GuiRefreshSnapshot
         return GuiRefreshSnapshot(
             rows=(),
             detected_gpus=(),
@@ -198,18 +202,24 @@ class RenderDiffMixin:
         re-inserted every row.  Now only changed/added/removed rows touch
         the Treeview.
         """
+        from llama_orchestrator.gui import RUNNING_BENCHMARK_ROW_TAG
         new_map: dict[str, TableRow] = {row.name: row for row in new_rows}
         existing = self._row_map  # type: ignore[attr-defined]
 
         # Update or insert
         for name, row in new_map.items():
+            status = row.values[2] if len(row.values) > 2 else ""
+            health = row.values[3] if len(row.values) > 3 else ""
+            item_tags = [get_status_tag(status), get_health_tag(health)]
+            if name == getattr(self, "_benchmark_active_name", None):
+                item_tags.append(RUNNING_BENCHMARK_ROW_TAG)
+
             if name in existing:
                 old_row = existing[name]
                 if old_row.values != row.values:
-                    self.tree.set(name, row.values)  # type: ignore[attr-defined]
+                    self.tree.item(name, values=row.values, tags=tuple(item_tags))  # type: ignore[attr-defined]
             else:
-                tags = (RUNNING_BENCHMARK_ROW_TAG,) if name == getattr(self, "_benchmark_active_name", None) else ()  # type: ignore[attr-defined]
-                self.tree.insert("", tk.END, iid=name, values=row.values, tags=tags)  # type: ignore[attr-defined]
+                self.tree.insert("", tk.END, iid=name, values=row.values, tags=tuple(item_tags))  # type: ignore[attr-defined]
 
         # Delete rows no longer present
         for name in list(existing.keys()):
@@ -230,7 +240,7 @@ class RenderDiffMixin:
             self._last_gpu_inventory == detected_gpus  # type: ignore[attr-defined]
             and now - self._gpu_inventory_ts < 60  # type: ignore[attr-defined]
         ):
-            return True  # skip rebuild
+            return False  # skip rebuild (no change)
         self._last_gpu_inventory = detected_gpus  # type: ignore[attr-defined]
         self._gpu_inventory_ts = now  # type: ignore[attr-defined]
-        return False
+        return True  # trigger rebuild (changed)

@@ -99,7 +99,13 @@ try {
     if ($PSCmdlet.ShouldProcess("llama-orchestrator daemon", "Start")) {
         try {
             & $LlamaWrapper daemon start
-            Write-AutostartAuditLog -Action "daemon_start" -Result "Success" -Details @{}
+            if ($LASTEXITCODE -eq 61) {
+                Write-AutostartAuditLog -Action "daemon_start" -Result "SkippedAlreadyRunning" -Details @{ Message = "Daemon is already running." }
+            } elseif ($LASTEXITCODE -ne 0) {
+                throw "Daemon start failed with exit code $LASTEXITCODE"
+            } else {
+                Write-AutostartAuditLog -Action "daemon_start" -Result "Success" -Details @{}
+            }
         } catch {
             $message = $_.Exception.Message
             if ($message -match "already running") {
@@ -127,7 +133,16 @@ try {
             if ($PSCmdlet.ShouldProcess("llama-orchestrator instance '$name'", "Start")) {
                 try {
                     & $LlamaWrapper up $name
-                    Write-AutostartAuditLog -Action "instance_start" -Result "Success" -Details @{ Name = $name }
+                    if ($LASTEXITCODE -eq 21) {
+                        Write-AutostartAuditLog -Action "instance_start" -Result "SkippedAlreadyRunning" -Details @{
+                            Name = $name
+                            Message = "Instance is already running."
+                        }
+                    } elseif ($LASTEXITCODE -ne 0) {
+                        throw "Instance start failed with exit code $LASTEXITCODE"
+                    } else {
+                        Write-AutostartAuditLog -Action "instance_start" -Result "Success" -Details @{ Name = $name }
+                    }
                 } catch {
                     $message = $_.Exception.Message
                     if ($message -match "already running") {

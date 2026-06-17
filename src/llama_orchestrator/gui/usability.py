@@ -95,7 +95,7 @@ def create_progress_bar(parent: tk.Misc) -> ttk.Progressbar:
 def start_progress_bar(progress: ttk.Progressbar) -> None:
     """Start the indeterminate progress bar animation."""
     progress.start(15)
-    progress.pack()
+    progress.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=5)
 
 
 def stop_progress_bar(progress: ttk.Progressbar | None) -> None:
