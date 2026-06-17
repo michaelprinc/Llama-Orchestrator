@@ -18,12 +18,12 @@ logger = logging.getLogger(__name__)
 @dataclass
 class BackoffConfig:
     """Configuration for exponential backoff."""
-    
+
     base_delay: float = 1.0
     max_delay: float = 60.0
     jitter: float = 0.1  # 0.0 = no jitter, 1.0 = full jitter
     multiplier: float = 2.0
-    
+
     def __post_init__(self):
         """Validate configuration."""
         if not 0 <= self.jitter <= 1:
@@ -47,7 +47,7 @@ class BackoffCalculator:
         delay = min(base * (multiplier ^ attempt), max_delay)
         jittered_delay = delay * (1 - jitter + random * jitter * 2)
     """
-    
+
     def __init__(self, config: Optional[BackoffConfig] = None):
         """
         Initialize backoff calculator.
@@ -57,16 +57,16 @@ class BackoffCalculator:
         """
         self.config = config or BackoffConfig()
         self._attempt = 0
-    
+
     @property
     def attempt(self) -> int:
         """Current attempt number (0-based)."""
         return self._attempt
-    
+
     def reset(self) -> None:
         """Reset attempt counter to zero."""
         self._attempt = 0
-    
+
     def calculate_delay(self, attempt: Optional[int] = None) -> float:
         """
         Calculate delay for a given attempt.
@@ -79,13 +79,13 @@ class BackoffCalculator:
         """
         if attempt is None:
             attempt = self._attempt
-        
+
         # Calculate base exponential delay
         delay = self.config.base_delay * (self.config.multiplier ** attempt)
-        
+
         # Cap at max_delay
         delay = min(delay, self.config.max_delay)
-        
+
         # Apply jitter
         if self.config.jitter > 0:
             # Full jitter: delay * random(0, jitter)
@@ -94,9 +94,9 @@ class BackoffCalculator:
             delay = delay + random.uniform(-jitter_range, jitter_range)
             # Ensure non-negative
             delay = max(0.1, delay)
-        
+
         return delay
-    
+
     def next_delay(self) -> float:
         """
         Get delay for next attempt and increment counter.
@@ -107,7 +107,7 @@ class BackoffCalculator:
         delay = self.calculate_delay()
         self._attempt += 1
         return delay
-    
+
     def get_delay_sequence(self, count: int) -> list[float]:
         """
         Get a sequence of delays for debugging/display.
@@ -132,7 +132,7 @@ class RetryHandler:
     Provides a clean interface for retrying operations with
     exponential backoff and customizable error handling.
     """
-    
+
     def __init__(
         self,
         max_retries: int = 3,
@@ -151,17 +151,17 @@ class RetryHandler:
         self.backoff = backoff or BackoffCalculator()
         self.on_retry = on_retry
         self._consecutive_failures = 0
-    
+
     @property
     def consecutive_failures(self) -> int:
         """Number of consecutive failures."""
         return self._consecutive_failures
-    
+
     def record_success(self) -> None:
         """Record a successful attempt, resetting counters."""
         self._consecutive_failures = 0
         self.backoff.reset()
-    
+
     def record_failure(self, error: Optional[Exception] = None) -> float:
         """
         Record a failure and get next backoff delay.
@@ -174,16 +174,16 @@ class RetryHandler:
         """
         self._consecutive_failures += 1
         delay = self.backoff.next_delay()
-        
+
         if self.on_retry and error:
             self.on_retry(self._consecutive_failures, error, delay)
-        
+
         return delay
-    
+
     def should_retry(self) -> bool:
         """Check if more retries are available."""
         return self._consecutive_failures < self.max_retries
-    
+
     def is_exhausted(self) -> bool:
         """Check if all retries have been exhausted."""
         return self._consecutive_failures >= self.max_retries
@@ -196,15 +196,15 @@ class HealthCheckBackoff:
     
     Tracks check intervals with increasing delays on failures.
     """
-    
+
     normal_interval: float = 10.0
     failure_base: float = 1.0
     failure_max: float = 60.0
     jitter: float = 0.1
-    
+
     _failures: int = 0
     _calculator: Optional[BackoffCalculator] = None
-    
+
     def __post_init__(self):
         """Initialize calculator."""
         self._calculator = BackoffCalculator(
@@ -214,7 +214,7 @@ class HealthCheckBackoff:
                 jitter=self.jitter,
             )
         )
-    
+
     def get_next_interval(self, last_success: bool) -> float:
         """
         Get the next check interval based on last result.
@@ -229,20 +229,20 @@ class HealthCheckBackoff:
             self._failures = 0
             self._calculator.reset()
             return self.normal_interval
-        
+
         self._failures += 1
         return self._calculator.next_delay()
-    
+
     def reset(self) -> None:
         """Reset to normal interval."""
         self._failures = 0
         self._calculator.reset()
-    
+
     @property
     def is_in_backoff(self) -> bool:
         """Check if currently in backoff mode due to failures."""
         return self._failures > 0
-    
+
     @property
     def current_failures(self) -> int:
         """Number of consecutive failures."""
@@ -292,6 +292,6 @@ def with_jitter(delay: float, jitter_factor: float = 0.1) -> float:
     """
     if jitter_factor <= 0:
         return delay
-    
+
     jitter_range = delay * jitter_factor
     return delay + random.uniform(-jitter_range, jitter_range)

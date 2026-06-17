@@ -14,7 +14,6 @@ import httpx
 
 from llama_orchestrator.binaries.schema import (
     GITHUB_API_RELEASES_URL,
-    GITHUB_REPO,
     GitHubReleaseInfo,
     SupportedVariant,
     build_download_url,
@@ -31,7 +30,7 @@ USER_AGENT = "llama-orchestrator/0.1.0"
 
 class GitHubError(Exception):
     """Error interacting with GitHub API."""
-    
+
     def __init__(self, message: str, status_code: Optional[int] = None):
         self.message = message
         self.status_code = status_code
@@ -40,7 +39,7 @@ class GitHubError(Exception):
 
 class RateLimitError(GitHubError):
     """GitHub API rate limit exceeded."""
-    
+
     def __init__(self, reset_time: Optional[datetime] = None):
         self.reset_time = reset_time
         message = "GitHub API rate limit exceeded"
@@ -55,7 +54,7 @@ class GitHubClient:
     
     Fetches release information for llama.cpp from ggml-org/llama.cpp.
     """
-    
+
     def __init__(
         self,
         timeout: float = DEFAULT_TIMEOUT,
@@ -71,7 +70,7 @@ class GitHubClient:
         self.timeout = timeout
         self.token = token
         self._client: Optional[httpx.Client] = None
-    
+
     def _get_headers(self) -> dict[str, str]:
         """Get request headers."""
         headers = {
@@ -81,7 +80,7 @@ class GitHubClient:
         if self.token:
             headers["Authorization"] = f"token {self.token}"
         return headers
-    
+
     @property
     def client(self) -> httpx.Client:
         """Get or create HTTP client."""
@@ -91,19 +90,19 @@ class GitHubClient:
                 headers=self._get_headers(),
             )
         return self._client
-    
+
     def close(self) -> None:
         """Close the HTTP client."""
         if self._client is not None:
             self._client.close()
             self._client = None
-    
+
     def __enter__(self) -> "GitHubClient":
         return self
-    
+
     def __exit__(self, *args: Any) -> None:
         self.close()
-    
+
     def _handle_response(self, response: httpx.Response) -> dict[str, Any]:
         """Handle API response and raise appropriate errors."""
         if response.status_code == 403:
@@ -116,18 +115,18 @@ class GitHubClient:
                     reset_time = datetime.fromtimestamp(int(reset_timestamp))
                 raise RateLimitError(reset_time)
             raise GitHubError("Access forbidden", status_code=403)
-        
+
         if response.status_code == 404:
             raise GitHubError("Resource not found", status_code=404)
-        
+
         if response.status_code >= 400:
             raise GitHubError(
                 f"GitHub API error: {response.text}",
                 status_code=response.status_code
             )
-        
+
         return response.json()
-    
+
     def get_latest_release(self) -> dict[str, Any]:
         """
         Get the latest release information.
@@ -137,10 +136,10 @@ class GitHubClient:
         """
         url = f"{GITHUB_API_RELEASES_URL}/latest"
         logger.debug(f"Fetching latest release from {url}")
-        
+
         response = self.client.get(url)
         return self._handle_response(response)
-    
+
     def get_release(self, tag: str) -> dict[str, Any]:
         """
         Get release information by tag.
@@ -153,10 +152,10 @@ class GitHubClient:
         """
         url = f"{GITHUB_API_RELEASES_URL}/tags/{tag}"
         logger.debug(f"Fetching release {tag} from {url}")
-        
+
         response = self.client.get(url)
         return self._handle_response(response)
-    
+
     def list_releases(self, per_page: int = 30, page: int = 1) -> list[dict[str, Any]]:
         """
         List releases with pagination.
@@ -171,10 +170,10 @@ class GitHubClient:
         url = GITHUB_API_RELEASES_URL
         params = {"per_page": min(per_page, 100), "page": page}
         logger.debug(f"Listing releases from {url} (page {page})")
-        
+
         response = self.client.get(url, params=params)
         return self._handle_response(response)
-    
+
     def resolve_latest_version(self) -> str:
         """
         Get the latest release version tag.
@@ -184,7 +183,7 @@ class GitHubClient:
         """
         release = self.get_latest_release()
         return release["tag_name"]
-    
+
     def get_release_info(self, tag: str) -> GitHubReleaseInfo:
         """
         Get structured release info for a tag.
@@ -199,20 +198,20 @@ class GitHubClient:
             release = self.get_latest_release()
         else:
             release = self.get_release(tag)
-        
+
         published_at = None
         if release.get("published_at"):
             published_at = datetime.fromisoformat(
                 release["published_at"].replace("Z", "+00:00")
             )
-        
+
         return GitHubReleaseInfo(
             tag_name=release["tag_name"],
             published_at=published_at,
             commit_sha=release.get("target_commitish"),
             html_url=release.get("html_url"),
         )
-    
+
     def get_asset_url(
         self,
         tag: str,
@@ -233,20 +232,20 @@ class GitHubClient:
             tag = release["tag_name"]
         else:
             release = self.get_release(tag)
-        
+
         # Build expected filename
         extension = ".zip" if variant.startswith("win-") else ".tar.gz"
         expected_name = f"llama-{tag}-bin-{variant}{extension}"
-        
+
         # Search in assets
         for asset in release.get("assets", []):
             if asset["name"] == expected_name:
                 return asset["browser_download_url"]
-        
+
         # Fall back to constructed URL
         logger.warning(f"Asset {expected_name} not found in release, using constructed URL")
         return build_download_url(tag, variant)
-    
+
     def check_release_exists(self, tag: str) -> bool:
         """
         Check if a release exists.
@@ -264,7 +263,7 @@ class GitHubClient:
             if e.status_code == 404:
                 return False
             raise
-    
+
     def get_available_variants(self, tag: str) -> list[str]:
         """
         Get list of available variants for a release.
@@ -279,7 +278,7 @@ class GitHubClient:
             release = self.get_latest_release()
         else:
             release = self.get_release(tag)
-        
+
         variants = []
         for asset in release.get("assets", []):
             name = asset["name"]
@@ -290,7 +289,7 @@ class GitHubClient:
                 if len(parts) == 2:
                     variant = parts[1].replace(".zip", "").replace(".tar.gz", "")
                     variants.append(variant)
-        
+
         return variants
 
 

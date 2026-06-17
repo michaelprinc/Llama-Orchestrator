@@ -215,7 +215,7 @@ class BinaryConfig(BaseModel):
     - Database-like joins between config.json and registry.json
     - Multiple installations of the same version+variant
     """
-    
+
     binary_id: Optional[UUID] = Field(
         default=None,
         description="Primary identifier - UUID of installed binary. Joins to registry.json"
@@ -244,7 +244,7 @@ class BinaryConfig(BaseModel):
         default=None,
         description="Expected SHA256 checksum for verification"
     )
-    
+
     @field_validator("sha256")
     @classmethod
     def validate_sha256(cls, v: Optional[str]) -> Optional[str]:
@@ -258,12 +258,12 @@ class BinaryConfig(BaseModel):
 
 class ModelConfig(BaseModel):
     """Configuration for the LLM model."""
-    
+
     path: Path = Field(..., description="Path to the GGUF model file")
     context_size: int = Field(default=4096, ge=512, le=262144, description="Context window size")
     batch_size: int = Field(default=512, ge=1, le=8192, description="Batch size for processing")
     threads: int = Field(default=8, ge=1, le=256, description="Number of CPU threads")
-    
+
     @field_validator("path")
     @classmethod
     def validate_path_extension(cls, v: Path) -> Path:
@@ -275,12 +275,12 @@ class ModelConfig(BaseModel):
 
 class ServerConfig(BaseModel):
     """Configuration for the llama.cpp server."""
-    
+
     host: str = Field(default="127.0.0.1", description="Server bind address")
     port: int = Field(default=8001, ge=1024, le=65535, description="Server port")
     timeout: int = Field(default=600, ge=0, description="Request timeout in seconds")
     parallel: int = Field(default=1, ge=1, le=64, description="Parallel request slots")
-    
+
     @field_validator("host")
     @classmethod
     def validate_host(cls, v: str) -> str:
@@ -301,14 +301,14 @@ class ServerConfig(BaseModel):
 
 class GpuConfig(BaseModel):
     """Configuration for GPU acceleration."""
-    
+
     backend: Literal["cpu", "vulkan", "cuda", "metal", "hip"] = Field(
         default="cpu", 
         description="GPU backend to use"
     )
     device_id: int = Field(default=0, ge=0, description="GPU device index")
     layers: int = Field(default=0, ge=0, description="Number of layers to offload to GPU")
-    
+
     @model_validator(mode="after")
     def validate_gpu_config(self) -> "GpuConfig":
         """Validate GPU configuration consistency."""
@@ -320,7 +320,7 @@ class GpuConfig(BaseModel):
 
 class HealthcheckConfig(BaseModel):
     """Configuration for health monitoring with pluggable probe support."""
-    
+
     # Probe type configuration (V2)
     type: Literal["http", "tcp", "custom"] = Field(
         default="http",
@@ -339,27 +339,27 @@ class HealthcheckConfig(BaseModel):
         default=None,
         description="Custom script to execute (for custom probe). Use {host} and {port} placeholders"
     )
-    
+
     # Timing configuration
     interval: int = Field(default=10, ge=1, le=3600, description="Check interval in seconds")
     timeout: int = Field(default=5, ge=1, le=60, description="Request timeout in seconds")
     retries: int = Field(default=3, ge=1, le=10, description="Retries before marking unhealthy")
     retry_delay: float = Field(default=1.0, ge=0.1, le=60.0, description="Delay between retries in seconds")
     start_period: int = Field(default=60, ge=0, le=600, description="Grace period after start")
-    
+
     # Backoff with jitter configuration (V2)
     backoff_enabled: bool = Field(default=True, description="Enable exponential backoff on failures")
     backoff_base: float = Field(default=1.0, ge=0.1, le=60.0, description="Base delay for backoff in seconds")
     backoff_max: float = Field(default=60.0, ge=1.0, le=600.0, description="Maximum backoff delay in seconds")
     backoff_jitter: float = Field(default=0.1, ge=0.0, le=1.0, description="Jitter factor (0-1) to add randomness")
-    
+
     @model_validator(mode="after")
     def validate_healthcheck_config(self) -> "HealthcheckConfig":
         """Validate healthcheck configuration consistency."""
         if self.type == "custom" and not self.custom_script:
             raise ValueError("custom_script is required when type is 'custom'")
         return self
-    
+
     def to_probe_dict(self) -> dict:
         """Convert to probe configuration dictionary."""
         return {
@@ -376,7 +376,7 @@ class HealthcheckConfig(BaseModel):
 
 class RestartPolicy(BaseModel):
     """Configuration for automatic restart behavior."""
-    
+
     enabled: bool = Field(default=True, description="Enable auto-restart")
     max_retries: int = Field(default=5, ge=0, le=100, description="Maximum restart attempts")
     backoff_multiplier: float = Field(default=2.0, ge=1.0, le=10.0, description="Exponential backoff multiplier")
@@ -386,7 +386,7 @@ class RestartPolicy(BaseModel):
 
 class LogsConfig(BaseModel):
     """Configuration for logging."""
-    
+
     stdout: str = Field(default="logs/{name}/stdout.log", description="Stdout log path")
     stderr: str = Field(default="logs/{name}/stderr.log", description="Stderr log path")
     max_size_mb: int = Field(default=100, ge=1, le=10000, description="Max log file size in MB")
@@ -550,7 +550,7 @@ class InstanceConfig(BaseModel):
     The `binary` field is optional for backward compatibility.
     If not set, the system falls back to the legacy bin/ directory.
     """
-    
+
     name: str = Field(..., min_length=1, max_length=64, description="Immutable legacy selector alias")
     schema_version: str = Field(default="2", description="Persisted config schema version")
     instance_uid: str = Field(default_factory=lambda: str(uuid4()), description="Stable UUID4 identity")
@@ -581,7 +581,7 @@ class InstanceConfig(BaseModel):
     restart_policy: RestartPolicy = Field(default_factory=RestartPolicy)
     logs: LogsConfig = Field(default_factory=LogsConfig)
     _source_path: Path | None = PrivateAttr(default=None)
-    
+
     @field_validator("name")
     @classmethod
     def validate_name(cls, v: str) -> str:
@@ -675,17 +675,17 @@ class InstanceConfig(BaseModel):
         if not self.display_name:
             self.display_name = self.name
         return self
-    
+
     def get_env_vars(self) -> dict[str, str]:
         """Get environment variables including GPU settings."""
         env = dict(self.env)
-        
+
         # Add Vulkan device if applicable
         if self.gpu.backend == "vulkan":
             env["GGML_VULKAN_DEVICE"] = str(self.gpu.device_id)
-        
+
         return env
-    
+
     def get_log_paths(self) -> tuple[Path, Path]:
         """Get resolved log file paths."""
         stdout_path = Path(self.logs.stdout.format(name=self.name))

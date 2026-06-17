@@ -26,7 +26,6 @@ from llama_orchestrator.engine.state import (
 )
 from llama_orchestrator.health.checker import (
     HealthCheckResult,
-    HealthCheckStatus,
     check_instance_health,
 )
 
@@ -39,7 +38,7 @@ logger = logging.getLogger(__name__)
 @dataclass
 class InstanceHealthState:
     """Tracks health state for an instance."""
-    
+
     name: str
     consecutive_failures: int = 0
     last_check_time: float | None = None
@@ -57,27 +56,27 @@ class HealthMonitor:
     Periodically checks health of running instances and triggers
     auto-restart when configured.
     """
-    
+
     check_interval: float = 10.0  # Seconds between checks
     on_health_change: Callable[[str, HealthStatus, HealthStatus], None] | None = None
     on_restart: Callable[[str, int], None] | None = None
-    
+
     _running: bool = field(default=False, init=False)
     _thread: threading.Thread | None = field(default=None, init=False)
     _instance_states: dict[str, InstanceHealthState] = field(default_factory=dict, init=False)
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False)
-    
+
     def start(self) -> None:
         """Start the health monitoring thread."""
         if self._running:
             logger.warning("Health monitor already running")
             return
-        
+
         self._running = True
         self._thread = threading.Thread(target=self._monitor_loop, daemon=True)
         self._thread.start()
         logger.info("Health monitor started")
-    
+
     def stop(self) -> None:
         """Stop the health monitoring thread."""
         self._running = False
@@ -85,7 +84,7 @@ class HealthMonitor:
             self._thread.join(timeout=5.0)
             self._thread = None
         logger.info("Health monitor stopped")
-    
+
     def _monitor_loop(self) -> None:
         """Main monitoring loop."""
         while self._running:
@@ -93,25 +92,25 @@ class HealthMonitor:
                 self._check_all_instances()
             except Exception as e:
                 logger.error(f"Error in health monitor loop: {e}")
-            
+
             # Sleep with interruptible check
             sleep_end = time.time() + self.check_interval
             while self._running and time.time() < sleep_end:
                 time.sleep(0.5)
-    
+
     def _check_all_instances(self) -> None:
         """Check health of all running instances."""
         instances = discover_instances()
-        
+
         for name, _ in instances:
             if not self._running:
                 break
-            
+
             try:
                 self._check_instance(name)
             except Exception as e:
                 logger.error(f"Error checking instance {name}: {e}")
-    
+
     def _check_instance(self, name: str) -> None:
         """Check health of a single instance."""
         # Load current state
@@ -119,34 +118,34 @@ class HealthMonitor:
         if state is None or state.status != InstanceStatus.RUNNING:
             # Skip non-running instances
             return
-        
+
         # Get or create health tracking state
         with self._lock:
             if name not in self._instance_states:
                 self._instance_states[name] = InstanceHealthState(name=name)
             health_state = self._instance_states[name]
-        
+
         # Load config for health check settings
         try:
             config = get_instance_config(name)
         except FileNotFoundError:
             logger.warning(f"Config not found for instance {name}")
             return
-        
+
         # Check if still in start period
         if state.start_time:
             elapsed = time.time() - state.start_time
             health_state.in_start_period = elapsed < config.healthcheck.start_period
-        
+
         # Perform health check
         result = check_instance_health(name, timeout=config.healthcheck.timeout)
         health_state.last_check_time = time.time()
         health_state.last_result = result
-        
+
         # Update state based on result
         old_health = state.health
         new_health = result.to_health_status
-        
+
         if result.is_healthy:
             health_state.consecutive_failures = 0
             health_state.restart_attempts = 0
@@ -156,7 +155,7 @@ class HealthMonitor:
                 health_state.consecutive_failures += 1
         else:
             health_state.consecutive_failures += 1
-        
+
         # Update state in database
         checked_at = time.time()
         state.health = new_health
@@ -183,18 +182,18 @@ class HealthMonitor:
             response_time_ms=result.response_time_ms,
             error_message=result.error_message or "",
         )
-        
+
         # Notify on health change
         if old_health != new_health and self.on_health_change:
             try:
                 self.on_health_change(name, old_health, new_health)
             except Exception as e:
                 logger.error(f"Error in on_health_change callback: {e}")
-        
+
         # Check if restart is needed
         if self._should_restart(name, config, health_state):
             self._trigger_restart(name, config, health_state)
-    
+
     def _should_restart(
         self,
         name: str,
@@ -207,15 +206,15 @@ class HealthMonitor:
         # Skip if restart policy is disabled
         if not restart_policy.enabled:
             return False
-        
+
         # Skip if still in start period
         if health_state.in_start_period:
             return False
-        
+
         # Check consecutive failure threshold
         if health_state.consecutive_failures < config.healthcheck.retries:
             return False
-        
+
         # Check max restart attempts
         if health_state.restart_attempts >= restart_policy.max_retries:
             logger.warning(
@@ -223,7 +222,7 @@ class HealthMonitor:
                 f"({restart_policy.max_retries})"
             )
             return False
-        
+
         # Check backoff delay
         if health_state.last_restart_time:
             delay = self._calculate_backoff(
@@ -235,9 +234,9 @@ class HealthMonitor:
             elapsed = time.time() - health_state.last_restart_time
             if elapsed < delay:
                 return False
-        
+
         return True
-    
+
     def _calculate_backoff(
         self,
         attempt: int,
@@ -248,7 +247,7 @@ class HealthMonitor:
         """Calculate exponential backoff delay."""
         delay = initial_delay * (multiplier ** attempt)
         return min(delay, max_delay)
-    
+
     def _trigger_restart(
         self,
         name: str,
@@ -260,29 +259,29 @@ class HealthMonitor:
             f"Restarting instance {name} after {health_state.consecutive_failures} "
             f"consecutive failures (attempt {health_state.restart_attempts + 1})"
         )
-        
+
         try:
             restart_instance(name, wait_for_ready=False)
             health_state.restart_attempts += 1
             health_state.last_restart_time = time.time()
             health_state.consecutive_failures = 0
             health_state.in_start_period = True
-            
+
             if self.on_restart:
                 try:
                     self.on_restart(name, health_state.restart_attempts)
                 except Exception as e:
                     logger.error(f"Error in on_restart callback: {e}")
-                    
+
         except Exception as e:
             logger.error(f"Failed to restart instance {name}: {e}")
             health_state.restart_attempts += 1
-    
+
     def get_instance_health(self, name: str) -> InstanceHealthState | None:
         """Get the health tracking state for an instance."""
         with self._lock:
             return self._instance_states.get(name)
-    
+
     @property
     def is_running(self) -> bool:
         """Check if the monitor is running."""
@@ -311,11 +310,11 @@ def start_monitoring(
         The HealthMonitor instance
     """
     global _monitor
-    
+
     with _monitor_lock:
         if _monitor is not None and _monitor.is_running:
             return _monitor
-        
+
         _monitor = HealthMonitor(
             check_interval=interval,
             on_health_change=on_health_change,
@@ -328,7 +327,7 @@ def start_monitoring(
 def stop_monitoring() -> None:
     """Stop the global health monitor."""
     global _monitor
-    
+
     with _monitor_lock:
         if _monitor is not None:
             _monitor.stop()

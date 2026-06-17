@@ -120,13 +120,11 @@ def up(
     """
     from llama_orchestrator.engine import (
         ProcessError,
-        build_command,
-        format_command,
         start_instance,
         validate_executable,
     )
     from rich.panel import Panel
-    
+
     # Load config first for UUID-aware binary resolution
     try:
         resolved_name, config = _resolve_instance_token(name)
@@ -138,7 +136,7 @@ def up(
             border_style="red"
         ))
         _raise_exit(ExitCode.INSTANCE_NOT_FOUND)
-    
+
     # Check executable with config for UUID-based resolution
     exe_valid, exe_msg = validate_executable(config)
     if not exe_valid:
@@ -150,9 +148,9 @@ def up(
             border_style="red"
         ))
         _raise_exit(ExitCode.BINARY_NOT_FOUND)
-    
+
     console.print(f"[green]Starting instance:[/green] {config.display_name}")
-    
+
     try:
         state = start_instance(resolved_name, detach=detach)
         health_detail = f"Health: {state.health.value}"
@@ -193,7 +191,7 @@ def down(
     """
     from llama_orchestrator.engine import ProcessError, stop_instance
     from rich.panel import Panel
-    
+
     try:
         resolved_name, config = _resolve_instance_token(name)
     except FileNotFoundError:
@@ -201,7 +199,7 @@ def down(
         _raise_exit(ExitCode.INSTANCE_NOT_FOUND)
 
     console.print(f"[red]Stopping instance:[/red] {config.display_name}")
-    
+
     try:
         state = stop_instance(resolved_name, force=force)
         console.print(Panel(
@@ -232,7 +230,7 @@ def restart(
     """
     from llama_orchestrator.engine import ProcessError, restart_instance
     from rich.panel import Panel
-    
+
     try:
         resolved_name, config = _resolve_instance_token(name)
     except FileNotFoundError:
@@ -240,7 +238,7 @@ def restart(
         _raise_exit(ExitCode.INSTANCE_NOT_FOUND)
 
     console.print(f"[blue]Restarting instance:[/blue] {config.display_name}")
-    
+
     try:
         state = restart_instance(resolved_name, force=force)
         health_detail = f"Health: {state.health.value}"
@@ -280,15 +278,15 @@ def ps(
     """
     from llama_orchestrator.config import load_all_instances
     from llama_orchestrator.engine import InstanceStatus, list_instances
-    
+
     instances = list_instances()
     configs = load_all_instances()
-    
+
     if not instances:
         console.print("[dim]No instances configured.[/dim]")
         console.print("Use 'llama-orch init <name> --model <path>' to create one.")
         return
-    
+
     # Filter if not showing all
     if not all_instances:
         instances = {
@@ -299,9 +297,9 @@ def ps(
             console.print("[dim]No running instances.[/dim]")
             console.print("Use 'llama-orch ps --all' to show all instances.")
             return
-    
+
     table = Table(title="llama-orchestrator Instances")
-    
+
     table.add_column("Name", style="cyan", no_wrap=True)
     table.add_column("Alias", style="dim", no_wrap=True)
     table.add_column("PID", style="magenta")
@@ -310,7 +308,7 @@ def ps(
     table.add_column("Status", style="bold")
     table.add_column("Health", style="bold")
     table.add_column("Uptime", style="dim")
-    
+
     for name, state in sorted(instances.items()):
         # Try to get config for port/backend info
         port = "-"
@@ -321,7 +319,7 @@ def ps(
             port = str(config.server.port)
             backend = config.gpu.backend
             display_name = config.display_name or config.name
-        
+
         # Status styling
         status_style = {
             InstanceStatus.RUNNING: "green",
@@ -330,10 +328,10 @@ def ps(
             InstanceStatus.STOPPED: "dim",
             InstanceStatus.ERROR: "red",
         }.get(state.status, "white")
-        
+
         status_text = f"[{status_style}]{state.status_symbol} {state.status.value}[/{status_style}]"
         health_text = f"{state.health_symbol} {state.health.value}"
-        
+
         table.add_row(
             display_name,
             name,
@@ -344,7 +342,7 @@ def ps(
             health_text,
             state.uptime_str,
         )
-    
+
     console.print(table)
 
 
@@ -365,31 +363,30 @@ def health(
         llama-orch health gpt-oss
         llama-orch health --all
     """
-    from llama_orchestrator.config import discover_instances, get_instance_config
+    from llama_orchestrator.config import discover_instances
     from llama_orchestrator.health import check_instance_health
-    from rich.panel import Panel
-    
+
     if name is None and not all_instances:
         console.print("[yellow]Specify an instance name or use --all[/yellow]")
         _raise_exit(ExitCode.USAGE_ERROR)
-    
+
     instances_to_check = [name] if name else [n for n, _ in discover_instances()]
-    
+
     if not instances_to_check:
         console.print("[dim]No instances found.[/dim]")
         return
-    
+
     table = Table(title="Health Status")
     table.add_column("Instance", style="cyan")
     table.add_column("Status", style="bold")
     table.add_column("Response Time", style="dim")
     table.add_column("Details", style="dim")
-    
+
     for inst_name in instances_to_check:
         try:
             resolved_name, config = _resolve_instance_token(inst_name)
             result = check_instance_health(resolved_name)
-            
+
             # Status styling
             if result.is_healthy:
                 status_text = "[green]* HEALTHY[/green]"
@@ -397,20 +394,20 @@ def health(
                 status_text = "[yellow]~ LOADING[/yellow]"
             else:
                 status_text = f"[red]X {result.status.value.upper()}[/red]"
-            
+
             response_time = f"{result.response_time_ms:.1f}ms" if result.response_time_ms else "-"
             details = result.error_message or ""
-            
+
             if result.slots_idle is not None:
                 details = f"Slots: {result.slots_idle} idle, {result.slots_processing} busy"
-            
+
             table.add_row(config.display_name or resolved_name, status_text, response_time, details)
-            
+
         except FileNotFoundError:
             table.add_row(inst_name, "[dim]NOT FOUND[/dim]", "-", "Config missing")
         except Exception as e:
             table.add_row(inst_name, "[red]ERROR[/red]", "-", str(e))
-    
+
     console.print(table)
 
 
@@ -433,7 +430,7 @@ def logs(
     import time
     from llama_orchestrator.config import get_logs_dir
     from llama_orchestrator.engine.detach import get_latest_logs
-    
+
     try:
         resolved_name, config = _resolve_instance_token(name)
     except FileNotFoundError:
@@ -450,7 +447,7 @@ def logs(
         _raise_exit(ExitCode.USAGE_ERROR)
 
     stream_names = ["stdout", "stderr"] if selected_stream == "both" else [selected_stream]
-    
+
     # Determine log file path
     logs_dir = get_logs_dir() / resolved_name
 
@@ -482,7 +479,7 @@ def logs(
             console.print(f"[{ 'cyan' if log_type == 'stdout' else 'yellow' }]{log_type}[/]: {line.rstrip()}")
         else:
             console.print(line.rstrip())
-    
+
     if follow:
         # Follow mode - stream new lines
         console.print("[dim]Following log output (Ctrl+C to stop)...[/dim]\n")
@@ -543,15 +540,15 @@ def describe(
     """
     from llama_orchestrator.cli_describe import build_description, format_description_rich
     from rich.panel import Panel
-    
+
     try:
         resolved_name, config = _resolve_instance_token(name)
     except FileNotFoundError:
         console.print(f"[red]Instance '{name}' not found.[/red]")
         _raise_exit(ExitCode.INSTANCE_NOT_FOUND)
-    
+
     description = build_description(resolved_name, config=config)
-    
+
     if output_json:
         import json
 
@@ -703,10 +700,10 @@ def dashboard(
     """
     import time
     from rich.live import Live
-    
+
     console.print("[bold]Starting dashboard...[/bold]")
     console.print("[dim]Press Ctrl+C to exit[/dim]\n")
-    
+
     try:
         with Live(_build_dashboard_layout(events_for), console=console, refresh_per_second=1) as live:
             while True:
@@ -764,14 +761,14 @@ def init(
         console.print(f"[red]Instance '{name}' already exists.[/red]")
         console.print("Use --force to overwrite, or choose a different name.")
         _raise_exit(ExitCode.INSTANCE_ALREADY_EXISTS)
-    
+
     # Validate backend
     valid_backends = ("cpu", "vulkan", "cuda", "metal", "hip")
     if backend not in valid_backends:
         console.print(f"[red]Invalid backend '{backend}'.[/red]")
         console.print(f"Valid options: {', '.join(valid_backends)}")
         _raise_exit(ExitCode.CONFIG_INVALID)
-    
+
     # Create config
     try:
         config = InstanceConfig(
@@ -793,12 +790,12 @@ def init(
     except Exception as e:
         console.print(f"[red]Invalid configuration: {e}[/red]")
         _raise_exit(ExitCode.CONFIG_INVALID)
-    
+
     # Save config
     if existing is not None and force:
         config.set_source_path(existing.source_path)
     saved_path = save_config(config)
-    
+
     console.print(Panel(
         f"[green]Instance '{name}' created successfully![/green]\n\n"
         f"Config: {saved_path}\n"
@@ -809,10 +806,10 @@ def init(
         title="Instance Created",
         border_style="green"
     ))
-    
+
     console.print("\n[dim]Next steps:[/dim]")
     console.print(f"  1. Review config: [cyan]llama-orch describe {name}[/cyan]")
-    console.print(f"  2. Validate: [cyan]llama-orch config validate[/cyan]")
+    console.print("  2. Validate: [cyan]llama-orch config validate[/cyan]")
     console.print(f"  3. Start: [cyan]llama-orch up {name}[/cyan]")
 
 
@@ -846,7 +843,7 @@ def config_validate(
         validate_instance,
     )
     from rich.panel import Panel
-    
+
     if path:
         console.print(f"[blue]Validating config:[/blue] {path}")
         try:
@@ -862,12 +859,12 @@ def config_validate(
     else:
         console.print("[blue]Validating all instance configs...[/blue]")
         result = validate_all_instances(check_runtime=check_runtime)
-    
+
     # Print results
     if result.issues:
         for issue in result.issues:
             console.print(str(issue))
-    
+
     if result.is_valid:
         console.print("\n[green]Validation passed[/green]")
         if result.warning_count > 0:
@@ -893,7 +890,7 @@ def config_lint(
         llama-orch config lint --json
     """
     import json
-    
+
     from llama_orchestrator.config import (
         ConfigLoadError,
         ValidationResult,
@@ -902,11 +899,11 @@ def config_lint(
     )
     from rich.panel import Panel
     from rich.table import Table
-    
+
     console.print("[blue]Linting all configurations...[/blue]\n")
-    
+
     result = ValidationResult()
-    
+
     try:
         configs = load_all_instances()
     except ConfigLoadError as e:
@@ -916,20 +913,20 @@ def config_lint(
             border_style="red"
         ))
         _raise_exit(ExitCode.CONFIG_NOT_FOUND)
-    
+
     if not configs:
         console.print("[yellow]No instances configured.[/yellow]")
         console.print("Use 'llama-orch init <name> --model <path>' to create one.")
         return
-    
+
     # Lint each config
     for name, config in configs.items():
         console.print(f"[dim]Linting {name}...[/dim]")
         instance_result = lint_config(config)
         result.merge(instance_result)
-    
+
     console.print()
-    
+
     if output_json:
         issues_data = [
             {
@@ -949,7 +946,7 @@ def config_lint(
             table.add_column("Instance", style="cyan")
             table.add_column("Field", style="yellow")
             table.add_column("Message")
-            
+
             for issue in result.issues:
                 severity_style = {
                     "error": "red",
@@ -962,9 +959,9 @@ def config_lint(
                     issue.field,
                     issue.message
                 )
-            
+
             console.print(table)
-        
+
         console.print()
         if result.is_valid:
             console.print(f"[green]Lint passed[/green] ({len(configs)} instances checked)")
@@ -1089,15 +1086,15 @@ def daemon_start(
     """
     from llama_orchestrator.daemon import is_daemon_running, start_daemon
     from rich.panel import Panel
-    
+
     if is_daemon_running():
         console.print("[yellow]Daemon is already running.[/yellow]")
         console.print("Use 'llama-orch daemon status' to check status.")
         _raise_exit(ExitCode.DAEMON_ALREADY_RUNNING)
-    
+
     mode = "foreground" if foreground else "background"
     console.print(f"[green]Starting daemon ({mode})...[/green]")
-    
+
     if foreground:
         console.print("[dim]Press Ctrl+C to stop[/dim]\n")
         try:
@@ -1126,13 +1123,13 @@ def daemon_stop() -> None:
     """
     from llama_orchestrator.daemon import is_daemon_running, stop_daemon
     from rich.panel import Panel
-    
+
     if not is_daemon_running():
         console.print("[yellow]Daemon is not running.[/yellow]")
         _raise_exit(ExitCode.DAEMON_NOT_RUNNING)
-    
+
     console.print("[red]Stopping daemon...[/red]")
-    
+
     if stop_daemon():
         console.print(Panel(
             "[green]Daemon stopped successfully![/green]",
@@ -1154,9 +1151,9 @@ def daemon_status() -> None:
     """
     from llama_orchestrator.daemon import get_daemon_status
     from rich.panel import Panel
-    
+
     status = get_daemon_status()
-    
+
     if status.running:
         info = f"""
 [green]* Daemon is running[/green]
@@ -1256,18 +1253,18 @@ def binary_install(
     """
     from rich.panel import Panel
     from rich.progress import Progress, SpinnerColumn, TextColumn
-    
+
     from llama_orchestrator.binaries import BinaryManager
     from llama_orchestrator.config import get_project_root
-    
+
     project_root = get_project_root()
     manager = BinaryManager(project_root)
-    
-    console.print(f"[cyan]Installing llama.cpp binary[/cyan]")
+
+    console.print("[cyan]Installing llama.cpp binary[/cyan]")
     console.print(f"  Version: {version}")
     console.print(f"  Variant: {variant}")
     console.print()
-    
+
     try:
         with Progress(
             SpinnerColumn(),
@@ -1275,7 +1272,7 @@ def binary_install(
             console=console,
         ) as progress:
             task = progress.add_task("Downloading and installing...", total=None)
-            
+
             try:
                 binary = manager.install(
                     version=version if version != "latest" else None,
@@ -1285,7 +1282,7 @@ def binary_install(
             except Exception as e:
                 progress.update(task, description=f"[red]Error: {e}[/red]")
                 raise
-        
+
         console.print()
         console.print(Panel(
             f"[green]Binary installed successfully![/green]\n\n"
@@ -1320,23 +1317,23 @@ def binary_list() -> None:
     """
     from llama_orchestrator.binaries.registry import load_registry
     from llama_orchestrator.config import get_bins_dir
-    
+
     bins_dir = get_bins_dir()
     registry = load_registry(bins_dir)
-    
+
     if not registry.binaries:
         console.print("[dim]No binaries installed.[/dim]")
         console.print("Use 'llama-orch binary install' to install one.")
         return
-    
+
     table = Table(title="Installed llama.cpp Binaries")
-    
+
     table.add_column("UUID", style="cyan", no_wrap=True, max_width=36)
     table.add_column("Version", style="green")
     table.add_column("Variant", style="yellow")
     table.add_column("Installed", style="dim")
     table.add_column("Path", style="dim", max_width=40)
-    
+
     for binary in sorted(registry.binaries, key=lambda b: b.installed_at, reverse=True):
         table.add_row(
             str(binary.id),
@@ -1345,7 +1342,7 @@ def binary_list() -> None:
             binary.installed_at.strftime("%Y-%m-%d %H:%M"),
             str(binary.path) if binary.path else "-",
         )
-    
+
     console.print(table)
     console.print()
     console.print(f"[dim]Total: {len(registry.binaries)} binary/binaries[/dim]")
@@ -1362,16 +1359,15 @@ def binary_info(
         llama-orch binary info 550e8400-e29b-41d4-a716-446655440000
         llama-orch binary info 550e8400  # partial UUID match
     """
-    from uuid import UUID
-    
+
     from rich.panel import Panel
-    
+
     from llama_orchestrator.binaries.registry import load_registry
     from llama_orchestrator.config import get_bins_dir
-    
+
     bins_dir = get_bins_dir()
     registry = load_registry(bins_dir)
-    
+
     # Find matching binary (exact or partial UUID match)
     matches = []
     for binary in registry.binaries:
@@ -1380,20 +1376,20 @@ def binary_info(
             break
         if str(binary.id).startswith(binary_id):
             matches.append(binary)
-    
+
     if not matches:
         console.print(f"[red]No binary found matching '{binary_id}'[/red]")
         _raise_exit(ExitCode.BINARY_NOT_FOUND)
-    
+
     if len(matches) > 1:
         console.print(f"[yellow]Multiple binaries match '{binary_id}':[/yellow]")
         for m in matches:
             console.print(f"  - {m.id}")
         console.print("\nPlease provide a more specific UUID.")
         _raise_exit(ExitCode.USAGE_ERROR)
-    
+
     binary = matches[0]
-    
+
     info = f"""
 [cyan]UUID:[/cyan]         {binary.id}
 [cyan]Version:[/cyan]      {binary.version}
@@ -1403,7 +1399,7 @@ def binary_info(
 [cyan]Installed:[/cyan]    {binary.installed_at.strftime("%Y-%m-%d %H:%M:%S")}
 [cyan]SHA256:[/cyan]       {binary.sha256 or 'N/A'}
 """
-    
+
     console.print(Panel(
         info.strip(),
         title=f"Binary {binary.version}-{binary.variant}",
@@ -1426,16 +1422,15 @@ def binary_remove(
         llama-orch binary remove 550e8400 --force
     """
     import shutil
-    from uuid import UUID
-    
+
     from rich.panel import Panel
-    
+
     from llama_orchestrator.binaries.registry import load_registry, remove_binary
     from llama_orchestrator.config import get_bins_dir
-    
+
     bins_dir = get_bins_dir()
     registry = load_registry(bins_dir)
-    
+
     # Find matching binary
     matches = []
     for binary in registry.binaries:
@@ -1444,41 +1439,41 @@ def binary_remove(
             break
         if str(binary.id).startswith(binary_id):
             matches.append(binary)
-    
+
     if not matches:
         console.print(f"[red]No binary found matching '{binary_id}'[/red]")
         _raise_exit(ExitCode.BINARY_NOT_FOUND)
-    
+
     if len(matches) > 1:
         console.print(f"[yellow]Multiple binaries match '{binary_id}':[/yellow]")
         for m in matches:
             console.print(f"  - {m.id} ({m.version}-{m.variant})")
         console.print("\nPlease provide a more specific UUID.")
         _raise_exit(ExitCode.USAGE_ERROR)
-    
+
     binary = matches[0]
-    
+
     # Confirm deletion
     if not force:
-        console.print(f"[yellow]About to remove binary:[/yellow]")
+        console.print("[yellow]About to remove binary:[/yellow]")
         console.print(f"  UUID:    {binary.id}")
         console.print(f"  Version: {binary.version}")
         console.print(f"  Variant: {binary.variant}")
         console.print()
-        
+
         confirm = typer.confirm("Are you sure you want to remove this binary?")
         if not confirm:
             console.print("[dim]Cancelled.[/dim]")
             raise typer.Exit(0)
-    
+
     # Remove directory
     if binary.path and binary.path.exists():
         shutil.rmtree(binary.path)
         console.print(f"[dim]Removed directory: {binary.path}[/dim]")
-    
+
     # Remove from registry
     remove_binary(bins_dir, binary.id)
-    
+
     console.print(Panel(
         f"[green]Binary removed successfully![/green]\n\n"
         f"  UUID:    {binary.id}\n"
@@ -1503,17 +1498,17 @@ def binary_latest(
         llama-orch binary latest --variant win-cuda-12.4-x64
     """
     from rich.panel import Panel
-    
+
     from llama_orchestrator.binaries import GitHubClient
     from llama_orchestrator.binaries.schema import build_download_url
-    
+
     console.print("[cyan]Fetching latest release from GitHub...[/cyan]")
-    
+
     try:
         client = GitHubClient()
         release = client.get_latest_release()
         download_url = build_download_url(release.version, variant)
-        
+
         console.print(Panel(
             f"[green]Latest llama.cpp release:[/green]\n\n"
             f"  Version:      [cyan]{release.version}[/cyan]\n"

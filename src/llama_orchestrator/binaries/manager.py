@@ -22,7 +22,6 @@ from llama_orchestrator.binaries.downloader import (
 from llama_orchestrator.binaries.github import (
     GitHubClient,
     GitHubError,
-    get_download_url,
 )
 from llama_orchestrator.binaries.registry import (
     BinaryRegistryManager,
@@ -40,7 +39,7 @@ logger = logging.getLogger(__name__)
 
 class BinaryManagerError(Exception):
     """Error during binary management operations."""
-    
+
     def __init__(self, message: str, cause: Optional[Exception] = None):
         self.message = message
         self.cause = cause
@@ -49,7 +48,7 @@ class BinaryManagerError(Exception):
 
 class BinaryNotFoundError(BinaryManagerError):
     """Binary not found in registry."""
-    
+
     def __init__(self, identifier: str):
         self.identifier = identifier
         super().__init__(f"Binary not found: {identifier}")
@@ -57,7 +56,7 @@ class BinaryNotFoundError(BinaryManagerError):
 
 class BinaryInUseError(BinaryManagerError):
     """Binary is in use and cannot be removed."""
-    
+
     def __init__(self, binary_id: UUID, instances: list[str]):
         self.binary_id = binary_id
         self.instances = instances
@@ -77,7 +76,7 @@ class BinaryManager:
     Handles installation, removal, and resolution of binaries.
     UUID is the primary identifier for all operations.
     """
-    
+
     def __init__(self, project_root: Path):
         """
         Initialize binary manager.
@@ -89,14 +88,14 @@ class BinaryManager:
         self.bins_dir = project_root / "bins"
         self.legacy_bin_dir = project_root / "bin"
         self._registry_manager: Optional[BinaryRegistryManager] = None
-    
+
     @property
     def registry(self) -> BinaryRegistryManager:
         """Get the registry manager."""
         if self._registry_manager is None:
             self._registry_manager = BinaryRegistryManager(self.bins_dir)
         return self._registry_manager
-    
+
     def install(
         self,
         version: str,
@@ -127,7 +126,7 @@ class BinaryManager:
             BinaryManagerError: If installation fails
         """
         logger.info(f"Installing llama.cpp {version} ({variant})")
-        
+
         # Resolve 'latest' to actual version
         actual_version = version
         if version == "latest":
@@ -137,19 +136,19 @@ class BinaryManager:
                 logger.info(f"Resolved 'latest' to version {actual_version}")
             except GitHubError as e:
                 raise BinaryManagerError(f"Failed to resolve latest version: {e}") from e
-        
+
         # Build download URL
         if source_url:
             download_url = source_url
         else:
             download_url = build_download_url(actual_version, variant)
-        
+
         logger.info(f"Download URL: {download_url}")
-        
+
         # Generate UUID for this installation
         binary_id = uuid4()
         binary_dir = self.bins_dir / str(binary_id)
-        
+
         try:
             # Download and extract
             _, actual_sha256 = download_and_extract(
@@ -158,7 +157,7 @@ class BinaryManager:
                 expected_sha256=expected_sha256,
                 progress_callback=progress_callback,
             )
-            
+
             # Get release info from GitHub
             github_info = None
             try:
@@ -166,7 +165,7 @@ class BinaryManager:
                     github_info = client.get_release_info(actual_version)
             except GitHubError as e:
                 logger.warning(f"Failed to get GitHub release info: {e}")
-            
+
             # Create BinaryVersion model
             binary = BinaryVersion(
                 id=binary_id,
@@ -179,23 +178,23 @@ class BinaryManager:
                 executables=find_executables(binary_dir),
                 github_release_info=github_info,
             )
-            
+
             # Register in registry
             self.registry.add(binary)
-            
+
             # Set as default if requested or first binary
             if set_as_default or self.registry.count() == 1:
                 self.registry.set_default(binary_id)
-            
+
             logger.info(f"Installed {actual_version} ({variant}) with UUID {binary_id}")
             return binary
-            
+
         except (DownloadError, RegistryError) as e:
             # Clean up on failure
             if binary_dir.exists():
                 shutil.rmtree(binary_dir, ignore_errors=True)
             raise BinaryManagerError(f"Installation failed: {e}", cause=e) from e
-    
+
     def uninstall(self, binary_id: UUID, force: bool = False) -> BinaryVersion:
         """
         Uninstall a binary by UUID.
@@ -216,25 +215,25 @@ class BinaryManager:
         binary = self.registry.get_by_id(binary_id)
         if binary is None:
             raise BinaryNotFoundError(str(binary_id))
-        
+
         # TODO: Check if in use by any instances (requires instance config scanning)
         # if not force:
         #     instances = self._find_instances_using(binary_id)
         #     if instances:
         #         raise BinaryInUseError(binary_id, instances)
-        
+
         # Remove from registry
         self.registry.remove(binary_id)
-        
+
         # Delete files
         binary_dir = self.bins_dir / str(binary_id)
         if binary_dir.exists():
             shutil.rmtree(binary_dir)
             logger.info(f"Deleted binary directory {binary_dir}")
-        
+
         logger.info(f"Uninstalled {binary.version} ({binary.variant}) UUID {binary_id}")
         return binary
-    
+
     def resolve(self, config: BinaryConfig) -> Optional[BinaryVersion]:
         """
         Resolve binary configuration to installed binary.
@@ -257,7 +256,7 @@ class BinaryManager:
             if binary is not None:
                 return binary
             logger.warning(f"Binary ID {config.binary_id} not found in registry")
-        
+
         # Fallback lookup by version+variant
         if config.version is not None:
             # Handle 'latest' by finding newest installation
@@ -281,10 +280,10 @@ class BinaryManager:
                 binary = self.registry.get_by_version(config.version, config.variant)
                 if binary is not None:
                     return binary
-        
+
         # Use default
         return self.registry.get_default()
-    
+
     def resolve_server_path(self, config: Optional[BinaryConfig]) -> Optional[Path]:
         """
         Resolve binary config to llama-server.exe path.
@@ -304,35 +303,35 @@ class BinaryManager:
                 server_path = self.bins_dir / str(binary.id) / "llama-server.exe"
                 if server_path.exists():
                     return server_path
-        
+
         # Fall back to legacy bin/
         legacy_path = self.legacy_bin_dir / "llama-server.exe"
         if legacy_path.exists():
             logger.debug("Using legacy bin/ for llama-server.exe")
             return legacy_path
-        
+
         return None
-    
+
     def get(self, binary_id: UUID) -> Optional[BinaryVersion]:
         """Get binary by UUID."""
         return self.registry.get_by_id(binary_id)
-    
+
     def get_by_version(self, version: str, variant: str) -> Optional[BinaryVersion]:
         """Get binary by version and variant."""
         return self.registry.get_by_version(version, variant)
-    
+
     def list_installed(self) -> list[BinaryVersion]:
         """List all installed binaries."""
         return self.registry.list_all()
-    
+
     def get_default(self) -> Optional[BinaryVersion]:
         """Get the default binary."""
         return self.registry.get_default()
-    
+
     def set_default(self, binary_id: UUID) -> bool:
         """Set the default binary by UUID."""
         return self.registry.set_default(binary_id)
-    
+
     def check_for_updates(self, binary_id: UUID) -> Optional[str]:
         """
         Check if a newer version is available.
@@ -346,23 +345,23 @@ class BinaryManager:
         binary = self.registry.get_by_id(binary_id)
         if binary is None:
             return None
-        
+
         try:
             with GitHubClient() as client:
                 latest = client.resolve_latest_version()
-            
+
             # Compare version numbers (assumes b{number} format)
             current_num = int(binary.version.lstrip("b"))
             latest_num = int(latest.lstrip("b"))
-            
+
             if latest_num > current_num:
                 return latest
-            
+
         except (GitHubError, ValueError) as e:
             logger.warning(f"Failed to check for updates: {e}")
-        
+
         return None
-    
+
     def migrate_legacy_bin(self) -> Optional[BinaryVersion]:
         """
         Migrate legacy bin/ directory to bins/ structure.
@@ -374,20 +373,20 @@ class BinaryManager:
             BinaryVersion for migrated binary, or None if nothing to migrate
         """
         legacy_server = self.legacy_bin_dir / "llama-server.exe"
-        
+
         if not legacy_server.exists():
             logger.debug("No legacy bin/ to migrate")
             return None
-        
+
         logger.info("Migrating legacy bin/ directory...")
-        
+
         # Generate new UUID
         binary_id = uuid4()
         binary_dir = self.bins_dir / str(binary_id)
-        
+
         # Copy files (don't move, keep original for safety)
         shutil.copytree(self.legacy_bin_dir, binary_dir)
-        
+
         # Create BinaryVersion (we don't know the exact version)
         binary = BinaryVersion(
             id=binary_id,
@@ -398,13 +397,13 @@ class BinaryManager:
             size_bytes=get_directory_size(binary_dir),
             executables=find_executables(binary_dir),
         )
-        
+
         # Register
         self.registry.add(binary)
-        
+
         logger.info(f"Migrated legacy bin/ to UUID {binary_id}")
         return binary
-    
+
     def prune_unused(self, dry_run: bool = True) -> list[BinaryVersion]:
         """
         Find binaries not used by any instance.
@@ -439,8 +438,8 @@ def get_binary_manager(project_root: Optional[Path] = None) -> BinaryManager:
             if (parent / "pyproject.toml").exists() and parent.name == "llama-orchestrator":
                 project_root = parent
                 break
-        
+
         if project_root is None:
             project_root = Path.cwd()
-    
+
     return BinaryManager(project_root)

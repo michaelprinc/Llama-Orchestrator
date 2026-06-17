@@ -31,24 +31,24 @@ class ExitCode(IntEnum):
     
     Follows common Unix conventions with project-specific extensions.
     """
-    
+
     # Success (0)
     SUCCESS = 0
-    
+
     # General errors (1-9)
     GENERAL_ERROR = 1
     USAGE_ERROR = 2
     KEYBOARD_INTERRUPT = 3
     TIMEOUT = 4
     PERMISSION_DENIED = 5
-    
+
     # Configuration errors (10-19)
     CONFIG_NOT_FOUND = 10
     CONFIG_INVALID = 11
     CONFIG_PARSE_ERROR = 12
     INSTANCE_NOT_FOUND = 13
     INSTANCE_ALREADY_EXISTS = 14
-    
+
     # Instance state errors (20-29)
     INSTANCE_NOT_RUNNING = 20
     INSTANCE_ALREADY_RUNNING = 21
@@ -56,21 +56,21 @@ class ExitCode(IntEnum):
     INSTANCE_STARTING = 23
     INSTANCE_STOPPING = 24
     INSTANCE_CRASHED = 25
-    
+
     # Process/Runtime errors (30-39)
     PROCESS_START_FAILED = 30
     PROCESS_STOP_FAILED = 31
     PROCESS_NOT_FOUND = 32
     LOCK_ACQUIRE_FAILED = 33
     STATE_CORRUPTION = 34
-    
+
     # Network errors (40-49)
     PORT_IN_USE = 40
     PORT_UNAVAILABLE = 41
     HEALTH_CHECK_FAILED = 42
     CONNECTION_REFUSED = 43
     CONNECTION_TIMEOUT = 44
-    
+
     # Binary/Dependency errors (50-59)
     BINARY_NOT_FOUND = 50
     BINARY_INVALID = 51
@@ -78,14 +78,14 @@ class ExitCode(IntEnum):
     BINARY_INSTALL_FAILED = 53
     MODEL_NOT_FOUND = 54
     MODEL_INVALID = 55
-    
+
     # Daemon errors (60-69)
     DAEMON_NOT_RUNNING = 60
     DAEMON_ALREADY_RUNNING = 61
     DAEMON_START_FAILED = 62
     DAEMON_STOP_FAILED = 63
     DAEMON_UNREACHABLE = 64
-    
+
     @classmethod
     def from_exception(cls, exc: Exception) -> "ExitCode":
         """
@@ -98,7 +98,7 @@ class ExitCode(IntEnum):
             Appropriate ExitCode for the exception
         """
         exc_type = type(exc).__name__
-        
+
         # Map common exceptions to exit codes
         mapping = {
             "FileNotFoundError": cls.CONFIG_NOT_FOUND,
@@ -111,9 +111,9 @@ class ExitCode(IntEnum):
             "LockError": cls.LOCK_ACQUIRE_FAILED,
             "KeyboardInterrupt": cls.KEYBOARD_INTERRUPT,
         }
-        
+
         return mapping.get(exc_type, cls.GENERAL_ERROR)
-    
+
     @property
     def description(self) -> str:
         """Get a human-readable description of the exit code."""
@@ -158,17 +158,17 @@ class ExitCode(IntEnum):
             ExitCode.DAEMON_UNREACHABLE: "Cannot communicate with daemon",
         }
         return descriptions.get(self, f"Exit code {self.value}")
-    
+
     @property
     def is_success(self) -> bool:
         """Check if this is a success code."""
         return self == ExitCode.SUCCESS
-    
+
     @property
     def is_error(self) -> bool:
         """Check if this is an error code."""
         return self != ExitCode.SUCCESS
-    
+
     @property
     def category(self) -> str:
         """Get the error category."""
@@ -206,7 +206,7 @@ def exit_with_code(
         console: Rich console for output (uses default if None)
     """
     import sys
-    
+
     if message and console:
         if code.is_error:
             console.print(f"[red]Error:[/red] {message}")
@@ -217,7 +217,7 @@ def exit_with_code(
             print(f"Error: {message}", file=sys.stderr)
         else:
             print(message)
-    
+
     sys.exit(code.value)
 
 
@@ -238,14 +238,14 @@ def handle_cli_error(
         Appropriate exit code
     """
     import traceback
-    
+
     code = ExitCode.from_exception(exc)
-    
+
     if console:
         console.print(f"[red]Error:[/red] {exc}")
         if verbose:
             console.print(f"[dim]{traceback.format_exc()}[/dim]")
-    
+
     return code
 
 

@@ -22,14 +22,14 @@ logger = logging.getLogger(__name__)
 @dataclass
 class PortInfo:
     """Information about a port's status."""
-    
+
     port: int
     is_available: bool
     owner_pid: int | None = None
     owner_name: str | None = None
     owner_cmdline: str | None = None
     instance_name: str | None = None
-    
+
     def is_owned_by_us(self) -> bool:
         """Check if port is owned by a known instance."""
         return self.instance_name is not None
@@ -75,7 +75,7 @@ def get_port_owner(port: int) -> dict | None:
                         cmdline = " ".join(proc.cmdline())
                     except (psutil.AccessDenied, psutil.ZombieProcess):
                         cmdline = proc.name()
-                    
+
                     return {
                         "pid": conn.pid,
                         "name": proc.name(),
@@ -86,7 +86,7 @@ def get_port_owner(port: int) -> dict | None:
                     return {"pid": conn.pid, "name": None, "cmdline": None}
     except psutil.AccessDenied:
         logger.warning("Access denied when checking network connections")
-    
+
     return None
 
 
@@ -102,25 +102,25 @@ def get_port_info(port: int, host: str = "127.0.0.1") -> PortInfo:
         PortInfo with details about the port
     """
     is_available = check_port_available(port, host)
-    
+
     if is_available:
         return PortInfo(port=port, is_available=True)
-    
+
     # Port is in use, find owner
     owner = get_port_owner(port)
-    
+
     if owner is None:
         return PortInfo(port=port, is_available=False)
-    
+
     # Check if this is one of our instances
     instance_name = None
     runtime_states = load_all_runtime()
-    
+
     for name, runtime in runtime_states.items():
         if runtime.port == port and runtime.pid == owner.get("pid"):
             instance_name = name
             break
-    
+
     return PortInfo(
         port=port,
         is_available=False,
@@ -150,15 +150,15 @@ def find_free_port(
         First available port or None if none found
     """
     exclude = exclude_ports or set()
-    
+
     for port in range(start_port, end_port + 1):
         if port in exclude:
             continue
-        
+
         if check_port_available(port, host):
             logger.debug(f"Found free port: {port}")
             return port
-    
+
     logger.warning(f"No free port found in range {start_port}-{end_port}")
     return None
 
@@ -182,11 +182,11 @@ def iter_free_ports(
         Available port numbers
     """
     exclude = exclude_ports or set()
-    
+
     for port in range(start_port, end_port + 1):
         if port in exclude:
             continue
-        
+
         if check_port_available(port, host):
             yield port
 
@@ -219,14 +219,14 @@ def validate_port_for_instance(
         Tuple of (is_valid, message)
     """
     port_info = get_port_info(port, host)
-    
+
     if port_info.is_available:
         return True, f"Port {port} is available"
-    
+
     # Check if it's already owned by this instance (restarting)
     if port_info.instance_name == instance_name:
         return True, f"Port {port} is already owned by this instance"
-    
+
     # Port is in use by something else
     if port_info.instance_name:
         msg = f"Port {port} is in use by instance '{port_info.instance_name}'"
@@ -236,7 +236,7 @@ def validate_port_for_instance(
             msg += f" ({port_info.owner_name})"
     else:
         msg = f"Port {port} is in use by unknown process"
-    
+
     log_event(
         event_type="port_collision",
         message=msg,
@@ -248,7 +248,7 @@ def validate_port_for_instance(
             "owner_instance": port_info.instance_name,
         },
     )
-    
+
     return False, msg
 
 
@@ -277,10 +277,10 @@ def suggest_port_for_instance(
         is_valid, _ = validate_port_for_instance(preferred_port, instance_name, host)
         if is_valid:
             return preferred_port
-    
+
     # Get ports already used by our instances
     used_ports = set(get_used_ports_by_instances().values())
-    
+
     # Find a free port
     return find_free_port(
         start_port=port_range[0],
@@ -309,9 +309,9 @@ def wait_for_port(
         True if port is listening, False if timeout
     """
     import time
-    
+
     start_time = time.time()
-    
+
     while time.time() - start_time < timeout:
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -321,9 +321,9 @@ def wait_for_port(
                     return True
         except socket.error:
             pass
-        
+
         time.sleep(check_interval)
-    
+
     return False
 
 
@@ -346,13 +346,13 @@ def wait_for_port_release(
         True if port is available, False if timeout
     """
     import time
-    
+
     start_time = time.time()
-    
+
     while time.time() - start_time < timeout:
         if check_port_available(port, host):
             return True
-        
+
         time.sleep(check_interval)
-    
+
     return False

@@ -38,7 +38,7 @@ class BinaryConfig(BaseModel):
     bins/registry.json. Version and variant are optional hints
     for resolution when binary_id is not set.
     """
-    
+
     binary_id: Optional[UUID] = Field(
         default=None,
         description="Primary identifier - UUID of installed binary. Joins to registry.json"
@@ -59,7 +59,7 @@ class BinaryConfig(BaseModel):
         default=None,
         description="Expected SHA256 checksum for verification"
     )
-    
+
     @field_validator("sha256")
     @classmethod
     def validate_sha256(cls, v: Optional[str]) -> Optional[str]:
@@ -73,7 +73,7 @@ class BinaryConfig(BaseModel):
 
 class GitHubReleaseInfo(BaseModel):
     """Metadata from GitHub release API."""
-    
+
     tag_name: str = Field(..., description="Release tag (e.g., 'b7572')")
     published_at: Optional[datetime] = Field(default=None, description="Release publish date")
     commit_sha: Optional[str] = Field(default=None, description="Commit SHA of the release")
@@ -87,7 +87,7 @@ class BinaryVersion(BaseModel):
     Stored in bins/registry.json and bins/{uuid}/version.json.
     UUID is the primary key for all lookups and joins.
     """
-    
+
     id: UUID = Field(default_factory=uuid4, description="Primary identifier (UUID4)")
     version: str = Field(..., description="llama.cpp version tag (e.g., 'b7572')")
     variant: str = Field(..., description="Platform/GPU variant (e.g., 'win-vulkan-x64')")
@@ -107,18 +107,18 @@ class BinaryVersion(BaseModel):
         default=None,
         description="Metadata from GitHub release API"
     )
-    
+
     class Config:
         json_encoders = {
             datetime: lambda v: v.isoformat(),
             Path: str,
             UUID: str,
         }
-    
+
     def get_server_executable(self) -> Path:
         """Get path to llama-server executable."""
         return self.path / "llama-server.exe"
-    
+
     def get_cli_executable(self) -> Path:
         """Get path to llama-cli executable."""
         return self.path / "llama-cli.exe"
@@ -131,21 +131,21 @@ class BinaryRegistry(BaseModel):
     Stored in bins/registry.json. Provides lookup methods
     for finding binaries by UUID (primary) or version+variant.
     """
-    
+
     schema_version: str = Field(default="1.0.0", description="Registry schema version")
     binaries: list[BinaryVersion] = Field(default_factory=list, description="Installed binaries")
     default_binary_id: Optional[UUID] = Field(
         default=None,
         description="UUID of default binary (used when config has no binary section)"
     )
-    
+
     class Config:
         json_encoders = {
             datetime: lambda v: v.isoformat(),
             Path: str,
             UUID: str,
         }
-    
+
     def get_by_id(self, binary_id: UUID) -> Optional[BinaryVersion]:
         """
         Get binary by UUID (primary lookup method).
@@ -153,7 +153,7 @@ class BinaryRegistry(BaseModel):
         This is the main join operation from config.json → registry.json.
         """
         return next((b for b in self.binaries if b.id == binary_id), None)
-    
+
     def get_by_version(self, version: str, variant: str) -> Optional[BinaryVersion]:
         """
         Get binary by version and variant (fallback lookup).
@@ -165,28 +165,28 @@ class BinaryRegistry(BaseModel):
             (b for b in self.binaries if b.version == version and b.variant == variant),
             None
         )
-    
+
     def get_all_by_version(self, version: str, variant: str) -> list[BinaryVersion]:
         """Get all binaries matching version and variant."""
         return [b for b in self.binaries if b.version == version and b.variant == variant]
-    
+
     def get_default(self) -> Optional[BinaryVersion]:
         """Get the default binary if set."""
         if self.default_binary_id is None:
             return None
         return self.get_by_id(self.default_binary_id)
-    
+
     def add(self, binary: BinaryVersion) -> None:
         """Add a binary to the registry."""
         # Check for duplicate UUID
         if self.get_by_id(binary.id) is not None:
             raise ValueError(f"Binary with ID {binary.id} already exists")
         self.binaries.append(binary)
-        
+
         # Set as default if first binary
         if self.default_binary_id is None:
             self.default_binary_id = binary.id
-    
+
     def remove(self, binary_id: UUID) -> Optional[BinaryVersion]:
         """Remove a binary from the registry by UUID."""
         binary = self.get_by_id(binary_id)
@@ -196,14 +196,14 @@ class BinaryRegistry(BaseModel):
             if self.default_binary_id == binary_id:
                 self.default_binary_id = self.binaries[0].id if self.binaries else None
         return binary
-    
+
     def set_default(self, binary_id: UUID) -> bool:
         """Set the default binary by UUID."""
         if self.get_by_id(binary_id) is None:
             return False
         self.default_binary_id = binary_id
         return True
-    
+
     def list_versions(self) -> list[tuple[str, str]]:
         """List all unique (version, variant) pairs."""
         seen = set()

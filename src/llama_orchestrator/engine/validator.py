@@ -11,7 +11,6 @@ import logging
 import time
 from dataclasses import dataclass
 from enum import Enum
-from pathlib import Path
 
 import psutil
 
@@ -29,7 +28,7 @@ logger = logging.getLogger(__name__)
 
 class ValidationStatus(Enum):
     """Status of process validation."""
-    
+
     VALID = "valid"           # Process exists and matches expected state
     MISSING = "missing"       # Process doesn't exist
     PID_MISMATCH = "pid_mismatch"  # PID exists but is different process
@@ -40,7 +39,7 @@ class ValidationStatus(Enum):
 @dataclass
 class ProcessValidation:
     """Result of process validation."""
-    
+
     status: ValidationStatus
     expected_pid: int | None
     actual_pid: int | None
@@ -50,11 +49,11 @@ class ProcessValidation:
     process_responding: bool
     last_seen_age_seconds: float | None
     message: str
-    
+
     def is_valid(self) -> bool:
         """Check if process validation passed."""
         return self.status == ValidationStatus.VALID
-    
+
     def needs_cleanup(self) -> bool:
         """Check if process needs cleanup/restart."""
         return self.status in (
@@ -76,28 +75,28 @@ def get_process_info(pid: int) -> dict | None:
     """
     try:
         proc = psutil.Process(pid)
-        
+
         # Get various process attributes safely
         try:
             cmdline = " ".join(proc.cmdline())
         except (psutil.AccessDenied, psutil.ZombieProcess):
             cmdline = proc.name()
-        
+
         try:
             status = proc.status()
         except psutil.AccessDenied:
             status = "unknown"
-        
+
         try:
             create_time = proc.create_time()
         except psutil.AccessDenied:
             create_time = None
-        
+
         try:
             cwd = proc.cwd()
         except (psutil.AccessDenied, psutil.ZombieProcess):
             cwd = None
-        
+
         return {
             "pid": pid,
             "cmdline": cmdline,
@@ -107,7 +106,7 @@ def get_process_info(pid: int) -> dict | None:
             "cwd": cwd,
             "is_running": proc.is_running(),
         }
-        
+
     except psutil.NoSuchProcess:
         return None
     except psutil.AccessDenied:
@@ -136,23 +135,23 @@ def is_llama_server_process(cmdline: str | None, expected_binary: str | None = N
     """
     if not cmdline:
         return False
-    
+
     cmdline_lower = cmdline.lower()
-    
+
     # Check for llama-server binary
     if "llama-server" in cmdline_lower or "llama_server" in cmdline_lower:
         if expected_binary:
             return expected_binary.lower() in cmdline_lower
         return True
-    
+
     # Check for common llama.cpp patterns
     if "llama.cpp" in cmdline_lower:
         return True
-        
+
     # Check for diffusion adapter or runner processes
     if "diffusion_http_adapter" in cmdline_lower or "llama-diffusion" in cmdline_lower:
         return True
-    
+
     return False
 
 
@@ -176,7 +175,7 @@ def validate_process(
     """
     # Load runtime state if needed
     runtime = load_runtime(name)
-    
+
     if runtime is None:
         return ProcessValidation(
             status=ValidationStatus.MISSING,
@@ -189,16 +188,16 @@ def validate_process(
             last_seen_age_seconds=None,
             message=f"No runtime state found for instance '{name}'",
         )
-    
+
     # Use runtime state values if not provided
     if expected_pid is None:
         expected_pid = runtime.pid
     if expected_cmdline is None:
         expected_cmdline = runtime.cmdline
-    
+
     # Check if process exists
     proc_info = get_process_info(expected_pid) if expected_pid else None
-    
+
     if proc_info is None:
         # Process doesn't exist
         log_event(
@@ -208,7 +207,7 @@ def validate_process(
             level="warning",
             meta={"expected_pid": expected_pid},
         )
-        
+
         return ProcessValidation(
             status=ValidationStatus.MISSING,
             expected_pid=expected_pid,
@@ -220,7 +219,7 @@ def validate_process(
             last_seen_age_seconds=_get_last_seen_age(runtime),
             message=f"Process {expected_pid} does not exist",
         )
-    
+
     # Check for zombie process
     if proc_info["status"] == "zombie":
         log_event(
@@ -230,7 +229,7 @@ def validate_process(
             level="warning",
             meta={"pid": expected_pid},
         )
-        
+
         return ProcessValidation(
             status=ValidationStatus.ZOMBIE,
             expected_pid=expected_pid,
@@ -242,7 +241,7 @@ def validate_process(
             last_seen_age_seconds=_get_last_seen_age(runtime),
             message=f"Process {expected_pid} is a zombie",
         )
-    
+
     # Check command line match
     actual_cmdline = proc_info.get("cmdline")
     if expected_cmdline and actual_cmdline:
@@ -258,7 +257,7 @@ def validate_process(
                     "actual_cmdline": actual_cmdline,
                 },
             )
-            
+
             return ProcessValidation(
                 status=ValidationStatus.PID_MISMATCH,
                 expected_pid=expected_pid,
@@ -270,7 +269,7 @@ def validate_process(
                 last_seen_age_seconds=_get_last_seen_age(runtime),
                 message=f"PID {expected_pid} is different process: {actual_cmdline[:100]}",
             )
-    
+
     # Check staleness
     last_seen_age = _get_last_seen_age(runtime)
     if last_seen_age and last_seen_age > stale_threshold_seconds:
@@ -281,7 +280,7 @@ def validate_process(
             level="warning",
             meta={"last_seen_age": last_seen_age},
         )
-        
+
         return ProcessValidation(
             status=ValidationStatus.STALE,
             expected_pid=expected_pid,
@@ -293,7 +292,7 @@ def validate_process(
             last_seen_age_seconds=last_seen_age,
             message=f"Process not seen for {last_seen_age:.0f} seconds",
         )
-    
+
     # Process is valid
     return ProcessValidation(
         status=ValidationStatus.VALID,
@@ -329,27 +328,27 @@ def find_orphaned_processes(known_instances: list[str]) -> list[dict]:
     """
     orphans = []
     known_pids = set()
-    
+
     # Get PIDs of known instances
     for name in known_instances:
         runtime = load_runtime(name)
         if runtime and runtime.pid:
             known_pids.add(runtime.pid)
-    
+
     # Scan all processes
     for proc in psutil.process_iter(['pid', 'name', 'cmdline']):
         try:
             pid = proc.info['pid']
-            
+
             if pid in known_pids:
                 continue
-            
+
             # Get cmdline
             try:
                 cmdline = " ".join(proc.info.get('cmdline') or [])
             except (psutil.AccessDenied, TypeError):
                 continue
-            
+
             # Check if this is a llama-server
             if is_llama_server_process(cmdline):
                 orphans.append({
@@ -357,17 +356,17 @@ def find_orphaned_processes(known_instances: list[str]) -> list[dict]:
                     "cmdline": cmdline,
                     "name": proc.info.get('name'),
                 })
-                
+
                 log_event(
                     event_type="orphan_detected",
                     message=f"Orphaned llama-server process found: PID {pid}",
                     level="warning",
                     meta={"pid": pid, "cmdline": cmdline[:200]},
                 )
-                
+
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             continue
-    
+
     return orphans
 
 
@@ -382,15 +381,14 @@ def cleanup_stale_runtime(name: str, max_age_seconds: float = 3600.0) -> bool:
     Returns:
         True if runtime was cleaned up
     """
-    from llama_orchestrator.engine.state import delete_runtime
-    
+
     runtime = load_runtime(name)
     if runtime is None:
         return False
-    
+
     # Validate the process
     validation = validate_process(name)
-    
+
     if validation.status == ValidationStatus.MISSING:
         # Process is gone, check age
         age = _get_last_seen_age(runtime)
@@ -399,7 +397,7 @@ def cleanup_stale_runtime(name: str, max_age_seconds: float = 3600.0) -> bool:
             runtime.status = InstanceStatus.STOPPED
             runtime.health = HealthStatus.UNKNOWN
             save_runtime(runtime)
-            
+
             log_event(
                 event_type="stale_cleanup",
                 message=f"Marked stale instance '{name}' as stopped",
@@ -408,5 +406,5 @@ def cleanup_stale_runtime(name: str, max_age_seconds: float = 3600.0) -> bool:
                 meta={"age_seconds": age},
             )
             return True
-    
+
     return False

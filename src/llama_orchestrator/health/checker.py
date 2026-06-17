@@ -33,24 +33,24 @@ class HealthCheckStatus(Enum):
 @dataclass
 class HealthCheckResult:
     """Result of a health check."""
-    
+
     status: HealthCheckStatus
     response_time_ms: float | None = None
     error_message: str | None = None
     raw_response: dict | None = None
     slots_idle: int | None = None
     slots_processing: int | None = None
-    
+
     @property
     def is_healthy(self) -> bool:
         """Check if the result indicates a healthy instance."""
         return self.status == HealthCheckStatus.OK
-    
+
     @property
     def is_loading(self) -> bool:
         """Check if the instance is still loading."""
         return self.status == HealthCheckStatus.LOADING
-    
+
     @property
     def to_health_status(self) -> HealthStatus:
         """Convert to HealthStatus enum for state storage."""
@@ -124,19 +124,19 @@ def check_health(
     """
     url = f"http://{host}:{port}{path}"
     start_time = time.perf_counter()
-    
+
     try:
         with httpx.Client(timeout=timeout) as client:
             response = client.get(url)
             elapsed_ms = (time.perf_counter() - start_time) * 1000
-            
+
             if response.status_code == 200:
                 try:
                     data = response.json()
                     # llama.cpp /health returns {"status": "ok"} when ready
                     # or {"status": "loading model"} during startup
                     status_str = data.get("status", "").lower()
-                    
+
                     if status_str == "ok":
                         return HealthCheckResult(
                             status=HealthCheckStatus.OK,
@@ -170,7 +170,7 @@ def check_health(
                 return HealthCheckResult(
                     status=HealthCheckStatus.LOADING,
                     response_time_ms=elapsed_ms,
-                    error_message=f"Service unavailable (HTTP 503)",
+                    error_message="Service unavailable (HTTP 503)",
                 )
             else:
                 return HealthCheckResult(
@@ -178,7 +178,7 @@ def check_health(
                     response_time_ms=elapsed_ms,
                     error_message=f"HTTP {response.status_code}",
                 )
-                
+
     except httpx.ConnectError as e:
         return HealthCheckResult(
             status=HealthCheckStatus.UNREACHABLE,
@@ -217,13 +217,13 @@ def check_health_with_fallback(
     """
     # Try primary endpoint first
     result = check_health(host, port, "/health", timeout)
-    
+
     if result.status == HealthCheckStatus.UNREACHABLE:
         # Try fallback endpoint
         fallback_result = check_health(host, port, "/v1/health", timeout)
         if fallback_result.status != HealthCheckStatus.UNREACHABLE:
             return fallback_result
-    
+
     return result
 
 
@@ -245,7 +245,7 @@ def check_instance_health(name: str, timeout: float | None = None) -> HealthChec
         FileNotFoundError: If instance config doesn't exist
     """
     config = get_instance_config(name)
-    
+
     check_timeout = timeout if timeout is not None else config.healthcheck.timeout
 
     if _uses_legacy_http_flow(config):

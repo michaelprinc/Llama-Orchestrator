@@ -28,7 +28,7 @@ VERSION_FILENAME = "version.json"
 
 class RegistryError(Exception):
     """Error during registry operations."""
-    
+
     def __init__(self, message: str, cause: Optional[Exception] = None):
         self.message = message
         self.cause = cause
@@ -61,19 +61,19 @@ def load_registry(bins_dir: Path) -> BinaryRegistry:
         RegistryError: If registry file is corrupted
     """
     registry_path = get_registry_path(bins_dir)
-    
+
     if not registry_path.exists():
         logger.debug(f"Registry not found at {registry_path}, creating empty registry")
         return BinaryRegistry()
-    
+
     try:
         with open(registry_path, encoding="utf-8") as f:
             data = json.load(f)
-        
+
         registry = BinaryRegistry.model_validate(data)
         logger.debug(f"Loaded registry with {len(registry.binaries)} binaries")
         return registry
-        
+
     except json.JSONDecodeError as e:
         raise RegistryError(f"Invalid JSON in registry: {e}", cause=e) from e
     except Exception as e:
@@ -95,12 +95,12 @@ def save_registry(bins_dir: Path, registry: BinaryRegistry) -> None:
     """
     bins_dir.mkdir(parents=True, exist_ok=True)
     registry_path = get_registry_path(bins_dir)
-    
+
     try:
         # Serialize to JSON
         data = registry.model_dump(mode="json")
         json_str = json.dumps(data, indent=2, default=str)
-        
+
         # Atomic write: write to temp file, then rename
         with tempfile.NamedTemporaryFile(
             mode="w",
@@ -111,11 +111,11 @@ def save_registry(bins_dir: Path, registry: BinaryRegistry) -> None:
         ) as f:
             f.write(json_str)
             temp_path = Path(f.name)
-        
+
         # Rename (atomic on most filesystems)
         shutil.move(str(temp_path), str(registry_path))
         logger.debug(f"Saved registry with {len(registry.binaries)} binaries")
-        
+
     except Exception as e:
         # Clean up temp file if it exists
         if "temp_path" in locals() and temp_path.exists():
@@ -136,18 +136,18 @@ def save_version_metadata(binary: BinaryVersion, bins_dir: Path) -> None:
     """
     binary_dir = bins_dir / str(binary.id)
     version_path = get_version_path(binary_dir)
-    
+
     try:
         binary_dir.mkdir(parents=True, exist_ok=True)
-        
+
         data = binary.model_dump(mode="json")
         json_str = json.dumps(data, indent=2, default=str)
-        
+
         with open(version_path, "w", encoding="utf-8") as f:
             f.write(json_str)
-        
+
         logger.debug(f"Saved version metadata to {version_path}")
-        
+
     except Exception as e:
         raise RegistryError(f"Failed to save version metadata: {e}", cause=e) from e
 
@@ -163,16 +163,16 @@ def load_version_metadata(binary_dir: Path) -> Optional[BinaryVersion]:
         BinaryVersion model or None if not found
     """
     version_path = get_version_path(binary_dir)
-    
+
     if not version_path.exists():
         return None
-    
+
     try:
         with open(version_path, encoding="utf-8") as f:
             data = json.load(f)
-        
+
         return BinaryVersion.model_validate(data)
-        
+
     except Exception as e:
         logger.warning(f"Failed to load version metadata from {version_path}: {e}")
         return None
@@ -185,7 +185,7 @@ class BinaryRegistryManager:
     Provides a higher-level interface for CRUD operations on the registry.
     All lookups use UUID as the primary key.
     """
-    
+
     def __init__(self, bins_dir: Path):
         """
         Initialize registry manager.
@@ -195,24 +195,24 @@ class BinaryRegistryManager:
         """
         self.bins_dir = bins_dir
         self._registry: Optional[BinaryRegistry] = None
-    
+
     @property
     def registry(self) -> BinaryRegistry:
         """Get the registry, loading if necessary."""
         if self._registry is None:
             self._registry = load_registry(self.bins_dir)
         return self._registry
-    
+
     def reload(self) -> BinaryRegistry:
         """Force reload of registry from disk."""
         self._registry = load_registry(self.bins_dir)
         return self._registry
-    
+
     def save(self) -> None:
         """Save current registry to disk."""
         if self._registry is not None:
             save_registry(self.bins_dir, self._registry)
-    
+
     def get_by_id(self, binary_id: UUID) -> Optional[BinaryVersion]:
         """
         Get binary by UUID (primary lookup).
@@ -224,7 +224,7 @@ class BinaryRegistryManager:
             BinaryVersion or None if not found
         """
         return self.registry.get_by_id(binary_id)
-    
+
     def get_by_version(self, version: str, variant: str) -> Optional[BinaryVersion]:
         """
         Get binary by version and variant (fallback lookup).
@@ -237,11 +237,11 @@ class BinaryRegistryManager:
             BinaryVersion or None if not found
         """
         return self.registry.get_by_version(version, variant)
-    
+
     def get_default(self) -> Optional[BinaryVersion]:
         """Get the default binary if set."""
         return self.registry.get_default()
-    
+
     def add(self, binary: BinaryVersion) -> None:
         """
         Add a binary to the registry.
@@ -254,7 +254,7 @@ class BinaryRegistryManager:
         self.registry.add(binary)
         save_version_metadata(binary, self.bins_dir)
         self.save()
-    
+
     def remove(self, binary_id: UUID) -> Optional[BinaryVersion]:
         """
         Remove a binary from the registry.
@@ -271,7 +271,7 @@ class BinaryRegistryManager:
         if binary is not None:
             self.save()
         return binary
-    
+
     def set_default(self, binary_id: UUID) -> bool:
         """
         Set the default binary.
@@ -286,23 +286,23 @@ class BinaryRegistryManager:
         if success:
             self.save()
         return success
-    
+
     def list_all(self) -> list[BinaryVersion]:
         """List all installed binaries."""
         return list(self.registry.binaries)
-    
+
     def list_versions(self) -> list[tuple[str, str]]:
         """List all unique (version, variant) pairs."""
         return self.registry.list_versions()
-    
+
     def exists(self, binary_id: UUID) -> bool:
         """Check if a binary exists by UUID."""
         return self.get_by_id(binary_id) is not None
-    
+
     def count(self) -> int:
         """Get the number of installed binaries."""
         return len(self.registry.binaries)
-    
+
     def get_binary_path(self, binary_id: UUID) -> Optional[Path]:
         """
         Get the full path to a binary directory.
@@ -317,7 +317,7 @@ class BinaryRegistryManager:
         if binary is None:
             return None
         return self.bins_dir / str(binary.id)
-    
+
     def get_server_path(self, binary_id: UUID) -> Optional[Path]:
         """
         Get the path to llama-server.exe for a binary.
@@ -332,7 +332,7 @@ class BinaryRegistryManager:
         if binary_path is None:
             return None
         return binary_path / "llama-server.exe"
-    
+
     def verify_binary_exists(self, binary_id: UUID) -> bool:
         """
         Check if binary directory and executable exist on disk.

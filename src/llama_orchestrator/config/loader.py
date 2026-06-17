@@ -39,7 +39,7 @@ def _format_instance_no(value: int) -> str:
 
 class ConfigLoadError(Exception):
     """Raised when configuration loading fails."""
-    
+
     def __init__(self, path: Path, message: str, cause: Exception | None = None):
         self.path = path
         self.message = message
@@ -102,16 +102,16 @@ def get_llama_server_path(config: "InstanceConfig | None" = None) -> Path:
         FileNotFoundError: If no valid binary found
     """
     from llama_orchestrator.binaries import get_binary_manager
-    
+
     project_root = get_project_root()
-    
+
     # Try new bins/ structure
     if config is not None and config.binary is not None:
         manager = get_binary_manager(project_root)
         server_path = manager.resolve_server_path(config.binary)
         if server_path is not None and server_path.exists():
             return server_path
-    
+
     # Try default binary
     try:
         manager = get_binary_manager(project_root)
@@ -122,12 +122,12 @@ def get_llama_server_path(config: "InstanceConfig | None" = None) -> Path:
                 return server_path
     except Exception:
         pass  # Fall through to legacy
-    
+
     # Fall back to legacy bin/
     legacy_path = get_bin_dir() / "llama-server.exe"
     if legacy_path.exists():
         return legacy_path
-    
+
     raise FileNotFoundError("No llama-server.exe found in bins/ or legacy bin/")
 
 
@@ -431,13 +431,13 @@ def load_config(path: Path, *, persist_backfill: bool = True) -> InstanceConfig:
         ConfigLoadError: If file cannot be read or validation fails
     """
     path = Path(path).resolve()
-    
+
     if not path.exists():
         raise ConfigLoadError(path, "Configuration file not found")
-    
+
     if not path.is_file():
         raise ConfigLoadError(path, "Path is not a file")
-    
+
     try:
         with open(path, encoding="utf-8") as f:
             data = json.load(f)
@@ -445,7 +445,7 @@ def load_config(path: Path, *, persist_backfill: bool = True) -> InstanceConfig:
         raise ConfigLoadError(path, f"Invalid JSON: {e}", e) from e
     except OSError as e:
         raise ConfigLoadError(path, f"Cannot read file: {e}", e) from e
-    
+
     try:
         config = InstanceConfig.model_validate(data)
     except ValidationError as e:
@@ -459,7 +459,7 @@ def load_config(path: Path, *, persist_backfill: bool = True) -> InstanceConfig:
         raise ConfigLoadError(
             path, f"Validation failed:\n{error_str}", e
         ) from e
-    
+
     return _prepare_loaded_config(config, data, path, persist_backfill=persist_backfill)
 
 
@@ -516,7 +516,7 @@ def load_all_instances() -> dict[str, InstanceConfig]:
     """
     _repair_duplicate_instance_numbers()
     instances: dict[str, InstanceConfig] = {}
-    
+
     seen_uids: dict[str, Path] = {}
     seen_numbers: dict[str, Path] = {}
     for config_path in _iter_config_paths():
@@ -535,7 +535,7 @@ def load_all_instances() -> dict[str, InstanceConfig]:
         seen_uids[config.instance_uid] = config_path
         seen_numbers[config.instance_no] = config_path
         instances[name] = config
-    
+
     return instances
 
 

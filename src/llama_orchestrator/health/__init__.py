@@ -12,6 +12,16 @@ from llama_orchestrator.health.backoff import (
     calculate_jittered_delay,
     with_jitter,
 )
+from llama_orchestrator.health.client_pool import (
+    AsyncHealthConfig,
+    AsyncHealthMonitor,
+    AsyncInstanceHealthState,
+    HealthClientPool,
+    check_all_async,
+    check_one_async,
+    close_global_pool,
+    get_global_pool,
+)
 from llama_orchestrator.health.checker import (
     HealthCheckResult,
     check_health,
@@ -47,6 +57,15 @@ from llama_orchestrator.health.probes import (
 )
 
 __all__ = [
+    # Async health check client pool
+    "AsyncHealthConfig",
+    "AsyncHealthMonitor",
+    "AsyncInstanceHealthState",
+    "HealthClientPool",
+    "check_all_async",
+    "check_one_async",
+    "close_global_pool",
+    "get_global_pool",
     # Health checking
     "HealthCheckResult",
     "check_health",

@@ -18,7 +18,7 @@ import shutil
 import sqlite3
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterator
@@ -61,7 +61,7 @@ class DesiredState(Enum):
 @dataclass
 class RuntimeState:
     """Extended runtime state for V2 schema."""
-    
+
     name: str
     pid: int | None = None
     port: int | None = None
@@ -80,7 +80,7 @@ class RuntimeState:
 @dataclass
 class InstanceState:
     """Runtime state of an instance."""
-    
+
     name: str
     pid: int | None = None
     status: InstanceStatus = InstanceStatus.STOPPED
@@ -90,21 +90,21 @@ class InstanceState:
     restart_count: int = 0
     config_hash: str = ""
     error_message: str = ""
-    
+
     @property
     def uptime(self) -> float | None:
         """Get uptime in seconds, or None if not running."""
         if self.start_time is None:
             return None
         return time.time() - self.start_time
-    
+
     @property
     def uptime_str(self) -> str:
         """Get formatted uptime string."""
         uptime = self.uptime
         if uptime is None:
             return "-"
-        
+
         if uptime < 60:
             return f"{int(uptime)}s"
         elif uptime < 3600:
@@ -113,7 +113,7 @@ class InstanceState:
             hours = int(uptime // 3600)
             minutes = int((uptime % 3600) // 60)
             return f"{hours}h {minutes}m"
-    
+
     @property
     def status_symbol(self) -> str:
         """Get status indicator symbol."""
@@ -124,7 +124,7 @@ class InstanceState:
             InstanceStatus.STOPPING: "~",
             InstanceStatus.ERROR: "X",
         }.get(self.status, "?")
-    
+
     @property
     def health_symbol(self) -> str:
         """Get health indicator symbol."""
@@ -173,11 +173,11 @@ def get_db_connection() -> Iterator[sqlite3.Connection]:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), timeout=10.0)
     conn.row_factory = sqlite3.Row
-    
+
     # Enable WAL mode for better concurrency
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
-    
+
     try:
         yield conn
     finally:
@@ -189,10 +189,10 @@ def init_db() -> None:
     with get_db_connection() as conn:
         # Check and perform migration if needed
         current_version = _get_schema_version(conn)
-        
+
         if current_version < SCHEMA_VERSION:
             _migrate_schema(conn, current_version, SCHEMA_VERSION)
-        
+
         # V1 table (kept for backward compatibility)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS instances (
@@ -211,7 +211,7 @@ def init_db() -> None:
                 updated_at REAL NOT NULL DEFAULT (strftime('%s', 'now'))
             )
         """)
-        
+
         # V2: Runtime table (extended process state)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS runtime (
@@ -233,7 +233,7 @@ def init_db() -> None:
                 last_error TEXT NOT NULL DEFAULT ''
             )
         """)
-        
+
         # V2: Events table (audit log)
         conn.execute("""
             CREATE TABLE IF NOT EXISTS events (
@@ -247,17 +247,17 @@ def init_db() -> None:
                 meta_json TEXT
             )
         """)
-        
+
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_events_instance 
             ON events(instance_name, ts DESC)
         """)
-        
+
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_events_level 
             ON events(level, ts DESC)
         """)
-        
+
         # V1: Health history table
         conn.execute("""
             CREATE TABLE IF NOT EXISTS health_history (
@@ -280,7 +280,7 @@ def init_db() -> None:
         _ensure_column(conn, "runtime", "display_name", "TEXT")
         _ensure_column(conn, "events", "instance_uid", "TEXT")
         _ensure_column(conn, "health_history", "instance_uid", "TEXT")
-        
+
         conn.execute("""
             CREATE INDEX IF NOT EXISTS idx_health_history_instance 
             ON health_history(instance_name, checked_at DESC)
@@ -289,7 +289,7 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_runtime_uid ON runtime(instance_uid)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_events_uid ON events(instance_uid, ts DESC)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_health_history_uid ON health_history(instance_uid, checked_at DESC)")
-        
+
         # V2: Schema info table
         conn.execute("""
             CREATE TABLE IF NOT EXISTS schema_info (
@@ -297,13 +297,13 @@ def init_db() -> None:
                 value TEXT NOT NULL
             )
         """)
-        
+
         # Update schema version
         conn.execute("""
             INSERT OR REPLACE INTO schema_info (key, value)
             VALUES ('version', ?)
         """, (str(SCHEMA_VERSION),))
-        
+
         conn.commit()
 
 
@@ -324,7 +324,7 @@ def _backup_database() -> Path | None:
     db_path = get_db_path()
     if not db_path.exists():
         return None
-    
+
     backup_path = db_path.with_suffix(f".sqlite.v{_get_schema_version_from_file()}.backup")
     shutil.copy2(db_path, backup_path)
     logger.info(f"Created database backup at {backup_path}")
@@ -336,7 +336,7 @@ def _get_schema_version_from_file() -> int:
     db_path = get_db_path()
     if not db_path.exists():
         return 0
-    
+
     try:
         conn = sqlite3.connect(str(db_path), timeout=5.0)
         try:
@@ -355,10 +355,10 @@ def _get_schema_version_from_file() -> int:
 def _migrate_schema(conn: sqlite3.Connection, from_version: int, to_version: int) -> None:
     """Migrate database schema between versions."""
     logger.info(f"Migrating database schema from v{from_version} to v{to_version}")
-    
+
     # Backup before migration
     _backup_database()
-    
+
     if from_version < 2 and to_version >= 2:
         _migrate_v1_to_v2(conn)
     if from_version < 3 and to_version >= 3:
@@ -368,7 +368,7 @@ def _migrate_schema(conn: sqlite3.Connection, from_version: int, to_version: int
 def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
     """Migrate from V1 to V2 schema."""
     logger.info("Migrating V1 -> V2: Adding runtime and events tables")
-    
+
     # V2 tables will be created by init_db
     # Copy existing instance data to runtime table if instances table exists
     try:
@@ -391,7 +391,7 @@ def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
         logger.info(f"Migrated {len(rows)} instance records to runtime table")
     except sqlite3.OperationalError as e:
         logger.warning(f"Could not migrate instances: {e}")
-    
+
     conn.commit()
 
 
@@ -455,10 +455,10 @@ def load_state(name: str) -> InstanceState | None:
         row = conn.execute(
             "SELECT * FROM instances WHERE name = ?", (name,)
         ).fetchone()
-        
+
         if row is None:
             return None
-        
+
         return InstanceState(
             name=row["name"],
             pid=row["pid"],
@@ -475,10 +475,10 @@ def load_state(name: str) -> InstanceState | None:
 def load_all_states() -> dict[str, InstanceState]:
     """Load all instance states from database."""
     states = {}
-    
+
     with get_db_connection() as conn:
         rows = conn.execute("SELECT * FROM instances ORDER BY name").fetchall()
-        
+
         for row in rows:
             states[row["name"]] = InstanceState(
                 name=row["name"],
@@ -491,7 +491,7 @@ def load_all_states() -> dict[str, InstanceState]:
                 config_hash=row["config_hash"],
                 error_message=row["error_message"],
             )
-    
+
     return states
 
 
@@ -516,14 +516,14 @@ def record_health_check(
             INSERT INTO health_history (instance_name, instance_uid, health, response_time_ms, error_message)
             VALUES (?, ?, ?, ?, ?)
         """, (name, instance_uid, health.value, response_time_ms, error_message))
-        
+
         # Also update the main instance state
         conn.execute("""
             UPDATE instances 
             SET health = ?, last_health_check = ?, updated_at = ?
             WHERE name = ?
         """, (health.value, time.time(), time.time(), name))
-        
+
         conn.commit()
 
 
@@ -537,7 +537,7 @@ def get_health_history(name: str, limit: int = 10) -> list[dict]:
             ORDER BY checked_at DESC
             LIMIT ?
         """, (name, limit)).fetchall()
-        
+
         return [dict(row) for row in rows]
 
 
@@ -599,10 +599,10 @@ def load_runtime(name: str) -> RuntimeState | None:
         row = conn.execute(
             "SELECT * FROM runtime WHERE name = ?", (name,)
         ).fetchone()
-        
+
         if row is None:
             return None
-        
+
         return RuntimeState(
             name=row["name"],
             pid=row["pid"],
@@ -623,10 +623,10 @@ def load_runtime(name: str) -> RuntimeState | None:
 def load_all_runtime() -> dict[str, RuntimeState]:
     """Load all runtime states from V2 runtime table."""
     states = {}
-    
+
     with get_db_connection() as conn:
         rows = conn.execute("SELECT * FROM runtime ORDER BY name").fetchall()
-        
+
         for row in rows:
             states[row["name"]] = RuntimeState(
                 name=row["name"],
@@ -643,7 +643,7 @@ def load_all_runtime() -> dict[str, RuntimeState]:
                 last_exit_code=row["last_exit_code"],
                 last_error=row["last_error"],
             )
-    
+
     return states
 
 
@@ -728,20 +728,20 @@ def get_recent_events(
     with get_db_connection() as conn:
         query = "SELECT * FROM events WHERE 1=1"
         params: list = []
-        
+
         if instance_name:
             query += " AND instance_name = ?"
             params.append(instance_name)
-        
+
         if level:
             query += " AND level = ?"
             params.append(level)
-        
+
         query += " ORDER BY ts DESC LIMIT ?"
         params.append(limit)
-        
+
         rows = conn.execute(query, params).fetchall()
-        
+
         events = []
         for row in rows:
             event = dict(row)
@@ -754,7 +754,7 @@ def get_recent_events(
                 event["meta"] = {}
             del event["meta_json"]
             events.append(event)
-        
+
         return events
 
 
@@ -769,7 +769,7 @@ def cleanup_old_events(retention_days: int = 7) -> int:
         Number of events deleted
     """
     cutoff = time.time() - (retention_days * 86400)
-    
+
     with get_db_connection() as conn:
         cursor = conn.execute(
             "DELETE FROM events WHERE ts < ?",

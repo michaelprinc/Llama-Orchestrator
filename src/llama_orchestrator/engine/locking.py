@@ -34,7 +34,7 @@ class InstanceLockManager:
     Uses simple file-based locking with PID files to prevent race conditions
     when multiple processes try to operate on the same instance.
     """
-    
+
     def __init__(self, lock_dir: Path | None = None):
         """
         Initialize the lock manager.
@@ -44,39 +44,39 @@ class InstanceLockManager:
         """
         if lock_dir is None:
             lock_dir = Path.home() / ".llama-orchestrator" / "locks"
-        
+
         self.lock_dir = Path(lock_dir)
         self.lock_dir.mkdir(parents=True, exist_ok=True)
         self._held_locks: dict[str, Path] = {}
-    
+
     def _get_lock_path(self, name: str) -> Path:
         """Get path to lock file for an instance."""
         # Sanitize name for filesystem
         safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
         return self.lock_dir / f"{safe_name}.lock"
-    
+
     def _read_lock_info(self, lock_path: Path) -> dict | None:
         """Read lock info from file."""
         try:
             if not lock_path.exists():
                 return None
-            
+
             content = lock_path.read_text().strip()
             if not content:
                 return None
-            
+
             lines = content.split("\n")
             info = {}
             for line in lines:
                 if "=" in line:
                     key, value = line.split("=", 1)
                     info[key.strip()] = value.strip()
-            
+
             return info if info else None
-            
+
         except (OSError, IOError):
             return None
-    
+
     def _is_lock_stale(self, lock_path: Path, stale_seconds: float = 300.0) -> bool:
         """
         Check if a lock file is stale.
@@ -86,10 +86,10 @@ class InstanceLockManager:
         2. The lock file is older than stale_seconds
         """
         info = self._read_lock_info(lock_path)
-        
+
         if info is None:
             return True
-        
+
         # Check if owning process still exists
         try:
             pid = int(info.get("pid", 0))
@@ -100,7 +100,7 @@ class InstanceLockManager:
                     return True
         except (ValueError, ImportError):
             pass
-        
+
         # Check lock age
         try:
             created = float(info.get("created", 0))
@@ -109,16 +109,16 @@ class InstanceLockManager:
                 return True
         except ValueError:
             pass
-        
+
         return False
-    
+
     def _write_lock_file(self, lock_path: Path, operation: str) -> None:
         """Write lock file with current process info."""
         content = f"pid={os.getpid()}\n"
         content += f"created={time.time()}\n"
         content += f"operation={operation}\n"
         lock_path.write_text(content)
-    
+
     def _remove_lock_file(self, lock_path: Path) -> None:
         """Remove lock file if it exists."""
         try:
@@ -126,7 +126,7 @@ class InstanceLockManager:
                 lock_path.unlink()
         except (OSError, IOError) as e:
             logger.warning(f"Failed to remove lock file {lock_path}: {e}")
-    
+
     def acquire(
         self,
         name: str,
@@ -153,13 +153,13 @@ class InstanceLockManager:
         """
         lock_path = self._get_lock_path(name)
         start_time = time.time()
-        
+
         while True:
             # Check if we already hold this lock
             if name in self._held_locks:
                 logger.debug(f"Already holding lock for '{name}'")
                 return True
-            
+
             # Check if lock file exists
             if not lock_path.exists():
                 # Try to create lock file
@@ -176,7 +176,7 @@ class InstanceLockManager:
                     logger.info(f"Removing stale lock for '{name}'")
                     self._remove_lock_file(lock_path)
                     continue
-                
+
                 # Lock is held by another process
                 info = self._read_lock_info(lock_path)
                 owner_pid = info.get("pid", "unknown") if info else "unknown"
@@ -185,17 +185,17 @@ class InstanceLockManager:
                     f"Lock for '{name}' held by PID {owner_pid} "
                     f"(operation: {owner_op})"
                 )
-            
+
             # Check timeout
             elapsed = time.time() - start_time
             if elapsed >= timeout:
                 raise LockTimeoutError(
                     f"Timeout waiting for lock on '{name}' after {elapsed:.1f}s"
                 )
-            
+
             # Wait and retry
             time.sleep(retry_interval)
-    
+
     def release(self, name: str) -> bool:
         """
         Release a lock for an instance.
@@ -209,9 +209,9 @@ class InstanceLockManager:
         if name not in self._held_locks:
             logger.debug(f"Not holding lock for '{name}'")
             return False
-        
+
         lock_path = self._held_locks.pop(name)
-        
+
         # Verify we own the lock before removing
         info = self._read_lock_info(lock_path)
         if info:
@@ -224,29 +224,29 @@ class InstanceLockManager:
                     return False
             except ValueError:
                 pass
-        
+
         self._remove_lock_file(lock_path)
         logger.debug(f"Released lock for '{name}'")
         return True
-    
+
     def is_locked(self, name: str) -> bool:
         """Check if an instance is locked."""
         lock_path = self._get_lock_path(name)
-        
+
         if not lock_path.exists():
             return False
-        
+
         # Check if lock is stale
         if self._is_lock_stale(lock_path):
             return False
-        
+
         return True
-    
+
     def get_lock_info(self, name: str) -> dict | None:
         """Get info about who holds a lock."""
         lock_path = self._get_lock_path(name)
         return self._read_lock_info(lock_path)
-    
+
     def cleanup_stale_locks(self, stale_timeout: float = 300.0) -> int:
         """
         Remove all stale lock files.
@@ -255,13 +255,13 @@ class InstanceLockManager:
             Number of stale locks removed
         """
         removed = 0
-        
+
         for lock_file in self.lock_dir.glob("*.lock"):
             if self._is_lock_stale(lock_file, stale_timeout):
                 self._remove_lock_file(lock_file)
                 removed += 1
                 logger.info(f"Removed stale lock: {lock_file.name}")
-        
+
         return removed
 
 
@@ -300,7 +300,7 @@ def instance_lock(
         LockTimeoutError: If lock cannot be acquired within timeout
     """
     manager = get_lock_manager()
-    
+
     try:
         manager.acquire(name, operation, timeout)
         yield
@@ -326,7 +326,7 @@ def multi_instance_lock(
     """
     manager = get_lock_manager()
     acquired: list[str] = []
-    
+
     try:
         # Acquire in sorted order to prevent deadlocks
         for name in sorted(names):

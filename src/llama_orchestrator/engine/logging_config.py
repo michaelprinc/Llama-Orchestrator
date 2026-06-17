@@ -29,7 +29,7 @@ DEFAULT_DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 @dataclass
 class LogConfig:
     """Configuration for instance logging."""
-    
+
     max_bytes: int = DEFAULT_MAX_BYTES
     backup_count: int = DEFAULT_BACKUP_COUNT
     log_format: str = DEFAULT_LOG_FORMAT
@@ -44,7 +44,7 @@ class InstanceLogHandler:
     Provides separate handlers for stdout and stderr with
     automatic rotation based on file size.
     """
-    
+
     def __init__(
         self,
         name: str,
@@ -61,32 +61,32 @@ class InstanceLogHandler:
         """
         self.name = name
         self.config = config or LogConfig()
-        
+
         if log_dir is None:
             log_dir = get_logs_dir() / name
-        
+
         self.log_dir = Path(log_dir)
         self.log_dir.mkdir(parents=True, exist_ok=True)
-        
+
         self._stdout_handler: RotatingFileHandler | None = None
         self._stderr_handler: RotatingFileHandler | None = None
         self._stdout_path: Path | None = None
         self._stderr_path: Path | None = None
-    
+
     @property
     def stdout_path(self) -> Path:
         """Path to stdout log file."""
         if self._stdout_path is None:
             self._stdout_path = self.log_dir / "stdout.log"
         return self._stdout_path
-    
+
     @property
     def stderr_path(self) -> Path:
         """Path to stderr log file."""
         if self._stderr_path is None:
             self._stderr_path = self.log_dir / "stderr.log"
         return self._stderr_path
-    
+
     def get_stdout_handler(self) -> RotatingFileHandler:
         """Get or create rotating handler for stdout."""
         if self._stdout_handler is None:
@@ -98,7 +98,7 @@ class InstanceLogHandler:
             )
             # No formatter for raw process output
         return self._stdout_handler
-    
+
     def get_stderr_handler(self) -> RotatingFileHandler:
         """Get or create rotating handler for stderr."""
         if self._stderr_handler is None:
@@ -109,7 +109,7 @@ class InstanceLogHandler:
                 encoding=self.config.encoding,
             )
         return self._stderr_handler
-    
+
     def get_file_handles(self) -> tuple[TextIO, TextIO]:
         """
         Get file handles for subprocess stdout/stderr.
@@ -120,7 +120,7 @@ class InstanceLogHandler:
         # Ensure handlers are created (creates files if needed)
         self.get_stdout_handler()
         self.get_stderr_handler()
-        
+
         # Open files for subprocess
         stdout_file = open(
             self.stdout_path, "a",
@@ -132,16 +132,16 @@ class InstanceLogHandler:
             encoding=self.config.encoding,
             buffering=1,
         )
-        
+
         return stdout_file, stderr_file
-    
+
     def rotate_if_needed(self) -> None:
         """Force rotation check on handlers."""
         if self._stdout_handler:
             self._stdout_handler.doRollover()
         if self._stderr_handler:
             self._stderr_handler.doRollover()
-    
+
     def close(self) -> None:
         """Close all handlers."""
         if self._stdout_handler:
@@ -150,7 +150,7 @@ class InstanceLogHandler:
         if self._stderr_handler:
             self._stderr_handler.close()
             self._stderr_handler = None
-    
+
     def get_log_files(self) -> dict[str, list[Path]]:
         """
         Get all log files for this instance.
@@ -159,23 +159,23 @@ class InstanceLogHandler:
             Dictionary with 'stdout' and 'stderr' keys containing lists of log paths
         """
         result = {"stdout": [], "stderr": []}
-        
+
         # Current logs
         if self.stdout_path.exists():
             result["stdout"].append(self.stdout_path)
         if self.stderr_path.exists():
             result["stderr"].append(self.stderr_path)
-        
+
         # Rotated logs (stdout.log.1, stdout.log.2, etc.)
         for i in range(1, self.config.backup_count + 1):
             stdout_backup = self.log_dir / f"stdout.log.{i}"
             stderr_backup = self.log_dir / f"stderr.log.{i}"
-            
+
             if stdout_backup.exists():
                 result["stdout"].append(stdout_backup)
             if stderr_backup.exists():
                 result["stderr"].append(stderr_backup)
-        
+
         return result
 
 
@@ -194,22 +194,22 @@ def setup_orchestrator_logging(
     """
     root_logger = logging.getLogger("llama_orchestrator")
     root_logger.setLevel(level)
-    
+
     # Clear existing handlers
     root_logger.handlers.clear()
-    
+
     formatter = logging.Formatter(
         DEFAULT_LOG_FORMAT,
         datefmt=DEFAULT_DATE_FORMAT,
     )
-    
+
     # Console handler
     if console:
         console_handler = logging.StreamHandler(sys.stderr)
         console_handler.setFormatter(formatter)
         console_handler.setLevel(level)
         root_logger.addHandler(console_handler)
-    
+
     # File handler
     if log_file:
         log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -259,12 +259,12 @@ def cleanup_old_logs(name: str, keep_rotated: int = 3) -> int:
         Number of files removed
     """
     log_dir = get_logs_dir() / name
-    
+
     if not log_dir.exists():
         return 0
-    
+
     removed = 0
-    
+
     for log_type in ["stdout", "stderr"]:
         # Find rotated logs (e.g., stdout.log.1, stdout.log.2, ...)
         for i in range(keep_rotated + 1, 100):  # Check up to .99
@@ -278,5 +278,5 @@ def cleanup_old_logs(name: str, keep_rotated: int = 3) -> int:
                     logger.warning(f"Failed to remove {rotated}: {e}")
             else:
                 break  # No more rotated logs
-    
+
     return removed

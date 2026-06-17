@@ -35,7 +35,6 @@ from llama_orchestrator.engine.state import (
     load_runtime,
     log_event,
     save_runtime,
-    delete_state,
     load_state,
     save_state,
 )
@@ -46,7 +45,7 @@ if TYPE_CHECKING:
 
 class ProcessError(Exception):
     """Error during process management."""
-    
+
     def __init__(self, instance: str, message: str, cause: Exception | None = None):
         self.instance = instance
         self.message = message
@@ -296,10 +295,10 @@ def get_log_files(name: str) -> tuple[Path, Path]:
     logs_dir = get_logs_dir()
     instance_log_dir = logs_dir / name
     instance_log_dir.mkdir(parents=True, exist_ok=True)
-    
+
     stdout_log = instance_log_dir / "stdout.log"
     stderr_log = instance_log_dir / "stderr.log"
-    
+
     return stdout_log, stderr_log
 
 
@@ -346,36 +345,36 @@ def kill_process_tree(pid: int, timeout: float = 10.0) -> bool:
         parent = psutil.Process(pid)
     except psutil.NoSuchProcess:
         return False
-    
+
     # Get all children first
     try:
         children = parent.children(recursive=True)
     except psutil.NoSuchProcess:
         children = []
-    
+
     # Terminate parent first
     try:
         parent.terminate()
     except psutil.NoSuchProcess:
         pass
-    
+
     # Terminate all children
     for child in children:
         try:
             child.terminate()
         except psutil.NoSuchProcess:
             pass
-    
+
     # Wait for graceful shutdown
     gone, alive = psutil.wait_procs([parent] + children, timeout=timeout)
-    
+
     # Force kill any remaining
     for proc in alive:
         try:
             proc.kill()
         except psutil.NoSuchProcess:
             pass
-    
+
     return True
 
 
@@ -394,7 +393,7 @@ def check_stale_state(state: InstanceState) -> InstanceState:
             state.error_message = "Process died unexpectedly"
             save_state(state)
             _sync_runtime_from_state(state, last_error=state.error_message)
-    
+
     return state
 
 
@@ -706,16 +705,16 @@ def restart_instance(
     restart_count = 0
     if state is not None:
         restart_count = state.restart_count + 1
-    
+
     # Stop if running
     try:
         stop_instance(name, force=force)
     except ProcessError:
         pass  # May not be running
-    
+
     # Small delay between stop and start
     time.sleep(0.5)
-    
+
     # Start
     if config_override is None:
         state = start_instance(name, wait_for_ready=wait_for_ready)
@@ -730,7 +729,7 @@ def restart_instance(
         instance_name=name,
         meta={"restart_count": restart_count},
     )
-    
+
     return state
 
 
@@ -746,7 +745,7 @@ def get_instance_status(name: str) -> InstanceState:
         if runtime is None:
             return InstanceState(name=name, status=InstanceStatus.STOPPED)
         state = _runtime_to_state(runtime)
-    
+
     return check_stale_state(state)
 
 
@@ -758,21 +757,21 @@ def list_instances() -> dict[str, InstanceState]:
         Dictionary of instance name -> state
     """
     from llama_orchestrator.config import discover_instances
-    
+
     states = load_all_states()
     runtime_states = load_all_runtime()
 
     for name, runtime in runtime_states.items():
         if name not in states:
             states[name] = _runtime_to_state(runtime)
-    
+
     # Also include instances that have configs but no state yet
     for name, _ in discover_instances():
         if name not in states:
             states[name] = InstanceState(name=name, status=InstanceStatus.STOPPED)
-    
+
     # Check for stale states
     for name, state in states.items():
         states[name] = check_stale_state(state)
-    
+
     return states

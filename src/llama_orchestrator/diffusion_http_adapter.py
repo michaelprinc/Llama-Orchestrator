@@ -152,17 +152,17 @@ class AdapterHandler(BaseHTTPRequestHandler):
             content, stats = self.runner.complete(messages, max_tokens, seed)
             prompt_tokens = int(stats.get("prompt_n", 0))
             completion_tokens = int(stats.get("predicted_n", 0))
-            
+
             if stream:
                 self.send_response(200)
                 self.send_header("Content-Type", "text/event-stream; charset=utf-8")
                 self.send_header("Cache-Control", "no-cache")
                 self.send_header("Connection", "keep-alive")
                 self.end_headers()
-                
+
                 chat_id = f"chatcmpl-{uuid.uuid4().hex}"
                 model_name = self.runner.model.stem
-                
+
                 # First chunk with metadata and starting token
                 chunk1 = {
                     "id": chat_id,
@@ -177,7 +177,7 @@ class AdapterHandler(BaseHTTPRequestHandler):
                 }
                 self.wfile.write(f"data: {json.dumps(chunk1, ensure_ascii=False)}\n\n".encode("utf-8"))
                 self.wfile.flush()
-                
+
                 # Second chunk with stop and usage metrics
                 chunk2 = {
                     "id": chat_id,
@@ -198,7 +198,7 @@ class AdapterHandler(BaseHTTPRequestHandler):
                 }
                 self.wfile.write(f"data: {json.dumps(chunk2, ensure_ascii=False)}\n\n".encode("utf-8"))
                 self.wfile.flush()
-                
+
                 # Done marker
                 self.wfile.write(b"data: [DONE]\n\n")
                 self.wfile.flush()
