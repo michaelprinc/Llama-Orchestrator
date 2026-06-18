@@ -1,0 +1,418 @@
+{
+  "total_lines": 3845,
+  "total_classes": 12,
+  "total_methods": 141,
+  "sections": [
+    {
+      "name": "dataclasses",
+      "description": "Immutable data classes: TableRow, ImportDialogEvent, GuiRefreshSnapshot",
+      "line_start": 221,
+      "line_end": 251,
+      "classes": [
+        "TableRow",
+        "ImportDialogEvent",
+        "GuiRefreshSnapshot"
+      ],
+      "methods": [],
+      "target_module": "dataclasses.py",
+      "estimated_lines": 31,
+      "dependencies": [],
+      "extraction_order": 1
+    },
+    {
+      "name": "grid_dialog_support",
+      "description": "Grid benchmark dialog support: GridDialogParameterVars, _default_step_or_values",
+      "line_start": 252,
+      "line_end": 351,
+      "classes": [
+        "GridDialogParameterVars"
+      ],
+      "methods": [],
+      "target_module": "grid_dialogs.py",
+      "estimated_lines": 100,
+      "dependencies": [
+        "dataclasses"
+      ],
+      "extraction_order": 2
+    },
+    {
+      "name": "kv_cache_profile_dialog",
+      "description": "KV Cache profile selection dialog",
+      "line_start": 352,
+      "line_end": 470,
+      "classes": [
+        "KvCacheProfileDialog"
+      ],
+      "methods": [],
+      "target_module": "kv_cache_dialogs.py",
+      "estimated_lines": 119,
+      "dependencies": [
+        "grid_dialog_support"
+      ],
+      "extraction_order": 3
+    },
+    {
+      "name": "grid_benchmark_dialog",
+      "description": "Grid benchmark parameter configuration dialog",
+      "line_start": 471,
+      "line_end": 1211,
+      "classes": [
+        "GridBenchmarkDialog"
+      ],
+      "methods": [],
+      "target_module": "grid_dialogs.py",
+      "estimated_lines": 741,
+      "dependencies": [
+        "grid_dialog_support",
+        "kv_cache_profile_dialog"
+      ],
+      "extraction_order": 4
+    },
+    {
+      "name": "gui_widgets",
+      "description": "GUI widget construction: __init__, _build_widgets, refresh, GPU inventory",
+      "line_start": 1212,
+      "line_end": 1560,
+      "classes": [
+        "LlamaOrchestratorGui"
+      ],
+      "methods": [
+        "__init__",
+        "_build_widgets",
+        "_auto_refresh",
+        "_apply_visible_columns",
+        "_refresh_tree_headings",
+        "_toggle_sort",
+        "_reset_gui_state",
+        "_toggle_gpu_inventory",
+        "_render_gpu_inventory",
+        "_edit_gpu_alias"
+      ],
+      "target_module": "gui_widgets.py",
+      "estimated_lines": 344,
+      "dependencies": [
+        "dataclasses",
+        "grid_dialog_support"
+      ],
+      "extraction_order": 5
+    },
+    {
+      "name": "gui_messages",
+      "description": "Message pump and activity log",
+      "line_start": 1561,
+      "line_end": 1585,
+      "classes": [
+        "LlamaOrchestratorGui"
+      ],
+      "methods": [
+        "_schedule_message_pump",
+        "_pump_messages",
+        "_append_activity",
+        "_post_message"
+      ],
+      "target_module": "gui_messages.py",
+      "estimated_lines": 25,
+      "dependencies": [
+        "gui_widgets"
+      ],
+      "extraction_order": 6
+    },
+    {
+      "name": "gui_refresh",
+      "description": "Refresh cycle: snapshot collection, row rendering, metadata",
+      "line_start": 1586,
+      "line_end": 1854,
+      "classes": [
+        "LlamaOrchestratorGui"
+      ],
+      "methods": [
+        "refresh",
+        "_capture_tree_position",
+        "_collect_refresh_snapshot",
+        "_build_table_rows",
+        "_visible_rows",
+        "_render_full_rows",
+        "_render_refresh_metadata",
+        "_render_daemon_status"
+      ],
+      "target_module": "gui_refresh.py",
+      "estimated_lines": 269,
+      "dependencies": [
+        "gui_widgets",
+        "gui_messages"
+      ],
+      "extraction_order": 7
+    },
+    {
+      "name": "gui_selection",
+      "description": "Tree selection, context menu, event handling",
+      "line_start": 1855,
+      "line_end": 1906,
+      "classes": [
+        "LlamaOrchestratorGui"
+      ],
+      "methods": [
+        "_on_select",
+        "_tree_column_from_event",
+        "_on_tree_click",
+        "_on_tree_double_click",
+        "_show_context_menu"
+      ],
+      "target_module": "gui_selection.py",
+      "estimated_lines": 52,
+      "dependencies": [
+        "gui_widgets"
+      ],
+      "extraction_order": 8
+    },
+    {
+      "name": "gui_instances",
+      "description": "Instance selection, queue management, visible names",
+      "line_start": 1907,
+      "line_end": 1945,
+      "classes": [
+        "LlamaOrchestratorGui"
+      ],
+      "methods": [
+        "_selected_instance",
+        "_selected_instances",
+        "_visible_instance_names",
+        "_ordered_queued_instance_names",
+        "_update_queue_cells",
+        "_toggle_queue_name"
+      ],
+      "target_module": "gui_instances.py",
+      "estimated_lines": 39,
+      "dependencies": [
+        "gui_widgets",
+        "gui_selection"
+      ],
+      "extraction_order": 9
+    },
+    {
+      "name": "gui_benchmark",
+      "description": "Benchmark execution: single, serial, batch, grid",
+      "line_start": 1946,
+      "line_end": 2302,
+      "classes": [
+        "LlamaOrchestratorGui"
+      ],
+      "methods": [
+        "_set_active_benchmark_name",
+        "_toggle_selected_queue_rows",
+        "_benchmark_job_running",
+        "_begin_benchmark_job",
+        "_finish_benchmark_job",
+        "_update_benchmark_controls",
+        "_run_background",
+        "_run_selected",
+        "_benchmark_instance",
+        "_start_serial_benchmark_instance",
+        "_handle_benchmark_exception",
+        "_run_batch",
+        "_run_benchmark_selected",
+        "_run_serial_benchmark",
+        "_stop_serial_benchmark",
+        "_grid_benchmark_targets",
+        "_run_grid_benchmark",
+        "_stop_grid_benchmark"
+      ],
+      "target_module": "gui_benchmark.py",
+      "estimated_lines": 357,
+      "dependencies": [
+        "gui_widgets",
+        "gui_instances",
+        "grid_dialog_support"
+      ],
+      "extraction_order": 10
+    },
+    {
+      "name": "gui_benchmark_settings",
+      "description": "Benchmark parameter editing and settings",
+      "line_start": 2303,
+      "line_end": 2499,
+      "classes": [
+        "LlamaOrchestratorGui"
+      ],
+      "methods": [
+        "_set_benchmark_settings",
+        "_reload_benchmark_settings",
+        "_refresh_benchmark_params_menu",
+        "_toggle_benchmark_endpoint",
+        "_toggle_benchmark_ignore_eos",
+        "_edit_benchmark_max_tokens",
+        "_edit_benchmark_temperature",
+        "_edit_optional_int_setting",
+        "_edit_optional_float_setting",
+        "_reset_benchmark_params",
+        "_open_benchmark_settings_file"
+      ],
+      "target_module": "gui_benchmark_settings.py",
+      "estimated_lines": 197,
+      "dependencies": [
+        "gui_widgets",
+        "gui_benchmark"
+      ],
+      "extraction_order": 11
+    },
+    {
+      "name": "gui_prompts",
+      "description": "Prompt file handling and runtime args editing",
+      "line_start": 2500,
+      "line_end": 2568,
+      "classes": [
+        "LlamaOrchestratorGui"
+      ],
+      "methods": [
+        "_select_prompt_file",
+        "_open_prompt_file",
+        "_edit_args_inline",
+        "_save_runtime_args"
+      ],
+      "target_module": "gui_prompts.py",
+      "estimated_lines": 69,
+      "dependencies": [
+        "gui_widgets"
+      ],
+      "extraction_order": 12
+    },
+    {
+      "name": "gui_actions",
+      "description": "Instance actions: clone, diff, copy CLI, rename",
+      "line_start": 2569,
+      "line_end": 2721,
+      "classes": [
+        "LlamaOrchestratorGui"
+      ],
+      "methods": [
+        "_clone_selected",
+        "_next_clone_name",
+        "_diff_selected",
+        "_open_diff_window",
+        "_copy_cli_command",
+        "_rename_display_name"
+      ],
+      "target_module": "gui_actions.py",
+      "estimated_lines": 153,
+      "dependencies": [
+        "gui_widgets",
+        "gui_instances"
+      ],
+      "extraction_order": 13
+    },
+    {
+      "name": "gui_daemon",
+      "description": "Daemon management: start, stop, export config",
+      "line_start": 2722,
+      "line_end": 2862,
+      "classes": [
+        "LlamaOrchestratorGui"
+      ],
+      "methods": [
+        "_start_daemon",
+        "_stop_daemon",
+        "_export_config_to_vscode"
+      ],
+      "target_module": "gui_daemon.py",
+      "estimated_lines": 141,
+      "dependencies": [
+        "gui_widgets"
+      ],
+      "extraction_order": 14
+    },
+    {
+      "name": "gui_files",
+      "description": "File operations: open config, logs, project, paths",
+      "line_start": 2863,
+      "line_end": 2902,
+      "classes": [
+        "LlamaOrchestratorGui"
+      ],
+      "methods": [
+        "_open_config",
+        "_open_config_folder",
+        "_open_logs",
+        "_open_project",
+        "_open_path"
+      ],
+      "target_module": "gui_files.py",
+      "estimated_lines": 40,
+      "dependencies": [
+        "gui_widgets"
+      ],
+      "extraction_order": 15
+    },
+    {
+      "name": "gui_dialogs",
+      "description": "Dialog triggers: add model, binary install, default args",
+      "line_start": 2903,
+      "line_end": 3005,
+      "classes": [
+        "LlamaOrchestratorGui"
+      ],
+      "methods": [
+        "_open_add_dialog",
+        "_on_model_saved",
+        "_open_binary_dialog",
+        "_check_vulkan_binary",
+        "_install_binary",
+        "_apply_default_args"
+      ],
+      "target_module": "gui_dialogs.py",
+      "estimated_lines": 103,
+      "dependencies": [
+        "gui_widgets",
+        "grid_dialog_support"
+      ],
+      "extraction_order": 16
+    },
+    {
+      "name": "model_dialogs",
+      "description": "Model addition dialogs: AddModelDialog, AddModelPortSettingsDialog, ExistingModelFileDialog",
+      "line_start": 3006,
+      "line_end": 3314,
+      "classes": [
+        "AddModelDialog",
+        "AddModelPortSettingsDialog",
+        "ExistingModelFileDialog"
+      ],
+      "methods": [],
+      "target_module": "model_dialogs.py",
+      "estimated_lines": 309,
+      "dependencies": [
+        "dataclasses"
+      ],
+      "extraction_order": 17
+    },
+    {
+      "name": "hf_import_dialog",
+      "description": "HuggingFace model import dialog",
+      "line_start": 3315,
+      "line_end": 3773,
+      "classes": [
+        "HuggingFaceImportDialog"
+      ],
+      "methods": [],
+      "target_module": "hf_import_dialog.py",
+      "estimated_lines": 459,
+      "dependencies": [
+        "dataclasses"
+      ],
+      "extraction_order": 18
+    },
+    {
+      "name": "install_binary_dialog",
+      "description": "LLama binary installation dialog",
+      "line_start": 3774,
+      "line_end": 3845,
+      "classes": [
+        "InstallBinaryDialog"
+      ],
+      "methods": [],
+      "target_module": "install_dialog.py",
+      "estimated_lines": 72,
+      "dependencies": [],
+      "extraction_order": 19
+    }
+  ]
+}

@@ -226,6 +226,13 @@ class RenderDiffMixin:
             if name not in new_map:
                 self.tree.delete(name)  # type: ignore[attr-defined]
 
+        # Reorder items in Treeview to match new_rows order
+        current_children = self.tree.get_children()  # type: ignore[attr-defined]
+        desired_order = tuple(row.name for row in new_rows)
+        if current_children != desired_order:
+            for index, row in enumerate(new_rows):
+                self.tree.move(row.name, "", index)  # type: ignore[attr-defined]
+
         # Update the map
         self._row_map = new_map  # type: ignore[attr-defined]
 

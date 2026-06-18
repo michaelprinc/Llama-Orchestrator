@@ -947,3 +947,55 @@ def test_create_progressbar_with_gridded_parent() -> None:
         assert isinstance(progress, ttk.Progressbar)
     finally:
         root.destroy()
+
+
+def test_render_diff_rows_reorders_treeview_items() -> None:
+    """render_diff_rows should move items in Treeview if the sorted row order changes."""
+    from llama_orchestrator.gui import TableRow
+    from llama_orchestrator.gui.refresh import RenderDiffMixin
+
+    class FakeTree:
+        def __init__(self, children):
+            self._children = list(children)
+            self.moves = []
+
+        def get_children(self):
+            return tuple(self._children)
+
+        def move(self, item, parent, index):
+            self.moves.append((item, parent, index))
+            self._children.remove(item)
+            self._children.insert(index, item)
+
+        def exists(self, item):
+            return item in self._children
+
+        def item(self, item, **kwargs):
+            pass
+
+        def delete(self, item):
+            self._children.remove(item)
+
+        def insert(self, parent, index, iid, **kwargs):
+            self._children.append(iid)
+
+    class DummyGui(RenderDiffMixin):
+        def __init__(self, initial_children):
+            self.tree = FakeTree(initial_children)
+            self._row_map = {
+                name: TableRow(name=name, values=(), sort_values={})
+                for name in initial_children
+            }
+
+    gui = DummyGui(["alpha", "beta", "gamma"])
+    new_rows = (
+        TableRow(name="gamma", values=(), sort_values={}),
+        TableRow(name="alpha", values=(), sort_values={}),
+        TableRow(name="beta", values=(), sort_values={}),
+    )
+
+    gui.render_diff_rows(new_rows, (), ())
+
+    assert gui.tree.get_children() == ("gamma", "alpha", "beta")
+    assert len(gui.tree.moves) == 3
+
