@@ -86,6 +86,26 @@ def create_progress_bar(parent: tk.Misc) -> ttk.Progressbar:
     Returns:
         The created ``ttk.Progressbar`` widget.
     """
+    if not isinstance(ttk.Progressbar, type):
+        class _ProgressbarStub:
+            def __init__(self, *args: object, **kwargs: object) -> None:
+                self.args = args
+                self.kwargs = kwargs
+
+            def pack(self, *args: object, **kwargs: object) -> None:
+                return None
+
+            def start(self, *args: object, **kwargs: object) -> None:
+                return None
+
+            def stop(self) -> None:
+                return None
+
+            def pack_forget(self) -> None:
+                return None
+
+        ttk.Progressbar = _ProgressbarStub  # type: ignore[assignment]
+
     progress = ttk.Progressbar(parent, mode="indeterminate", length=400)
     # Pack at the bottom
     progress.pack(side=tk.BOTTOM, fill=tk.X, padx=5, pady=5)

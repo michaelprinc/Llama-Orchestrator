@@ -164,6 +164,18 @@ def test_unique_instance_name_slugifies_display_label() -> None:
     assert normalize_config_token(" . ") == ""
 
 
+def test_clone_name_suggestion_slugifies_invalid_source(monkeypatch) -> None:
+    """Clone aliases must satisfy strict config name validation."""
+
+    monkeypatch.setattr("llama_orchestrator.gui.app.discover_instances", lambda: [])
+    gui = object.__new__(LlamaOrchestratorGui)
+
+    assert (
+        gui._next_clone_name("qwen3-6-35b-a3b-mtp-gguf-iq4_xs_Byteshape")
+        == "qwen3-6-35b-a3b-mtp-gguf-iq4_xs_byteshape_clone"
+    )
+
+
 def test_suggest_add_model_port_excludes_configured_ports(monkeypatch) -> None:
     """The Add model default port should skip ports already assigned in configs."""
 
@@ -998,4 +1010,3 @@ def test_render_diff_rows_reorders_treeview_items() -> None:
 
     assert gui.tree.get_children() == ("gamma", "alpha", "beta")
     assert len(gui.tree.moves) == 3
-

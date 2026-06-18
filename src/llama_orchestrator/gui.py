@@ -2554,7 +2554,7 @@ class LlamaOrchestratorGui(tk.Tk):
         )
         if not requested:
             return
-        new_name = requested.strip().lower()
+        new_name = normalize_config_token(requested, fallback=new_name)
         if instance_alias_exists(new_name):
             messagebox.showerror("Clone failed", f"Instance '{new_name}' already exists.")
             return
@@ -2579,7 +2579,7 @@ class LlamaOrchestratorGui(tk.Tk):
 
     def _next_clone_name(self, source: str) -> str:
         existing = {name for name, _ in discover_instances()}
-        base = f"{source}_clone"
+        base = normalize_config_token(f"{source}_clone", fallback="model_clone")
         if base not in existing:
             return base
         index = 2

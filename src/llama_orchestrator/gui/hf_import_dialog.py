@@ -17,24 +17,23 @@ import tkinter as tk
 from llama_orchestrator.config.loader import get_project_root
 from llama_orchestrator.hf_import import (
     DownloadCancelledError,
+    DownloadProgress,
     GGUFVariant,
     HuggingFaceImportError,
     HuggingFaceRepoRef,
     HuggingFaceTokenStore,
     ImportedModelSelection,
-    ImportDialogEvent,
     ImportSettings,
     download_gguf_variant,
-    format_download_progress,
     list_gguf_variants,
     load_import_settings,
     normalize_hf_model_reference,
     parse_gguf_quantization,
     plan_download_target,
-    resolve_models_directory_input,
     save_import_settings,
     write_import_metadata_sidecar,
 )
+from llama_orchestrator.gui.dataclasses import ImportDialogEvent
 from llama_orchestrator.gui.dialogs import ExistingModelFileDialog
 
 
@@ -50,6 +49,41 @@ def format_model_size_gb(size_bytes: int | float) -> str:
     if size_bytes < 1024 * 1024 * 1024:
         return f"{size_bytes / (1024 * 1024):.1f} MB"
     return f"{size_bytes / (1024 * 1024 * 1024):.2f} GB"
+
+
+def format_download_bytes(value: int | None) -> str:
+    """Format byte counts with a compact base-1024 GB display."""
+
+    if value is None:
+        return "-"
+    return f"{value / (1024**3):.2f} GB"
+
+
+def format_download_progress(progress: DownloadProgress) -> str:
+    """Render one GGUF download progress line for the import dialog."""
+
+    if progress.total_bytes:
+        return (
+            f"Downloading {Path(progress.filename).name}: "
+            f"{format_download_bytes(progress.downloaded_bytes)} / "
+            f"{format_download_bytes(progress.total_bytes)}"
+        )
+    return (
+        f"Downloading {Path(progress.filename).name}: "
+        f"{format_download_bytes(progress.downloaded_bytes)}"
+    )
+
+
+def resolve_models_directory_input(value: str) -> Path:
+    """Resolve the local models directory against the project root when needed."""
+
+    raw_value = value.strip()
+    if not raw_value:
+        return get_project_root() / "models"
+    path = Path(raw_value).expanduser()
+    if path.is_absolute():
+        return path
+    return get_project_root() / path
 
 
 # --- Dialog classes ---

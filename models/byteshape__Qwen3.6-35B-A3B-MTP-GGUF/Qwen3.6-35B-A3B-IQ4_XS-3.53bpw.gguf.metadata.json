@@ -1,0 +1,41 @@
+{
+  "gguf_metadata": {
+    "architecture": "qwen35moe",
+    "attention_head_count": 16,
+    "attention_head_count_kv": 2,
+    "basename": "Qwen3.6",
+    "block_count": 41,
+    "chat_template_present": true,
+    "context_length": 262144,
+    "embedding_length": 2048,
+    "file_type": "IQ4_XS",
+    "file_type_value": null,
+    "name": "Qwen3.6 35B A3B",
+    "nextn_predict_layers": 1,
+    "quantization_version": 2,
+    "rope_freq_base": 10000000.0
+  },
+  "model_card_metadata": {
+    "claimed_architecture": "qwen3",
+    "claimed_chat_template": null,
+    "claimed_context_length": null,
+    "claimed_model": "Qwen3.6-35B-A3B MTP GGUF (ShapeLearn Quantized)",
+    "claimed_mtp_support": true,
+    "recommended_runtime": "llama.cpp"
+  },
+  "schema_version": "1",
+  "source": {
+    "fetched_at": "2026-06-18T20:33:26Z",
+    "filename": "Qwen3.6-35B-A3B-IQ4_XS-3.53bpw.gguf",
+    "provider": "huggingface",
+    "repo_id": "byteshape/Qwen3.6-35B-A3B-MTP-GGUF",
+    "revision": "main"
+  },
+  "validation": {
+    "confidence": "medium",
+    "status": "warning",
+    "warnings": [
+      "Model card architecture qwen3 does not match GGUF architecture qwen35moe."
+    ]
+  }
+}

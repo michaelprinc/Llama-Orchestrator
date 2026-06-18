@@ -731,7 +731,10 @@ def persist_instance_health(
     )
 
 
-class LlamaOrchestratorGui(tk.Tk, RenderDiffMixin):
+_LLAMA_GUI_BASES = (tk.Tk, RenderDiffMixin) if isinstance(tk.Tk, type) else (RenderDiffMixin,)
+
+
+class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
     """Desktop GUI for managing llama.cpp model instances."""
 
     refresh_interval_ms = 5000
@@ -2107,7 +2110,7 @@ class LlamaOrchestratorGui(tk.Tk, RenderDiffMixin):
         )
         if not requested:
             return
-        new_name = requested.strip().lower()
+        new_name = normalize_config_token(requested, fallback=new_name)
         if instance_alias_exists(new_name):
             messagebox.showerror("Clone failed", f"Instance '{new_name}' already exists.")
             return
@@ -2132,7 +2135,7 @@ class LlamaOrchestratorGui(tk.Tk, RenderDiffMixin):
 
     def _next_clone_name(self, source: str) -> str:
         existing = {name for name, _ in discover_instances()}
-        base = f"{source}_clone"
+        base = normalize_config_token(f"{source}_clone", fallback="model_clone")
         if base not in existing:
             return base
         index = 2

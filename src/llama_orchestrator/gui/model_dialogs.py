@@ -20,14 +20,12 @@ from llama_orchestrator.config import (
     InstanceConfig,
     ModelConfig,
     ServerConfig,
-    VULKAN_VARIANT,
     discover_instances,
-    instance_alias_exists,
-    normalize_model_path_for_config,
+    get_project_root,
+    load_all_instances,
     save_config,
-    suggest_add_model_port,
-    suggest_next_add_model_port,
 )
+from llama_orchestrator.health.ports import find_free_port
 from llama_orchestrator.gui_state import GuiSettings, load_gui_settings, save_gui_settings
 from llama_orchestrator.hf_import import (
     ImportedModelSelection,
@@ -74,6 +72,54 @@ def unique_instance_name(label: str, existing_names: set[str], *, fallback: str 
         candidate = f"{base}_{index}"
         index += 1
     return candidate
+
+
+def instance_alias_exists(name: str) -> bool:
+    """Check whether an immutable instance alias is already present."""
+    return any(existing_name == name for existing_name, _ in discover_instances())
+
+
+def normalize_model_path_for_config(path: Path) -> Path:
+    """Prefer project-relative model paths when the file lives under the repo root."""
+
+    raw_path = path.expanduser()
+    project_root = get_project_root().resolve()
+    resolved = raw_path if raw_path.is_absolute() else (project_root / raw_path)
+    resolved = resolved.resolve()
+    try:
+        return resolved.relative_to(project_root)
+    except ValueError:
+        return resolved
+
+
+def suggest_add_model_port(min_port: int, host: str = "127.0.0.1") -> int:
+    """Find the next port suitable for a new GUI-created model."""
+
+    used_ports = {
+        config.server.port
+        for config in load_all_instances().values()
+        if min_port <= config.server.port <= 65535
+    }
+    port = find_free_port(
+        start_port=min_port,
+        end_port=65535,
+        host=host,
+        exclude_ports=used_ports,
+    )
+    return port or min_port
+
+
+def suggest_next_add_model_port(
+    current_port: int,
+    min_port: int,
+    host: str = "127.0.0.1",
+) -> int:
+    """Find the next suitable port after the current Add model port."""
+
+    start_port = max(current_port + 1, min_port, 1024)
+    if start_port > 65535:
+        start_port = max(min_port, 1024)
+    return suggest_add_model_port(start_port, host=host)
 
 
 def apply_managed_runtime_args(

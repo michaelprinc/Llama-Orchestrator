@@ -23,6 +23,7 @@ for _source_path in (_app_path, _fallback_path):
         GUI_IMPLEMENTATION_SOURCE = _source_path.name
         if _source_path == _app_path:
             sys.modules[f"{__name__}.app"] = sys.modules[__name__]
+            app = sys.modules[__name__]
         break
     except Exception:
         if _source_path == _fallback_path:
