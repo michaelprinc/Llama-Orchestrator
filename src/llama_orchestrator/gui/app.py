@@ -18,8 +18,7 @@ import time
 import tkinter as tk
 import unicodedata
 from collections.abc import Callable, Sequence
-from contextlib import suppress
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, simpledialog, ttk
 
@@ -35,28 +34,14 @@ from llama_orchestrator.benchmark import (
     save_benchmark_settings,
 )
 from llama_orchestrator.benchmark_grid import (
-    DEFAULT_KV_CACHE_PROFILE_IDS,
-    KV_CACHE_PARAMETER_NAME,
-    GridParameterRange,
-    GridParameterSpec,
-    GridPlan,
-    all_kv_cache_profiles,
-    format_grid_plan_preview,
-    grid_parameter_catalog,
-    kv_cache_profiles_for_preset,
     latest_grid_runs,
-    load_grid_plan,
     plan_requires_restart,
     run_grid_for_instance,
-    save_grid_plan,
     write_grid_summary_artifact,
 )
 from llama_orchestrator.config import (
     BinaryConfig,
-    GpuConfig,
     InstanceConfig,
-    ModelConfig,
-    ServerConfig,
     discover_instances,
     get_instance_config,
     get_project_root,
@@ -89,6 +74,19 @@ from llama_orchestrator.engine.state import (
     save_runtime,
     save_state,
 )
+from llama_orchestrator.gui.dataclasses import (
+    GuiRefreshSnapshot,
+    TableRow,
+)
+from llama_orchestrator.gui.grid_benchmark_dialog import GridBenchmarkDialog
+from llama_orchestrator.gui.install_dialog import InstallBinaryDialog
+from llama_orchestrator.gui.model_dialogs import AddModelDialog
+from llama_orchestrator.gui.refresh import RenderDiffMixin
+from llama_orchestrator.gui.usability import (
+    configure_status_tags,
+    create_progress_bar,
+    register_shortcuts,
+)
 from llama_orchestrator.gui_state import (
     GuiSettings,
     cycle_sort_order,
@@ -99,32 +97,9 @@ from llama_orchestrator.gui_state import (
 )
 from llama_orchestrator.health import check_instance_health
 from llama_orchestrator.health.ports import find_free_port, suggest_port_for_instance
-from llama_orchestrator.gui.refresh import RenderDiffMixin
-from llama_orchestrator.gui.usability import (
-    configure_status_tags,
-    create_progress_bar,
-    register_shortcuts,
-)
 from llama_orchestrator.hf_import import (
-    DownloadCancelledError,
     DownloadProgress,
-    GGUFVariant,
-    HuggingFaceImportError,
-    HuggingFaceRepoRef,
-    HuggingFaceTokenStore,
-    ImportedModelSelection,
-    ImportSettings,
-    build_add_model_prefill,
-    download_gguf_variant,
-    list_gguf_variants,
-    load_import_settings,
-    normalize_hf_model_reference,
-    parse_gguf_quantization,
-    plan_download_target,
-    save_import_settings,
-    write_import_metadata_sidecar,
 )
-from llama_orchestrator.model_metadata import build_model_metadata
 
 # Optional timing instrumentation for performance profiling.
 # Enable by setting LLAMA_ORCH_DEBUG_GUI_TIMING=1 in the environment.
@@ -215,30 +190,6 @@ COLUMN_WIDTHS = {
     "args": 260,
     "uptime": 90,
 }
-
-
-from llama_orchestrator.gui.dataclasses import (
-    GuiRefreshSnapshot,
-    ImportDialogEvent,
-    TableRow,
-)
-from llama_orchestrator.gui.grid_dialogs import (
-    GridDialogParameterVars,
-    _default_grid_bound,
-    _default_grid_values_for_spec,
-    _default_step_or_values,
-    _format_grid_values,
-    _grid_dialog_status,
-    _grid_spec_label,
-    format_kv_cache_profile_summary,
-    parse_grid_number,
-    parse_grid_values,
-)
-from llama_orchestrator.gui.kv_cache_dialogs import KvCacheProfileDialog
-from llama_orchestrator.gui.grid_benchmark_dialog import GridBenchmarkDialog
-from llama_orchestrator.gui.model_dialogs import AddModelDialog, AddModelPortSettingsDialog
-from llama_orchestrator.gui.hf_import_dialog import HuggingFaceImportDialog
-from llama_orchestrator.gui.install_dialog import InstallBinaryDialog
 
 
 def format_queue_checkbox(checked: bool) -> str:
@@ -788,7 +739,7 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
         self._build_widgets()
         configure_status_tags(self.tree)
         self.progress = create_progress_bar(self.footer)
-        
+
         # Shortcuts mapping
         bindings = {
             "<Control-s>": lambda event: self._run_selected("start"),

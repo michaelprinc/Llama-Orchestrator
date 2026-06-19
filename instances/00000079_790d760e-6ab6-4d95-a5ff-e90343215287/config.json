@@ -1,0 +1,438 @@
+{
+    "name": "vibethinker-3b-i1-gguf-q4_k_m",
+    "schema_version": "2",
+    "instance_uid": "790d760e-6ab6-4d95-a5ff-e90343215287",
+    "instance_no": "00000079",
+    "display_name": "VibeThinker 3B i1 GGUF Q4_K_M",
+    "created_at": "2026-06-19T09:06:59Z",
+    "updated_at": "2026-06-19T09:06:59Z",
+    "sort_order": null,
+    "binary": {
+        "binary_id": null,
+        "version": "latest",
+        "variant": "win-vulkan-x64",
+        "source_url": null,
+        "sha256": null
+    },
+    "model": {
+        "path": "models\\mradermacher__VibeThinker-3B-i1-GGUF\\VibeThinker-3B.i1-Q4_K_M.gguf",
+        "context_size": 131072,
+        "batch_size": 512,
+        "threads": 8
+    },
+    "server": {
+        "host": "127.0.0.1",
+        "port": 8079,
+        "timeout": 600,
+        "parallel": 1
+    },
+    "gpu": {
+        "backend": "vulkan",
+        "device_id": 1,
+        "layers": 99
+    },
+    "env": {},
+    "args": [
+        "--parallel",
+        "1",
+        "--device",
+        "Vulkan1",
+        "--main-gpu",
+        "0",
+        "--split-mode",
+        "none",
+        "--no-mmap",
+        "--temperature",
+        "0.5",
+        "--top-p",
+        "0.95",
+        "--min-p",
+        "0.05",
+        "--no-mmproj",
+        "--reasoning",
+        "auto",
+        "--flash-attn",
+        "auto"
+    ],
+    "parameter_mutability": {
+        "static": [
+            "name",
+            "binary.binary_id",
+            "binary.version",
+            "binary.variant",
+            "binary.source_url",
+            "binary.sha256",
+            "model.path",
+            "model.context_size",
+            "model.batch_size",
+            "model.threads",
+            "server.host",
+            "server.port",
+            "server.timeout",
+            "server.parallel",
+            "gpu.backend",
+            "gpu.device_id",
+            "gpu.layers",
+            "env",
+            "args",
+            "logs.stdout",
+            "logs.stderr",
+            "logs.max_size_mb",
+            "logs.rotation"
+        ],
+        "dynamic": [
+            "tags",
+            "model_metadata",
+            "healthcheck.type",
+            "healthcheck.path",
+            "healthcheck.expected_status",
+            "healthcheck.expected_body",
+            "healthcheck.custom_script",
+            "healthcheck.interval",
+            "healthcheck.timeout",
+            "healthcheck.retries",
+            "healthcheck.retry_delay",
+            "healthcheck.start_period",
+            "healthcheck.backoff_enabled",
+            "healthcheck.backoff_base",
+            "healthcheck.backoff_max",
+            "healthcheck.backoff_jitter",
+            "restart_policy.enabled",
+            "restart_policy.max_retries",
+            "restart_policy.backoff_multiplier",
+            "restart_policy.initial_delay",
+            "restart_policy.max_delay"
+        ]
+    },
+    "model_metadata": {
+        "identity": {
+            "display_name": "VibeThinker 3B i1 GGUF Q4_K_M",
+            "family": "vibethinker",
+            "publisher": "mradermacher",
+            "architecture": "qwen2",
+            "parameter_count_total": null,
+            "parameter_count_active": null
+        },
+        "source": {
+            "hub": "huggingface",
+            "repo_id": "mradermacher/VibeThinker-3B-i1-GGUF",
+            "revision": "",
+            "commit_hash": "",
+            "filename": "VibeThinker-3B.i1-Q4_K_M.gguf",
+            "url": "https://huggingface.co/mradermacher/VibeThinker-3B-i1-GGUF/resolve/main/VibeThinker-3B.i1-Q4_K_M.gguf",
+            "fetched_at": "2026-06-19T09:06:59Z"
+        },
+        "artifact": {
+            "format": "gguf",
+            "remote_size_bytes": 1929903488,
+            "local_size_bytes": 1929903488,
+            "etag": null,
+            "sha256_expected": null,
+            "sha256_actual": null,
+            "verification_status": null
+        },
+        "quantization": {
+            "name": "Q4_K_M",
+            "family": "q4",
+            "variant": "Q4_K_M",
+            "nominal_bits": 4.0,
+            "imatrix": false
+        },
+        "license": {
+            "id": "",
+            "source": "",
+            "verified_at": ""
+        },
+        "context": {
+            "native_context_length": 131072,
+            "recommended_min_context_length": 131072,
+            "source": "gguf"
+        },
+        "capabilities": {
+            "text_generation": true,
+            "reasoning": null,
+            "tool_use": null,
+            "multilingual": null,
+            "vision_declared": null,
+            "vision_requires_mmproj": null
+        },
+        "speculative_decoding": {
+            "builtin_mtp": {
+                "available": false,
+                "compatible": false,
+                "runtime_requirements": [],
+                "experimental": null
+            },
+            "external_draft": {
+                "available": false,
+                "compatible": null,
+                "runtime_requirements": [],
+                "experimental": true
+            },
+            "dflash": {
+                "available": false,
+                "compatible": null,
+                "runtime_requirements": [],
+                "experimental": true
+            }
+        },
+        "gguf_extracted": {
+            "general_name": "VibeThinker 3B",
+            "general_basename": "VibeThinker",
+            "n_layers": 36,
+            "n_embd": 2048,
+            "n_attention_heads": 16,
+            "n_kv_heads": 2,
+            "head_dim_k": null,
+            "head_dim_v": null,
+            "rope_scaling": null,
+            "tokenizer_model": "gpt2",
+            "chat_template": "{%- if tools %}\n    {{- '<|im_start|>system\\n' }}\n    {%- if messages[0]['role'] == 'system' %}\n        {{- messages[0]['content'] }}\n    {%- else %}\n        {{- 'You are a helpful assistant.' }}\n    {%- endif %}\n    {{- \"\\n\\n# Tools\\n\\nYou may call one or more functions to assist with the user query.\\n\\nYou are provided with function signatures within <tools></tools> XML tags:\\n<tools>\" }}\n    {%- for tool in tools %}\n        {{- \"\\n\" }}\n        {{- tool | tojson }}\n    {%- endfor %}\n    {{- \"\\n</tools>\\n\\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\\n<tool_call>\\n{\\\"name\\\": <function-name>, \\\"arguments\\\": <args-json-object>}\\n</tool_call><|im_end|>\\n\" }}\n{%- else %}\n    {%- if messages[0]['role'] == 'system' %}\n        {{- '<|im_start|>system\\n' + messages[0]['content'] + '<|im_end|>\\n' }}\n    {%- else %}\n        {{- '<|im_start|>system\\nYou are a helpful assistant.<|im_end|>\\n' }}\n    {%- endif %}\n{%- endif %}\n{%- for message in messages %}\n    {%- if (message.role == \"user\") or (message.role == \"system\" and not loop.first) or (message.role == \"assistant\" and not message.tool_calls) %}\n        {{- '<|im_start|>' + message.role + '\\n' + message.content + '<|im_end|>' + '\\n' }}\n    {%- elif message.role == \"assistant\" %}\n        {{- '<|im_start|>' + message.role }}\n        {%- if message.content %}\n            {{- '\\n' + message.content }}\n        {%- endif %}\n        {%- for tool_call in message.tool_calls %}\n            {%- if tool_call.function is defined %}\n                {%- set tool_call = tool_call.function %}\n            {%- endif %}\n            {{- '\\n<tool_call>\\n{\"name\": \"' }}\n            {{- tool_call.name }}\n            {{- '\", \"arguments\": ' }}\n            {{- tool_call.arguments | tojson }}\n            {{- '}\\n</tool_call>' }}\n        {%- endfor %}\n        {{- '<|im_end|>\\n' }}\n    {%- elif message.role == \"tool\" %}\n        {%- if (loop.index0 == 0) or (messages[loop.index0 - 1].role != \"tool\") %}\n            {{- '<|im_start|>user' }}\n        {%- endif %}\n        {{- '\\n<tool_response>\\n' }}\n        {{- message.content }}\n        {{- '\\n</tool_response>' }}\n        {%- if loop.last or (messages[loop.index0 + 1].role != \"tool\") %}\n            {{- '<|im_end|>\\n' }}\n        {%- endif %}\n    {%- endif %}\n{%- endfor %}\n{%- if add_generation_prompt %}\n    {{- '<|im_start|>assistant\\n' }}\n{%- endif %}\n",
+            "n_experts": null,
+            "n_experts_used": null,
+            "file_type": 15,
+            "quantization_version": 2,
+            "nextn_predict_layers": null
+        },
+        "derived": {
+            "formula_version": "kv_cache_v1_gqa",
+            "memory_model": {
+                "status": "ok",
+                "inputs": {
+                    "layers": 36,
+                    "kv_heads": 2,
+                    "head_dim_k": 128,
+                    "head_dim_v": 128
+                },
+                "supported_cache_types": [
+                    "f16",
+                    "q8_0",
+                    "q4_0",
+                    "q3_turbo",
+                    "q2_turbo"
+                ],
+                "scenarios": {
+                    "f16": {
+                        "kv_bytes_per_token": 73728,
+                        "contexts": {
+                            "8k": {
+                                "context_length": 8192,
+                                "bytes": 603979776,
+                                "mb": 576.0,
+                                "gb": 0.562
+                            },
+                            "32k": {
+                                "context_length": 32768,
+                                "bytes": 2415919104,
+                                "mb": 2304.0,
+                                "gb": 2.25
+                            },
+                            "64k": {
+                                "context_length": 65536,
+                                "bytes": 4831838208,
+                                "mb": 4608.0,
+                                "gb": 4.5
+                            },
+                            "128k": {
+                                "context_length": 131072,
+                                "bytes": 9663676416,
+                                "mb": 9216.0,
+                                "gb": 9.0
+                            },
+                            "256k": {
+                                "context_length": 262144,
+                                "bytes": 19327352832,
+                                "mb": 18432.0,
+                                "gb": 18.0
+                            }
+                        }
+                    },
+                    "q8_0": {
+                        "kv_bytes_per_token": 36864,
+                        "contexts": {
+                            "8k": {
+                                "context_length": 8192,
+                                "bytes": 301989888,
+                                "mb": 288.0,
+                                "gb": 0.281
+                            },
+                            "32k": {
+                                "context_length": 32768,
+                                "bytes": 1207959552,
+                                "mb": 1152.0,
+                                "gb": 1.125
+                            },
+                            "64k": {
+                                "context_length": 65536,
+                                "bytes": 2415919104,
+                                "mb": 2304.0,
+                                "gb": 2.25
+                            },
+                            "128k": {
+                                "context_length": 131072,
+                                "bytes": 4831838208,
+                                "mb": 4608.0,
+                                "gb": 4.5
+                            },
+                            "256k": {
+                                "context_length": 262144,
+                                "bytes": 9663676416,
+                                "mb": 9216.0,
+                                "gb": 9.0
+                            }
+                        }
+                    },
+                    "q4_0": {
+                        "kv_bytes_per_token": 18432,
+                        "contexts": {
+                            "8k": {
+                                "context_length": 8192,
+                                "bytes": 150994944,
+                                "mb": 144.0,
+                                "gb": 0.141
+                            },
+                            "32k": {
+                                "context_length": 32768,
+                                "bytes": 603979776,
+                                "mb": 576.0,
+                                "gb": 0.562
+                            },
+                            "64k": {
+                                "context_length": 65536,
+                                "bytes": 1207959552,
+                                "mb": 1152.0,
+                                "gb": 1.125
+                            },
+                            "128k": {
+                                "context_length": 131072,
+                                "bytes": 2415919104,
+                                "mb": 2304.0,
+                                "gb": 2.25
+                            },
+                            "256k": {
+                                "context_length": 262144,
+                                "bytes": 4831838208,
+                                "mb": 4608.0,
+                                "gb": 4.5
+                            }
+                        }
+                    },
+                    "q3_turbo": {
+                        "kv_bytes_per_token": 13824,
+                        "contexts": {
+                            "8k": {
+                                "context_length": 8192,
+                                "bytes": 113246208,
+                                "mb": 108.0,
+                                "gb": 0.105
+                            },
+                            "32k": {
+                                "context_length": 32768,
+                                "bytes": 452984832,
+                                "mb": 432.0,
+                                "gb": 0.422
+                            },
+                            "64k": {
+                                "context_length": 65536,
+                                "bytes": 905969664,
+                                "mb": 864.0,
+                                "gb": 0.844
+                            },
+                            "128k": {
+                                "context_length": 131072,
+                                "bytes": 1811939328,
+                                "mb": 1728.0,
+                                "gb": 1.688
+                            },
+                            "256k": {
+                                "context_length": 262144,
+                                "bytes": 3623878656,
+                                "mb": 3456.0,
+                                "gb": 3.375
+                            }
+                        }
+                    },
+                    "q2_turbo": {
+                        "kv_bytes_per_token": 9216,
+                        "contexts": {
+                            "8k": {
+                                "context_length": 8192,
+                                "bytes": 75497472,
+                                "mb": 72.0,
+                                "gb": 0.07
+                            },
+                            "32k": {
+                                "context_length": 32768,
+                                "bytes": 301989888,
+                                "mb": 288.0,
+                                "gb": 0.281
+                            },
+                            "64k": {
+                                "context_length": 65536,
+                                "bytes": 603979776,
+                                "mb": 576.0,
+                                "gb": 0.562
+                            },
+                            "128k": {
+                                "context_length": 131072,
+                                "bytes": 1207959552,
+                                "mb": 1152.0,
+                                "gb": 1.125
+                            },
+                            "256k": {
+                                "context_length": 262144,
+                                "bytes": 2415919104,
+                                "mb": 2304.0,
+                                "gb": 2.25
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        "user_metadata": {
+            "notes": "",
+            "rating": null,
+            "favorite": false,
+            "tags": []
+        }
+    },
+    "tags": [
+        "hf",
+        "hf_repo-mradermacher-vibethinker-3b-i1-gguf",
+        "gguf",
+        "q4_k_m",
+        "3b"
+    ],
+    "healthcheck": {
+        "type": "http",
+        "path": "/health",
+        "expected_status": [
+            200
+        ],
+        "expected_body": null,
+        "custom_script": null,
+        "interval": 10,
+        "timeout": 5,
+        "retries": 3,
+        "retry_delay": 1.0,
+        "start_period": 60,
+        "backoff_enabled": true,
+        "backoff_base": 1.0,
+        "backoff_max": 60.0,
+        "backoff_jitter": 0.1
+    },
+    "restart_policy": {
+        "enabled": true,
+        "max_retries": 5,
+        "backoff_multiplier": 2.0,
+        "initial_delay": 1.0,
+        "max_delay": 300.0
+    },
+    "logs": {
+        "stdout": "logs/{name}/stdout.log",
+        "stderr": "logs/{name}/stderr.log",
+        "max_size_mb": 100,
+        "rotation": 5
+    }
+}

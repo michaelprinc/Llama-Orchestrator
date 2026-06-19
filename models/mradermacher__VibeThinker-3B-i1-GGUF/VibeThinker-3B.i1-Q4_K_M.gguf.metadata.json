@@ -1,0 +1,41 @@
+{
+  "gguf_metadata": {
+    "architecture": "qwen2",
+    "attention_head_count": 16,
+    "attention_head_count_kv": 2,
+    "basename": "VibeThinker",
+    "block_count": 36,
+    "chat_template_present": true,
+    "context_length": 131072,
+    "embedding_length": 2048,
+    "file_type": "Q4_K_M",
+    "file_type_value": 15,
+    "name": "VibeThinker 3B",
+    "nextn_predict_layers": null,
+    "quantization_version": 2,
+    "rope_freq_base": 1000000.0
+  },
+  "model_card_metadata": {
+    "claimed_architecture": null,
+    "claimed_chat_template": null,
+    "claimed_context_length": null,
+    "claimed_model": "About",
+    "claimed_mtp_support": null,
+    "recommended_runtime": "transformers"
+  },
+  "schema_version": "1",
+  "source": {
+    "fetched_at": "2026-06-19T09:05:20Z",
+    "filename": "VibeThinker-3B.i1-Q4_K_M.gguf",
+    "provider": "huggingface",
+    "repo_id": "mradermacher/VibeThinker-3B-i1-GGUF",
+    "revision": "main"
+  },
+  "validation": {
+    "confidence": "medium",
+    "status": "warning",
+    "warnings": [
+      "GGUF architecture is not evident from the Hugging Face repo or filename."
+    ]
+  }
+}
