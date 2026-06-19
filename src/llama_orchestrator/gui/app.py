@@ -941,8 +941,13 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
             self.gpu_inventory_frame.grid_remove()
 
     def _render_gpu_inventory(self, gpus: Sequence[DetectedGpu]) -> None:
-        render_gpu_inventory(self.gpu_inventory_rows, gpus, self.gpu_aliases,
-                             gpu_alias_button_width=GPU_ALIAS_BUTTON_WIDTH)
+        render_gpu_inventory(
+            self.gpu_inventory_rows,
+            gpus,
+            self.gpu_aliases,
+            gpu_alias_button_width=GPU_ALIAS_BUTTON_WIDTH,
+            on_edit_alias=self._on_alias_button_edit,
+        )
 
     def _on_gpu_alias_changed(self, adapter_name: str, alias: str) -> None:
         self._post_message(f"Saved GPU alias for {adapter_name}: {alias or 'cleared'}.")
@@ -956,6 +961,10 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
                        aliases_store=self.gpu_aliases,
                        on_alias_changed=self._on_gpu_alias_changed,
                        normalize_fn=normalize_gpu_alias, save_fn=save_gpu_aliases)
+
+    def _on_alias_button_edit(self, adapter_name: str, current_alias: str) -> None:
+        """Callback from alias button right-click context menu."""
+        self._edit_gpu_alias(adapter_name)
 
     def _schedule_message_pump(self) -> None:
         self._pump_messages()

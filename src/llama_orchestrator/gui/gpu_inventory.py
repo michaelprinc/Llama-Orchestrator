@@ -57,6 +57,7 @@ def render_gpu_inventory(
     gpus: Sequence[DetectedGpu],
     aliases: dict[str, str],
     gpu_alias_button_width: int,
+    on_edit_alias: Callable[[str, str], None] | None = None,
 ) -> list[tk.Widget]:
     """Render GPU inventory rows.
 
@@ -65,6 +66,8 @@ def render_gpu_inventory(
         gpus: Sequence of DetectedGpu objects.
         aliases: GPU alias mapping (adapter_name -> normalized_alias).
         gpu_alias_button_width: Width for alias edit buttons.
+        on_edit_alias: Callback invoked when user right-clicks and selects
+            "Edit" on an alias button. Signature: (adapter_name, alias).
 
     Returns:
         List of created widgets for later cleanup.
@@ -83,7 +86,6 @@ def render_gpu_inventory(
         label.grid(
             row=len(widgets),
             column=0,
-            columnspan=3,
             sticky="ew",
             padx=(0, 4),
         )
@@ -91,17 +93,55 @@ def render_gpu_inventory(
 
         # Show alias button only if adapter name is known
         if gpu_name:
+            # Button text: show the aliased GPU name (the alias itself)
+            btn_text = alias if alias else gpu_name
+
             alias_btn = tk.Button(
                 parent,
-                text=f"Alias: {alias[:10] if alias else '...'}",
+                text=btn_text,
                 width=gpu_alias_button_width,
             )
+            # Position button to the left, just behind the GPU label
             alias_btn.grid(
-                row=len(widgets) - 1, column=3, padx=(4, 0)
+                row=len(widgets) - 1, column=1, padx=(4, 0), sticky="w"
             )
             widgets.append(alias_btn)
 
+            # Add right-click context menu for editing the alias
+            if on_edit_alias is not None:
+                _bind_alias_button_context_menu(
+                    alias_btn, gpu_name, alias, on_edit_alias
+                )
+
     return widgets
+
+
+def _bind_alias_button_context_menu(
+    button: tk.Button,
+    adapter_name: str,
+    current_alias: str,
+    on_edit_alias: Callable[[str, str], None],
+) -> None:
+    """Bind a right-click context menu to an alias button.
+
+    Args:
+        button: The alias button widget.
+        adapter_name: The GPU adapter identifier.
+        current_alias: The current alias string.
+        on_edit_alias: Callback invoked with (adapter_name, alias).
+    """
+    menu = tk.Menu(button, tearoff=0)
+    menu.add_command(
+        label="Edit",
+        command=lambda: on_edit_alias(adapter_name, current_alias),
+    )
+
+    def _show_menu(event: tk.Event) -> None:
+        """Show the context menu at the cursor position."""
+        menu.tk_popup(event.x_root, event.y_root)
+
+    button.bind("<Button-3>", _show_menu)
+    button.bind("<Button-3>-menu", lambda e: None)  # Suppress default menu
 
 
 def edit_gpu_alias(
