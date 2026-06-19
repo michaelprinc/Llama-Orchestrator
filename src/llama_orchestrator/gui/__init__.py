@@ -27,6 +27,7 @@ from llama_orchestrator.gui.app import (  # noqa: F401
     apply_managed_runtime_args,
     benchmark_shared_ram_warning,
     derive_display_status_and_health,
+    discover_instances,
     format_benchmark_memory,
     format_benchmark_message,
     format_benchmark_settings_summary,
@@ -40,21 +41,29 @@ from llama_orchestrator.gui.app import (  # noqa: F401
     format_runtime_gpu_display,
     format_serial_benchmark_progress,
     get_gpu_aliases_path,
+    get_instance_config,
+    get_project_root,
+    get_state_dir,
     gpu_alias_for_label,
     instance_alias_exists,
     launch_gui,
+    load_all_instances,
     load_gpu_aliases,
+    load_runtime,
     normalize_config_token,
     normalize_gpu_alias,
     normalize_model_path_for_config,
     ordered_visible_names,
     parse_tag_string,
     persist_instance_health,
+    record_health_check,
     resolve_instance_config_dir,
     resolve_instance_config_path,
     resolve_models_directory_input,
     run_serial_benchmark_queue,
     save_gpu_aliases,
+    save_runtime,
+    save_state,
     suggest_add_model_port,
     suggest_next_add_model_port,
     unique_instance_name,
@@ -68,10 +77,10 @@ from llama_orchestrator.gui.dataclasses import (  # noqa: F401
     TableRow,
 )
 
+# --- Implementation Source (for tests) ---
+GUI_IMPLEMENTATION_SOURCE = "app.py"
+
 # --- Dialog classes ---
-from llama_orchestrator.gui.dialogs import (  # noqa: F401
-    ExistingModelFileDialog as _ExistingModelFileDialog,
-)
 from llama_orchestrator.gui.grid_benchmark_dialog import GridBenchmarkDialog  # noqa: F401
 from llama_orchestrator.gui.grid_dialogs import (  # noqa: F401
     GridDialogParameterVars,

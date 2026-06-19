@@ -2,101 +2,101 @@
 
 Extracted from app.py (Phase 5: Module extraction).
 Handles benchmark buttons, queue management, and serial/batch operations.
-
-NOTE: This module does NOT import from app.py to avoid circular imports.
-All benchmark logic is delegated back to the caller via callbacks.
 """
 
 from __future__ import annotations
 
 import tkinter as tk
+from tkinter import ttk
 from collections.abc import Callable
-from dataclasses import dataclass
-
-
-@dataclass
-class BenchmarkSettings:
-    """Settings for a benchmark run."""
-    max_tokens: int = 128
-    temperature: float = 0.7
-    num_prompts: int = 1
-    ignore_eos: bool = False
-    endpoint: bool = False
-
-
-# ─── Public API ───────────────────────────────────────────────────────
 
 
 def build_benchmark_frame(
     parent: tk.Widget,
-) -> tuple[tk.Widget, str]:
-    """Build the benchmark controls frame.
+    *,
+    grid_benchmark_label: str,
+    on_quick_benchmark: Callable[[], None],
+    on_serial_benchmark: Callable[[], None],
+    on_grid_benchmark: Callable[[], None],
+    on_stop_serial: Callable[[], None],
+    on_stop_grid: Callable[[], None],
+) -> tuple[ttk.Frame, dict[str, ttk.Button]]:
+    """Build the benchmark controls frame containing all benchmark buttons.
 
     Args:
         parent: The parent container widget.
+        grid_benchmark_label: Label text for the grid benchmark button.
+        on_quick_benchmark: Callback for quick benchmark.
+        on_serial_benchmark: Callback for serial benchmark.
+        on_grid_benchmark: Callback for grid benchmark.
+        on_stop_serial: Callback to stop serial benchmark queue.
+        on_stop_grid: Callback to stop grid benchmark.
 
     Returns:
-        Tuple of (frame, widget_ref_name).
-        widget_ref_name should be stored as self.benchmark_frame.
+        Tuple of (frame, buttons_dict).
     """
-    frame = tk.Frame(parent, padding=5)
-    return frame, "benchmark_frame"
+    frame = ttk.Frame(parent)
 
+    buttons: dict[str, ttk.Button] = {}
 
-def configure_benchmark_buttons(
-    frame: tk.Widget,
-    on_run_background: Callable[[str, Callable[[], str | None]], None],
-    on_run_selected: Callable[[str], None],
-    on_run_batch: Callable[[str], None],
-) -> tuple[tk.Button, ...]:
-    """Add benchmark action buttons to the frame.
+    btn_quick = ttk.Button(frame, text="Quick benchmark", command=on_quick_benchmark)
+    btn_quick.pack(side=tk.LEFT)
+    buttons["quick"] = btn_quick
 
-    Args:
-        frame: The benchmark frame.
-        on_run_background: Callback to run action in background thread.
-        on_run_selected: Callback to run action on selected instance.
-        on_run_batch: Callback to run action on batch.
+    btn_serial = ttk.Button(frame, text="Serial benchmark", command=on_serial_benchmark)
+    btn_serial.pack(side=tk.LEFT, padx=(6, 0))
+    buttons["serial"] = btn_serial
 
-    Returns:
-        Tuple of created button widgets for reference.
-    """
-    btn_run = tk.Button(frame, text="Run benchmark", command=lambda: on_run_background("benchmark", _run_benchmark_action))
-    btn_run.pack(side="left", padx=2)
+    btn_grid = ttk.Button(frame, text=grid_benchmark_label, command=on_grid_benchmark)
+    btn_grid.pack(side=tk.LEFT, padx=(6, 0))
+    buttons["grid"] = btn_grid
 
-    btn_serial = tk.Button(frame, text="Serial benchmark", command=lambda: on_run_selected("serial_benchmark"))
-    btn_serial.pack(side="left", padx=2)
+    btn_stop_serial = ttk.Button(frame, text="Stop queue", command=on_stop_serial)
+    btn_stop_serial.pack(side=tk.LEFT, padx=(6, 0))
+    buttons["stop_serial"] = btn_stop_serial
 
-    btn_batch = tk.Button(frame, text="Batch benchmark", command=lambda: on_run_batch("batch_benchmark"))
-    btn_batch.pack(side="left", padx=2)
+    btn_stop_grid = ttk.Button(frame, text="Stop grid", command=on_stop_grid)
+    btn_stop_grid.pack(side=tk.LEFT, padx=(6, 0))
+    buttons["stop_grid"] = btn_stop_grid
 
-    return btn_run, btn_serial, btn_batch
-
-
-def _run_benchmark_action() -> str | None:
-    """Placeholder benchmark action. Called via on_run_background."""
-    return "Benchmark action executed"
+    return frame, buttons
 
 
 def update_benchmark_controls(
-    frame: tk.Widget,
+    buttons: dict[str, ttk.Button],
+    *,
     running: bool,
-    active_benchmark: str | None,
+    queued_visible: bool,
+    has_grid_target: bool,
+    serial_active: bool,
+    serial_stopping: bool,
+    grid_active: bool,
+    grid_stopping: bool,
 ) -> None:
-    """Update benchmark controls based on state.
+    """Update the enabled/disabled states of the benchmark buttons.
 
     Args:
-        frame: The benchmark frame.
-        running: Whether a benchmark is currently running.
-        active_benchmark: Name of the active benchmark (if any).
+        buttons: Dictionary containing the benchmark buttons.
+        running: Whether any benchmark job is currently running.
+        queued_visible: Whether there are benchmark items queued.
+        has_grid_target: Whether a grid benchmark target exists.
+        serial_active: Whether a serial benchmark is active.
+        serial_stopping: Whether a serial benchmark is stopping.
+        grid_active: Whether a grid benchmark is active.
+        grid_stopping: Whether a grid benchmark is stopping.
     """
-    # Update button states
-    for widget in frame.winfo_children():
-        if isinstance(widget, tk.Button):
-            widget.config(state="disabled" if running else "normal")
-
-    # Update status label if present
-    status_label = getattr(frame, '_benchmark_status', None)
-    if status_label and active_benchmark:
-        status_label.config(text=f"Active: {active_benchmark}")
-    elif status_label:
-        status_label.config(text="No active benchmark")
+    buttons["quick"].configure(state=tk.DISABLED if running else tk.NORMAL)
+    buttons["serial"].configure(
+        state=tk.DISABLED if running or not queued_visible else tk.NORMAL
+    )
+    buttons["grid"].configure(
+        state=tk.DISABLED if running or not has_grid_target else tk.NORMAL
+    )
+    buttons["stop_serial"].configure(
+        state=tk.NORMAL
+        if serial_active and not serial_stopping
+        else tk.DISABLED
+    )
+    buttons["stop_grid"].configure(
+        state=tk.NORMAL if grid_active and not grid_stopping else tk.DISABLED
+    )

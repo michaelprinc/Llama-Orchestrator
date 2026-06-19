@@ -120,27 +120,35 @@ def _make_sort_callback(column: str, tree: ttk.Treeview) -> Callable[[], None]:
         A callable that toggles sort direction.
     """
     def sort_callback() -> None:
-        reverse = False
-        # Check if this column is currently sorted
         heading_info = tree.heading(column)
-        if heading_info and "text" in heading_info:
-            text = heading_info["text"]
-            if SORT_DESC in str(text):
-                reverse = True
+        heading_text = heading_info.get("text", "") if heading_info else ""
 
-        # Sort the data
+        # Determine current sort direction by looking at the indicator in text
+        currently_desc = SORT_DESC in str(heading_text)
+        currently_asc = SORT_ASC in str(heading_text)
+
+        # Toggle: desc→asc, asc→desc, neither→asc (first click)
+        if currently_desc:
+            new_indicator = SORT_ASC
+        elif currently_asc:
+            new_indicator = SORT_DESC
+        else:
+            new_indicator = SORT_ASC
+
+        # Sort items (toggle: was desc -> now asc, was asc -> now desc)
         items = [(tree.set(child, column), child) for child in tree.get_children()]
-        items.sort(reverse=reverse)
-
-        # Rearrange items
+        items.sort(reverse=not currently_desc)
         for index, (_, child) in enumerate(items):
             tree.move(child, "", index)
 
-        # Update heading to show direction
-        if reverse:
-            tree.heading(column, command=_make_sort_callback(column, tree))
-        else:
-            tree.heading(column, command=_make_sort_callback(column, tree))
+        # Strip any existing indicator and re-apply the toggled one
+        base = (
+            str(heading_text)
+            .replace(f" {SORT_ASC}", "")
+            .replace(f" {SORT_DESC}", "")
+            .strip()
+        )
+        tree.heading(column, text=f"{base} {new_indicator}", command=sort_callback)
 
     return sort_callback
 
@@ -183,10 +191,16 @@ def get_tree_column_from_event(
     Returns:
         Column name string, or None.
     """
-    col = tree.identify_column(event.x)
-    if col:
-        # Treeview columns are 1-indexed in tk notation
-        return col[1:]  # Remove the '#' prefix
+    col_id = tree.identify_column(event.x)
+    if not col_id:
+        return None
+    try:
+        col_index = int(col_id[1:]) - 1   # "#1" -> 0
+        columns = tree["columns"]
+        if 0 <= col_index < len(columns):
+            return columns[col_index]
+    except (ValueError, IndexError):
+        pass
     return None
 
 

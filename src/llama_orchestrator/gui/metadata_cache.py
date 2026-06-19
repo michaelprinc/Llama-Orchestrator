@@ -8,6 +8,7 @@ NOTE: This module does NOT import from app.py to avoid circular imports.
 
 from __future__ import annotations
 
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -25,6 +26,7 @@ class CacheEntry:
 class MetadataCache:
     """Thread-safe cache for engine and instance metadata."""
     _entries: dict[str, CacheEntry] = field(default_factory=dict)
+    _lock: threading.RLock = field(default_factory=threading.RLock)
     max_size: int = 1000
 
     def get(self, key: str) -> Any | None:
@@ -36,16 +38,17 @@ class MetadataCache:
         Returns:
             Cached value or None if expired/missing.
         """
-        entry = self._entries.get(key)
-        if entry is None:
-            return None
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
 
-        # Check expiry
-        if time.time() - entry.created_at > entry.ttl_seconds:
-            del self._entries[key]
-            return None
+            # Check expiry
+            if time.time() - entry.created_at > entry.ttl_seconds:
+                del self._entries[key]
+                return None
 
-        return entry.value
+            return entry.value
 
     def set(
         self,
@@ -60,11 +63,12 @@ class MetadataCache:
             value: Value to cache.
             ttl_seconds: Time-to-live in seconds.
         """
-        # Evict old entries if at capacity
-        if len(self._entries) >= self.max_size:
-            self._evict_oldest()
+        with self._lock:
+            # Evict old entries if at capacity
+            if len(self._entries) >= self.max_size:
+                self._evict_oldest()
 
-        self._entries[key] = CacheEntry(value=value, ttl_seconds=ttl_seconds)
+            self._entries[key] = CacheEntry(value=value, ttl_seconds=ttl_seconds)
 
     def delete(self, key: str) -> bool:
         """Delete a cache entry.
@@ -75,21 +79,28 @@ class MetadataCache:
         Returns:
             True if entry existed, False otherwise.
         """
-        if key in self._entries:
-            del self._entries[key]
-            return True
-        return False
+        with self._lock:
+            if key in self._entries:
+                del self._entries[key]
+                return True
+            return False
 
     def clear(self) -> None:
         """Clear all cache entries."""
-        self._entries.clear()
+        with self._lock:
+            self._entries.clear()
 
     def size(self) -> int:
         """Return number of entries in cache."""
-        return len(self._entries)
+        with self._lock:
+            return len(self._entries)
 
     def _evict_oldest(self) -> None:
-        """Evict the oldest entry from cache."""
+        """Evict the oldest entry from cache.
+
+        Called only from within set(), which already holds the lock.
+        RLock allows re-entry, so this is safe.
+        """
         if not self._entries:
             return
 
@@ -115,10 +126,11 @@ def invalidate_instance_cache(
         cache: The MetadataCache instance.
         instance_name: Name of the instance to invalidate.
     """
-    keys_to_delete = [
-        key for key in cache._entries
-        if key.startswith(f"instance:{instance_name}:")
-    ]
+    with cache._lock:
+        keys_to_delete = [
+            key for key in cache._entries
+            if key.startswith(f"instance:{instance_name}:")
+        ]
     for key in keys_to_delete:
         cache.delete(key)
 

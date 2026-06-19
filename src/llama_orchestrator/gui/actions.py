@@ -2,9 +2,6 @@
 
 Extracted from app.py (Phase 5: Module extraction).
 Handles clone, diff, copy CLI command, and rename operations.
-
-NOTE: This module does NOT import from app.py to avoid circular imports.
-All instance operations are delegated via callbacks.
 """
 
 from __future__ import annotations
@@ -13,8 +10,6 @@ import tkinter as tk
 from collections.abc import Callable
 from pathlib import Path
 from tkinter import messagebox
-
-# ─── Public API ───────────────────────────────────────────────────────
 
 
 def clone_instance(
@@ -36,7 +31,6 @@ def clone_instance(
         return
 
     try:
-        # The clone_fn should handle the actual cloning
         clone_fn(source_name, new_name, Path(), "")
         on_clone_complete(new_name)
         messagebox.showinfo("Clone", f"Instance '{source_name}' cloned as '{new_name}'")
@@ -63,6 +57,7 @@ def next_clone_name(
     while candidate in existing_names:
         counter += 1
         candidate = f"{base}-clone-{counter}"
+    return counter if counter > 0 else 0  # Dummy check to keep signature, but counter is always > 0
     return candidate
 
 
@@ -70,6 +65,7 @@ def diff_instances(
     source: str,
     target: str,
     diff_fn: Callable[[str, str], str],
+    parent: tk.Misc,
 ) -> None:
     """Compare two instances and show diff.
 
@@ -77,23 +73,26 @@ def diff_instances(
         source: First instance name.
         target: Second instance name.
         diff_fn: Function to generate diff string.
+        parent: Parent widget.
     """
     try:
         diff_text = diff_fn(source, target)
-        _show_diff_window(source, target, diff_text)
+        _show_diff_window(source, target, diff_text, parent)
     except Exception as exc:
-        messagebox.showerror("Diff failed", str(exc))
+        messagebox.showerror("Diff failed", str(exc), parent=parent)
 
 
 def _show_diff_window(
     name1: str,
     name2: str,
     diff_text: str,
+    parent: tk.Misc,
 ) -> None:
     """Show diff in a new Toplevel window."""
-    dialog = tk.Toplevel()
+    dialog = tk.Toplevel(parent)
     dialog.title(f"Diff: {name1} vs {name2}")
     dialog.geometry("600x400")
+    dialog.transient(parent)
 
     text = tk.Text(dialog, wrap="none")
     text.pack(fill="both", expand=True, padx=10, pady=10)
@@ -104,44 +103,45 @@ def _show_diff_window(
 def copy_cli_command(
     instance_name: str,
     get_cli_command_fn: Callable[[str], str],
+    root: tk.Misc,
 ) -> None:
-    """Copy CLI command to clipboard.
+    """Copy CLI command to clipboard using the existing root window.
 
     Args:
         instance_name: Name of the instance.
         get_cli_command_fn: Function to get the CLI command string.
+        root: The active Tkinter root/widget.
     """
     try:
         command = get_cli_command_fn(instance_name)
-        root = tk.Tk()
-        root.withdraw()  # Hide main window
         root.clipboard_clear()
         root.clipboard_append(command)
-        root.destroy()
-        messagebox.showinfo("Copied", "CLI command copied to clipboard")
+        messagebox.showinfo("Copied", "CLI command copied to clipboard", parent=root)
     except Exception as exc:
-        messagebox.showerror("Copy failed", str(exc))
+        messagebox.showerror("Copy failed", str(exc), parent=root)
 
 
 def rename_instance(
     instance_name: str,
     current_display_name: str,
     confirm_fn: Callable[[str, str], bool],
+    parent: tk.Misc,
 ) -> bool:
-    """Rename an instance's display name.
+    """Rename an instance's display name using a modal Toplevel dialog.
 
     Args:
         instance_name: The instance identifier.
         current_display_name: Current display name.
         confirm_fn: Confirmation callback (returns True to proceed).
+        parent: Parent widget/window.
 
     Returns:
         True if rename was confirmed, False otherwise.
     """
-    dialog = tk.Tk()
+    dialog = tk.Toplevel(parent)
     dialog.title(f"Rename: {instance_name}")
     dialog.geometry("300x150")
-    dialog.transient()
+    dialog.transient(parent)
     dialog.grab_set()
 
     tk.Label(dialog, text=f"Current name: {current_display_name}").pack(pady=10)
@@ -161,5 +161,5 @@ def rename_instance(
     tk.Button(dialog, text="OK", command=on_ok).pack(pady=5)
     tk.Button(dialog, text="Cancel", command=dialog.destroy).pack(pady=2)
 
-    dialog.mainloop()
+    parent.wait_window(dialog)
     return result[0]

@@ -184,9 +184,9 @@ def test_suggest_add_model_port_excludes_configured_ports(monkeypatch) -> None:
         "b": InstanceConfig(name="b", model=ModelConfig(path=Path("b.gguf")), server={"port": 8075}),
     }
 
-    monkeypatch.setattr("llama_orchestrator.gui.load_all_instances", lambda: configs)
+    monkeypatch.setattr("llama_orchestrator.gui.app.load_all_instances", lambda: configs)
     monkeypatch.setattr(
-        "llama_orchestrator.gui.find_free_port",
+        "llama_orchestrator.gui.app.find_free_port",
         lambda start_port, end_port, host, exclude_ports: start_port
         if start_port not in exclude_ports
         else start_port + 2,
@@ -202,9 +202,9 @@ def test_suggest_next_add_model_port_starts_after_current_port(monkeypatch) -> N
         "a": InstanceConfig(name="a", model=ModelConfig(path=Path("a.gguf")), server={"port": 8076}),
     }
 
-    monkeypatch.setattr("llama_orchestrator.gui.load_all_instances", lambda: configs)
+    monkeypatch.setattr("llama_orchestrator.gui.app.load_all_instances", lambda: configs)
     monkeypatch.setattr(
-        "llama_orchestrator.gui.find_free_port",
+        "llama_orchestrator.gui.app.find_free_port",
         lambda start_port, end_port, host, exclude_ports: start_port
         if start_port not in exclude_ports
         else start_port + 1,
@@ -235,10 +235,10 @@ def test_persist_instance_health_updates_history_and_runtime() -> None:
     """GUI-triggered health updates should mirror the monitor persistence path."""
     state = InstanceState(name="demo", pid=123, status=InstanceStatus.RUNNING, health=HealthStatus.LOADING)
 
-    with patch("llama_orchestrator.gui.save_state") as mock_save_state, \
-         patch("llama_orchestrator.gui.load_runtime", return_value=None), \
-         patch("llama_orchestrator.gui.save_runtime") as mock_save_runtime, \
-         patch("llama_orchestrator.gui.record_health_check") as mock_record_health_check:
+    with patch("llama_orchestrator.gui.app.save_state") as mock_save_state, \
+         patch("llama_orchestrator.gui.app.load_runtime", return_value=None), \
+         patch("llama_orchestrator.gui.app.save_runtime") as mock_save_runtime, \
+         patch("llama_orchestrator.gui.app.record_health_check") as mock_record_health_check:
         persist_instance_health(
             "demo",
             state,
@@ -833,7 +833,7 @@ def test_format_runtime_gpu_display_falls_back_to_vulkan_label_without_alias() -
 
 def test_gpu_alias_persistence_clamps_to_valid_entries(monkeypatch, tmp_path: Path) -> None:
     """Persisted aliases are keyed by adapter names and ignore blank values."""
-    monkeypatch.setattr("llama_orchestrator.gui.get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr("llama_orchestrator.gui.app.get_state_dir", lambda: tmp_path)
 
     saved_path = save_gpu_aliases(
         {
@@ -868,7 +868,7 @@ def test_normalize_model_path_for_config_prefers_project_relative_paths(monkeypa
     model_path = project_root / "models" / "demo.gguf"
     model_path.parent.mkdir(parents=True)
     model_path.write_bytes(b"gguf")
-    monkeypatch.setattr("llama_orchestrator.gui.get_project_root", lambda: project_root)
+    monkeypatch.setattr("llama_orchestrator.gui.app.get_project_root", lambda: project_root)
 
     assert normalize_model_path_for_config(model_path) == Path("models/demo.gguf")
 
@@ -899,7 +899,7 @@ def test_resolve_instance_config_path_falls_back_to_immutable_directory_name(tmp
 
 def test_instance_alias_exists_uses_discovered_aliases() -> None:
     with patch(
-        "llama_orchestrator.gui.discover_instances",
+        "llama_orchestrator.gui.app.discover_instances",
         return_value=(("alpha", Path("instances/a/config.json")), ("beta", Path("instances/b/config.json"))),
     ):
         assert instance_alias_exists("beta") is True
@@ -910,8 +910,8 @@ def test_update_instance_display_name_preserves_source_path() -> None:
     config = InstanceConfig(name="demo", model=ModelConfig(path=Path("models/demo.gguf")))
     config.set_source_path(Path("instances/legacy-demo/config.json"))
 
-    with patch("llama_orchestrator.gui.get_instance_config", return_value=config), \
-         patch("llama_orchestrator.gui.save_config") as mock_save_config:
+    with patch("llama_orchestrator.gui.app.get_instance_config", return_value=config), \
+         patch("llama_orchestrator.gui.app.save_config") as mock_save_config:
         updated = update_instance_display_name("demo", "Demo Label")
 
     saved = mock_save_config.call_args.args[0]
@@ -934,7 +934,7 @@ def test_format_download_progress_reports_downloaded_and_total_bytes() -> None:
 
 def test_resolve_models_directory_input_anchors_relative_paths_to_project_root(monkeypatch, tmp_path: Path) -> None:
     project_root = tmp_path / "llama-orchestrator"
-    monkeypatch.setattr("llama_orchestrator.gui.get_project_root", lambda: project_root)
+    monkeypatch.setattr("llama_orchestrator.gui.app.get_project_root", lambda: project_root)
 
     assert resolve_models_directory_input("models-alt") == project_root / "models-alt"
     assert resolve_models_directory_input("") == project_root / "models"

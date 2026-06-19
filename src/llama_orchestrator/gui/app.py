@@ -74,10 +74,24 @@ from llama_orchestrator.engine.state import (
     save_runtime,
     save_state,
 )
+from llama_orchestrator.gui.activity_log import build_activity_log_frame, append_activity
 from llama_orchestrator.gui.dataclasses import (
     GuiRefreshSnapshot,
     TableRow,
 )
+from llama_orchestrator.gui.gpu_inventory import (
+    build_gpu_inventory_frame,
+    render_gpu_inventory,
+    edit_gpu_alias,
+    toggle_gpu_inventory,
+)
+from llama_orchestrator.gui.row_renderer import filter_visible_rows, render_full_rows
+from llama_orchestrator.gui.benchmark_controls import (
+    build_benchmark_frame,
+    update_benchmark_controls,
+)
+from llama_orchestrator.gui.actions import copy_cli_command, rename_instance, diff_instances
+from llama_orchestrator.gui.toolbar import build_toolbar, ToolbarCallbacks
 from llama_orchestrator.gui.grid_benchmark_dialog import GridBenchmarkDialog
 from llama_orchestrator.gui.install_dialog import InstallBinaryDialog
 from llama_orchestrator.gui.model_dialogs import AddModelDialog
@@ -761,65 +775,42 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
         self.columnconfigure(0, weight=1)
         self.rowconfigure(1, weight=1)
 
-        toolbar = ttk.Frame(self, padding=(10, 10, 10, 4))
-        toolbar.grid(row=0, column=0, sticky="ew")
-        toolbar.columnconfigure(16, weight=1)
-
-        ttk.Button(toolbar, text="Refresh", command=self.refresh).grid(row=0, column=0, padx=(0, 6))
-        ttk.Button(toolbar, text="Add model", command=self._open_add_dialog).grid(row=0, column=1, padx=6)
-        ttk.Button(toolbar, text="Apply args", command=self._apply_default_args).grid(row=0, column=2, padx=6)
-        ttk.Button(toolbar, text=INSTALL_LLAMA_SERVER_LABEL, command=self._open_binary_dialog).grid(row=0, column=3, padx=6)
-        ttk.Button(toolbar, text="Start", command=lambda: self._run_selected("start")).grid(row=0, column=4, padx=6)
-        ttk.Button(toolbar, text="Stop", command=lambda: self._run_selected("stop")).grid(row=0, column=5, padx=6)
-        ttk.Button(toolbar, text="Restart", command=lambda: self._run_selected("restart")).grid(row=0, column=6, padx=6)
-        ttk.Button(toolbar, text="Health", command=lambda: self._run_selected("health")).grid(row=0, column=7, padx=6)
-
-        columns_button = ttk.Menubutton(toolbar, text="Columns")
-        columns_menu = tk.Menu(columns_button, tearoff=False)
-        columns_button["menu"] = columns_menu
-        self._column_vars: dict[str, tk.BooleanVar] = {}
-        for column in ALL_COLUMNS:
-            var = tk.BooleanVar(value=column in self.gui_settings.visible_columns)
-            self._column_vars[column] = var
-            columns_menu.add_checkbutton(
-                label=COLUMN_HEADINGS[column],
-                variable=var,
-                command=self._apply_visible_columns,
-            )
-        columns_button.grid(row=0, column=8, padx=6)
-
-        batch_button = ttk.Menubutton(toolbar, text="Batch")
-        batch_menu = tk.Menu(batch_button, tearoff=False)
-        batch_button["menu"] = batch_menu
-        batch_menu.add_command(label="Start visible", command=lambda: self._run_batch("start"))
-        batch_menu.add_command(label="Stop visible", command=lambda: self._run_batch("stop"))
-        batch_menu.add_command(label="Restart visible", command=lambda: self._run_batch("restart"))
-        batch_button.grid(row=0, column=9, padx=6)
-
-        ttk.Label(toolbar, text="Tag").grid(row=0, column=10, sticky="e", padx=(12, 4))
-        self.tag_filter = ttk.Combobox(
-            toolbar,
-            textvariable=self.tag_filter_var,
-            values=("All tags",),
-            state="readonly",
-            width=16,
-        )
-        self.tag_filter.grid(row=0, column=11, sticky="w", padx=(0, 6))
-        self.tag_filter.bind("<<ComboboxSelected>>", lambda _event: self.refresh())
-
-        ttk.Button(toolbar, text=EDIT_BENCHMARK_PROMPT_LABEL, command=self._select_prompt_file).grid(row=0, column=12, padx=6)
-        ttk.Label(toolbar, textvariable=self.prompt_var).grid(row=0, column=13, sticky="w", padx=(0, 6))
-        ttk.Checkbutton(
-            toolbar,
-            text="GPU map",
-            variable=self.show_gpu_inventory_var,
-            command=self._toggle_gpu_inventory,
-        ).grid(row=0, column=14, padx=(12, 6))
-
         self.daemon_var = tk.StringVar(value="Daemon: unknown")
-        ttk.Label(toolbar, textvariable=self.daemon_var).grid(row=0, column=16, sticky="e", padx=(10, 6))
-        ttk.Button(toolbar, text="Start daemon", command=self._start_daemon).grid(row=0, column=17, padx=6)
-        ttk.Button(toolbar, text="Stop daemon", command=self._stop_daemon).grid(row=0, column=18, padx=(6, 0))
+
+        callbacks = ToolbarCallbacks(
+            on_refresh=self.refresh,
+            on_add_model=self._open_add_dialog,
+            on_apply_args=self._apply_default_args,
+            on_install_llama_server=self._open_binary_dialog,
+            on_start=lambda: self._run_selected("start"),
+            on_stop=lambda: self._run_selected("stop"),
+            on_restart=lambda: self._run_selected("restart"),
+            on_health=lambda: self._run_selected("health"),
+            on_start_daemon=self._start_daemon,
+            on_stop_daemon=self._stop_daemon,
+            on_column_toggle=self._apply_visible_columns,
+            on_tag_filter=lambda _event: self.refresh(),
+            on_edit_prompt=self._select_prompt_file,
+            on_toggle_gpu_inventory=self._toggle_gpu_inventory,
+            on_start_visible=lambda: self._run_batch("start"),
+            on_stop_visible=lambda: self._run_batch("stop"),
+            on_restart_visible=lambda: self._run_batch("restart"),
+        )
+        self._toolbar_widgets = build_toolbar(
+            self,
+            callbacks=callbacks,
+            column_headings=COLUMN_HEADINGS,
+            all_columns=ALL_COLUMNS,
+            visible_columns=tuple(self.gui_settings.visible_columns),
+            tag_filter_var=self.tag_filter_var,
+            show_gpu_inventory_var=self.show_gpu_inventory_var,
+            prompt_var=self.prompt_var,
+            daemon_var=self.daemon_var,
+        )
+        self._toolbar_widgets.toolbar.grid(row=0, column=0, sticky="ew")
+
+        self.tag_filter = self._toolbar_widgets.tag_combo
+        self._column_vars = self._toolbar_widgets.columns_vars
 
         main = ttk.PanedWindow(self, orient=tk.VERTICAL)
         main.grid(row=1, column=0, sticky="nsew", padx=10, pady=(0, 10))
@@ -829,12 +820,7 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
         table_frame.rowconfigure(1, weight=1)
         main.add(table_frame, weight=4)
 
-        self.gpu_inventory_frame = ttk.LabelFrame(table_frame, text="Detected GPUs", padding=(8, 6))
-        self.gpu_inventory_frame.columnconfigure(0, weight=1)
-        self.gpu_inventory_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 8))
-        self.gpu_inventory_rows = ttk.Frame(self.gpu_inventory_frame)
-        self.gpu_inventory_rows.columnconfigure(2, weight=1)
-        self.gpu_inventory_rows.grid(row=0, column=0, sticky="ew")
+        self.gpu_inventory_frame, self.gpu_inventory_rows = build_gpu_inventory_frame(table_frame)
 
         self.tree = ttk.Treeview(table_frame, columns=ALL_COLUMNS, show="headings", selectmode="extended")
         for column in ALL_COLUMNS:
@@ -868,32 +854,23 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
 
         detail_bar = ttk.Frame(table_frame, padding=(0, 8, 0, 0))
         detail_bar.grid(row=2, column=0, sticky="ew")
-        self.quick_benchmark_button = ttk.Button(detail_bar, text="Quick benchmark", command=self._run_benchmark_selected)
-        self.quick_benchmark_button.pack(side=tk.LEFT)
-        self.serial_benchmark_button = ttk.Button(
+
+        self.benchmark_frame, self._benchmark_btns = build_benchmark_frame(
             detail_bar,
-            text="Serial benchmark",
-            command=self._run_serial_benchmark,
+            grid_benchmark_label=GRID_BENCHMARK_LABEL,
+            on_quick_benchmark=self._run_benchmark_selected,
+            on_serial_benchmark=self._run_serial_benchmark,
+            on_grid_benchmark=self._run_grid_benchmark,
+            on_stop_serial=self._stop_serial_benchmark,
+            on_stop_grid=self._stop_grid_benchmark,
         )
-        self.serial_benchmark_button.pack(side=tk.LEFT, padx=(6, 0))
-        self.grid_benchmark_button = ttk.Button(
-            detail_bar,
-            text=GRID_BENCHMARK_LABEL,
-            command=self._run_grid_benchmark,
-        )
-        self.grid_benchmark_button.pack(side=tk.LEFT, padx=(6, 0))
-        self.stop_serial_benchmark_button = ttk.Button(
-            detail_bar,
-            text="Stop queue",
-            command=self._stop_serial_benchmark,
-        )
-        self.stop_serial_benchmark_button.pack(side=tk.LEFT, padx=(6, 0))
-        self.stop_grid_benchmark_button = ttk.Button(
-            detail_bar,
-            text="Stop grid",
-            command=self._stop_grid_benchmark,
-        )
-        self.stop_grid_benchmark_button.pack(side=tk.LEFT, padx=(6, 0))
+        self.benchmark_frame.pack(side=tk.LEFT)
+
+        self.quick_benchmark_button = self._benchmark_btns["quick"]
+        self.serial_benchmark_button = self._benchmark_btns["serial"]
+        self.grid_benchmark_button = self._benchmark_btns["grid"]
+        self.stop_serial_benchmark_button = self._benchmark_btns["stop_serial"]
+        self.stop_grid_benchmark_button = self._benchmark_btns["stop_grid"]
         params_button = ttk.Menubutton(detail_bar, text=BENCHMARK_PARAMS_MENU_LABEL)
         self.benchmark_params_menu = tk.Menu(params_button, tearoff=False)
         params_button["menu"] = self.benchmark_params_menu
@@ -911,14 +888,8 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
         ttk.Frame(detail_bar).pack(side=tk.LEFT, expand=True, fill=tk.X)
         ttk.Button(detail_bar, text="Reset GUI", command=self._reset_gui_state).pack(side=tk.RIGHT)
 
-        log_frame = ttk.Frame(main)
-        log_frame.columnconfigure(0, weight=1)
-        log_frame.rowconfigure(1, weight=1)
-        main.add(log_frame, weight=2)
-
-        ttk.Label(log_frame, text="Activity").grid(row=0, column=0, sticky="w", pady=(8, 2))
-        self.activity = scrolledtext.ScrolledText(log_frame, height=9, wrap=tk.WORD, state=tk.DISABLED)
-        self.activity.grid(row=1, column=0, sticky="nsew")
+        self.activity_log_frame, self.activity, _ = build_activity_log_frame(main)
+        main.add(self.activity_log_frame, weight=2)
         self._update_benchmark_controls()
 
         # Create a footer frame at the bottom for progress/status widgets
@@ -970,69 +941,21 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
             self.gpu_inventory_frame.grid_remove()
 
     def _render_gpu_inventory(self, gpus: Sequence[DetectedGpu]) -> None:
-        for child in self.gpu_inventory_rows.winfo_children():
-            child.destroy()
+        render_gpu_inventory(self.gpu_inventory_rows, gpus, self.gpu_aliases,
+                             gpu_alias_button_width=GPU_ALIAS_BUTTON_WIDTH)
 
-        if not gpus:
-            ttk.Label(
-                self.gpu_inventory_rows,
-                text=self.gpu_inventory_var.get(),
-                justify=tk.LEFT,
-            ).grid(row=0, column=0, columnspan=3, sticky="w")
-            return
-
-        ttk.Label(self.gpu_inventory_rows, text="Device").grid(row=0, column=0, sticky="w")
-        ttk.Label(self.gpu_inventory_rows, text="Alias").grid(row=0, column=1, sticky="w", padx=(8, 8))
-        ttk.Label(self.gpu_inventory_rows, text="Adapter").grid(row=0, column=2, sticky="w")
-
-        for row_index, gpu in enumerate(gpus, start=1):
-            ttk.Label(self.gpu_inventory_rows, text=gpu.label).grid(row=row_index, column=0, sticky="w")
-            alias = self.gpu_aliases.get(gpu.name or "", "")
-            alias_button = ttk.Button(
-                self.gpu_inventory_rows,
-                text=alias or "-",
-                width=GPU_ALIAS_BUTTON_WIDTH,
-                command=lambda adapter_name=gpu.name: self._edit_gpu_alias(adapter_name),
-            )
-            if not gpu.name:
-                alias_button.configure(state=tk.DISABLED)
-            alias_button.grid(row=row_index, column=1, sticky="w", padx=(8, 8), pady=(2, 0))
-            ttk.Label(
-                self.gpu_inventory_rows,
-                text=gpu.name or "adapter name unavailable",
-            ).grid(row=row_index, column=2, sticky="w", pady=(2, 0))
+    def _on_gpu_alias_changed(self, adapter_name: str, alias: str) -> None:
+        self._post_message(f"Saved GPU alias for {adapter_name}: {alias or 'cleared'}.")
+        self.refresh()
 
     def _edit_gpu_alias(self, adapter_name: str | None) -> None:
         if not adapter_name:
             return
-        current = self.gpu_aliases.get(adapter_name, "")
-        value = simpledialog.askstring(
-            "GPU alias",
-            f"Alias for {adapter_name}\nMaximum {GPU_ALIAS_MAX_LENGTH} characters. Blank clears alias.",
-            initialvalue=current,
-            parent=self,
-        )
-        if value is None:
-            return
-        try:
-            alias = normalize_gpu_alias(value)
-        except ValueError as exc:
-            messagebox.showerror("Invalid GPU alias", str(exc), parent=self)
-            return
-
-        if alias:
-            self.gpu_aliases[adapter_name] = alias
-        else:
-            self.gpu_aliases.pop(adapter_name, None)
-
-        try:
-            save_gpu_aliases(self.gpu_aliases)
-        except Exception as exc:
-            messagebox.showerror("Save GPU alias failed", str(exc), parent=self)
-            return
-
-        self._post_message(f"Saved GPU alias for {adapter_name}: {alias or 'cleared'}.")
-        self.refresh()
+        edit_gpu_alias(parent=self, adapter_name=adapter_name,
+                       current_alias=self.gpu_aliases.get(adapter_name, ""),
+                       aliases_store=self.gpu_aliases,
+                       on_alias_changed=self._on_gpu_alias_changed,
+                       normalize_fn=normalize_gpu_alias, save_fn=save_gpu_aliases)
 
     def _schedule_message_pump(self) -> None:
         self._pump_messages()
@@ -1051,10 +974,7 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
 
     def _append_activity(self, message: str) -> None:
         timestamp = time.strftime("%H:%M:%S")
-        self.activity.configure(state=tk.NORMAL)
-        self.activity.insert(tk.END, f"[{timestamp}] {message}\n")
-        self.activity.see(tk.END)
-        self.activity.configure(state=tk.DISABLED)
+        append_activity(self.activity, f"[{timestamp}] {message}")
 
     def _post_message(self, message: str) -> None:
         self._messages.put(message)
@@ -1273,20 +1193,15 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
         return tuple(rows), all_tags
 
     def _visible_rows(self, rows: Sequence[TableRow]) -> tuple[TableRow, ...]:
-        return tuple(
-            stable_sort_rows(
-                list(rows),
-                self.gui_settings.sort_order,
-                lambda current, column: current.sort_values.get(column),
-            )
-        )
+        return filter_visible_rows(rows, self.gui_settings.sort_order)
 
     def _render_full_rows(self, rows: Sequence[TableRow]) -> None:
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-        for row in self._visible_rows(rows):
-            tags = (RUNNING_BENCHMARK_ROW_TAG,) if row.name == self._benchmark_active_name else ()
-            self.tree.insert("", tk.END, iid=row.name, values=row.values, tags=tags)
+        render_full_rows(
+            self.tree,
+            self._visible_rows(rows),
+            self._benchmark_active_name,
+            RUNNING_BENCHMARK_ROW_TAG,
+        )
 
     def _render_refresh_metadata(
         self,
@@ -1327,6 +1242,9 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
             self.daemon_var.set(f"Daemon: running (PID {daemon.pid})")
         else:
             self.daemon_var.set("Daemon: stopped")
+        if hasattr(self, "_toolbar_widgets"):
+            self._toolbar_widgets.start_daemon_btn.config(state="disabled" if daemon.running else "normal")
+            self._toolbar_widgets.stop_daemon_btn.config(state="normal" if daemon.running else "disabled")
 
     def _on_select(self, _event: tk.Event) -> None:
         selection = self.tree.selection()
@@ -1455,35 +1373,18 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
             self._benchmark_job_label = None
 
     def _update_benchmark_controls(self) -> None:
-        running = self._benchmark_job_running()
-        queued_visible = bool(self._ordered_queued_instance_names())
-        if self.quick_benchmark_button is not None:
-            self.quick_benchmark_button.configure(state=tk.DISABLED if running else tk.NORMAL)
-        if self.serial_benchmark_button is not None:
-            self.serial_benchmark_button.configure(
-                state=tk.DISABLED if running or not queued_visible else tk.NORMAL
-            )
-        if self.grid_benchmark_button is not None:
-            has_grid_target = bool(self.tree.selection() or queued_visible)
-            self.grid_benchmark_button.configure(
-                state=tk.DISABLED if running or not has_grid_target else tk.NORMAL
-            )
-        if self.stop_serial_benchmark_button is not None:
-            self.stop_serial_benchmark_button.configure(
-                state=(
-                    tk.NORMAL
-                    if self._serial_benchmark_active and not self._serial_benchmark_stop.is_set()
-                    else tk.DISABLED
-                )
-            )
-        if self.stop_grid_benchmark_button is not None:
-            self.stop_grid_benchmark_button.configure(
-                state=(
-                    tk.NORMAL
-                    if self._grid_benchmark_active and not self._grid_benchmark_stop.is_set()
-                    else tk.DISABLED
-                )
-            )
+        if not hasattr(self, "_benchmark_btns"):
+            return
+        update_benchmark_controls(
+            self._benchmark_btns,
+            running=self._benchmark_job_running(),
+            queued_visible=bool(self._ordered_queued_instance_names()),
+            has_grid_target=bool(self.tree.selection() or self._ordered_queued_instance_names()),
+            serial_active=self._serial_benchmark_active,
+            serial_stopping=self._serial_benchmark_stop.is_set(),
+            grid_active=self._grid_benchmark_active,
+            grid_stopping=self._grid_benchmark_stop.is_set(),
+        )
 
     def _run_background(self, label: str, action: Callable[[], str | None]) -> None:
         def worker() -> None:
@@ -2094,21 +1995,12 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
             index += 1
         return f"{base}{index}"
 
-    def _diff_selected(self) -> None:
-        selected = self._selected_instances()
-        if len(selected) != 2:
-            messagebox.showinfo("Select two rows", "Select exactly two model rows for config diff.")
-            return
-        try:
-            left = get_instance_config(selected[0])
-            right = get_instance_config(selected[1])
-        except Exception as exc:
-            messagebox.showerror("Diff failed", str(exc))
-            return
-
+    def _compute_diff(self, name1: str, name2: str) -> str:
+        left = get_instance_config(name1)
+        right = get_instance_config(name2)
         left_args = [*left.args]
         right_args = [*right.args]
-        diff = "\n".join(
+        return "\n".join(
             difflib.unified_diff(
                 [arg + "\n" for arg in left_args],
                 [arg + "\n" for arg in right_args],
@@ -2117,55 +2009,32 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
                 lineterm="",
             )
         )
-        self._open_diff_window(left.name, right.name, left_args, right_args, diff or "Runtime args are identical.")
 
-    def _open_diff_window(
-        self,
-        left_name: str,
-        right_name: str,
-        left_args: list[str],
-        right_args: list[str],
-        diff: str,
-    ) -> None:
-        window = tk.Toplevel(self)
-        window.title(f"Runtime args diff: {left_name} vs {right_name}")
-        window.geometry("900x520")
-        window.columnconfigure(0, weight=1)
-        window.rowconfigure(0, weight=1)
+    def _diff_selected(self) -> None:
+        selected = self._selected_instances()
+        if len(selected) != 2:
+            messagebox.showinfo("Select two rows", "Select exactly two model rows for config diff.", parent=self)
+            return
+        diff_instances(selected[0], selected[1], self._compute_diff, parent=self)
 
-        panes = ttk.PanedWindow(window, orient=tk.VERTICAL)
-        panes.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
-
-        side_by_side = ttk.PanedWindow(panes, orient=tk.HORIZONTAL)
-        panes.add(side_by_side, weight=2)
-        for label, args in ((left_name, left_args), (right_name, right_args)):
-            frame = ttk.Frame(side_by_side)
-            frame.columnconfigure(0, weight=1)
-            frame.rowconfigure(1, weight=1)
-            ttk.Label(frame, text=label).grid(row=0, column=0, sticky="w")
-            text = scrolledtext.ScrolledText(frame, height=10, wrap=tk.NONE)
-            text.grid(row=1, column=0, sticky="nsew")
-            text.insert(tk.END, "\n".join(args) or "(no runtime args)")
-            text.configure(state=tk.DISABLED)
-            side_by_side.add(frame, weight=1)
-
-        diff_text = scrolledtext.ScrolledText(panes, height=10, wrap=tk.NONE)
-        diff_text.insert(tk.END, diff)
-        diff_text.configure(state=tk.DISABLED)
-        panes.add(diff_text, weight=1)
+    def _get_cli_command(self, name: str) -> str:
+        return format_command(build_command(get_instance_config(name)))
 
     def _copy_cli_command(self) -> None:
         name = self._selected_instance()
         if not name:
             return
-        try:
-            command = format_command(build_command(get_instance_config(name)))
-        except Exception as exc:
-            messagebox.showerror("Copy CLI failed", str(exc))
-            return
-        self.clipboard_clear()
-        self.clipboard_append(command)
+        copy_cli_command(name, self._get_cli_command, root=self)
         self._post_message(f"Copied llama.cpp CLI command for {name}.")
+
+    def _confirm_rename(self, name: str, display_name: str) -> bool:
+        try:
+            update_instance_display_name(name, display_name)
+            self._post_message(f"Updated display name for {name} to {display_name}.")
+            return True
+        except Exception as exc:
+            messagebox.showerror("Rename failed", str(exc), parent=self)
+            return False
 
     def _rename_display_name(self) -> None:
         name = self._selected_instance()
@@ -2174,26 +2043,11 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
         try:
             config = get_instance_config(name)
         except Exception as exc:
-            messagebox.showerror("Rename failed", str(exc))
+            messagebox.showerror("Rename failed", str(exc), parent=self)
             return
 
-        requested = simpledialog.askstring(
-            "Rename display name",
-            "Display name:",
-            initialvalue=config.display_name,
-            parent=self,
-        )
-        if requested is None:
-            return
-
-        try:
-            updated = update_instance_display_name(name, requested)
-        except Exception as exc:
-            messagebox.showerror("Rename failed", str(exc))
-            return
-
-        self._post_message(f"Updated display name for {name} to {updated.display_name}.")
-        self.refresh()
+        if rename_instance(name, config.display_name, self._confirm_rename, parent=self):
+            self.refresh()
 
     def _start_daemon(self) -> None:
         def action() -> str:

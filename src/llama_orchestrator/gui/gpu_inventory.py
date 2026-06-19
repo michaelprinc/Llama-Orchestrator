@@ -89,8 +89,8 @@ def render_gpu_inventory(
         )
         widgets.append(label)
 
-        # Show alias button only if we have aliases to manage or GPUs detected
-        if len(aliases) > 0 or len(gpus) > 0:
+        # Show alias button only if adapter name is known
+        if gpu_name:
             alias_btn = tk.Button(
                 parent,
                 text=f"Alias: {alias[:10] if alias else '...'}",
