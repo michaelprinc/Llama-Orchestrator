@@ -5,16 +5,15 @@ Extracted from app.py to reduce context fill during independent refactoring.
 
 from __future__ import annotations
 
-from tkinter import messagebox, ttk
-
 import tkinter as tk
+from tkinter import messagebox, ttk
 
 from llama_orchestrator.benchmark import BenchmarkSettings
 from llama_orchestrator.benchmark_grid import (
     DEFAULT_KV_CACHE_PROFILE_IDS,
+    KV_CACHE_PARAMETER_NAME,
     GridParameterRange,
     GridPlan,
-    KV_CACHE_PARAMETER_NAME,
     format_grid_plan_preview,
     grid_parameter_catalog,
     load_grid_plan,

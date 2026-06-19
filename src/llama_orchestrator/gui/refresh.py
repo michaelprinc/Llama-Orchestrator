@@ -29,13 +29,14 @@ import threading
 import time
 import tkinter as tk
 from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 from llama_orchestrator.benchmark import BenchmarkSettings
 from llama_orchestrator.engine.detection import DetectedGpu
-from llama_orchestrator.gui.usability import get_status_tag, get_health_tag
-from typing import TYPE_CHECKING
+from llama_orchestrator.gui.usability import get_health_tag, get_status_tag
+
 if TYPE_CHECKING:
-    from llama_orchestrator.gui import RUNNING_BENCHMARK_ROW_TAG, GuiRefreshSnapshot, TableRow
+    from llama_orchestrator.gui import GuiRefreshSnapshot, TableRow
 
 logger = logging.getLogger(__name__)
 

@@ -5,10 +5,9 @@ Extracted from app.py to reduce context fill during independent refactoring.
 
 from __future__ import annotations
 
+import tkinter as tk
 from collections.abc import Callable
 from tkinter import ttk
-
-import tkinter as tk
 
 VULKAN_VARIANT = "win-vulkan-x64"
 

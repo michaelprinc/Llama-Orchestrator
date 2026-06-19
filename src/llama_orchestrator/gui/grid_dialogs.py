@@ -8,10 +8,9 @@ refactoring.
 
 from __future__ import annotations
 
+import tkinter as tk
 from collections.abc import Sequence
 from dataclasses import dataclass
-
-import tkinter as tk
 
 from llama_orchestrator.benchmark_grid import (
     DEFAULT_KV_CACHE_PROFILE_IDS,

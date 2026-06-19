@@ -5,15 +5,12 @@ Extracted from app.py to reduce context fill during independent refactoring.
 
 from __future__ import annotations
 
+import tkinter as tk
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 
-import tkinter as tk
-
-from dataclasses import replace
-
-from llama_orchestrator.benchmark import BenchmarkSettings
 from llama_orchestrator.config import (
     BinaryConfig,
     GpuConfig,
@@ -25,14 +22,13 @@ from llama_orchestrator.config import (
     load_all_instances,
     save_config,
 )
+from llama_orchestrator.gui_state import GuiSettings, save_gui_settings
 from llama_orchestrator.health.ports import find_free_port
-from llama_orchestrator.gui_state import GuiSettings, load_gui_settings, save_gui_settings
 from llama_orchestrator.hf_import import (
     ImportedModelSelection,
     build_add_model_prefill,
 )
 from llama_orchestrator.model_metadata import build_model_metadata
-
 
 # --- Local utility functions (extracted from app.py) ---
 
@@ -130,8 +126,8 @@ def apply_managed_runtime_args(
     flash_attn: str = "auto",
 ) -> list[str]:
     """Apply GUI-managed llama-server runtime args without duplicating flags."""
-    MANAGED_FLAG_ARGS = {"--no-mmproj", "--flash-attn", "--reasoning"}
-    MANAGED_VALUE_ARGS = {"--flash-attn", "--reasoning"}
+    managed_flag_args = {"--no-mmproj", "--flash-attn", "--reasoning"}
+    managed_value_args = {"--flash-attn", "--reasoning"}
     cleaned: list[str] = []
     skip_next = False
 
@@ -139,9 +135,9 @@ def apply_managed_runtime_args(
         if skip_next:
             skip_next = False
             continue
-        if arg in MANAGED_FLAG_ARGS:
+        if arg in managed_flag_args:
             continue
-        if arg in MANAGED_VALUE_ARGS:
+        if arg in managed_value_args:
             skip_next = True
             continue
         cleaned.append(arg)

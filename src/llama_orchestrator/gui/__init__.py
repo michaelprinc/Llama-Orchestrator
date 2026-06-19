@@ -1,56 +1,177 @@
 """llama-orchestrator GUI package.
 
-The package entrypoint loads the current GUI implementation from
-``gui/app.py`` and re-exports its public API.  The sibling ``gui.py`` module
-is retained only as a compatibility fallback while the extraction workstream
-continues.
+The package entrypoint re-exports the public API from the extracted modules
+and the main ``app.py`` coordinator.  The legacy ``gui.py`` module has been
+removed as part of the extraction workstream.
 """
 
-import importlib
-import sys
-from pathlib import Path
+from __future__ import annotations
 
-_package_dir = Path(__file__).resolve().parent
-_app_path = _package_dir / "app.py"
-_fallback_path = _package_dir.parent / "gui.py"
+# --- Main GUI classes ---
+# --- Utility functions ---
+from llama_orchestrator.gui.app import (  # noqa: F401
+    BENCHMARK_PARAMS_MENU_LABEL,
+    COLUMN_HEADINGS,
+    COLUMN_WIDTHS,
+    CPU_ACTIVE_GLYPH,
+    DEFAULT_RUNTIME_ARGS,
+    EDIT_BENCHMARK_PROMPT_LABEL,
+    GRID_BENCHMARK_LABEL,
+    INSTALL_LLAMA_SERVER_LABEL,
+    QUEUE_CHECKED_GLYPH,
+    QUEUE_UNCHECKED_GLYPH,
+    RUNNING_BENCHMARK_ROW_TAG,
+    VULKAN_BINARY_MISSING_MESSAGE,
+    ExistingModelFileDialog,
+    LlamaOrchestratorGui,
+    apply_managed_runtime_args,
+    benchmark_shared_ram_warning,
+    derive_display_status_and_health,
+    format_benchmark_memory,
+    format_benchmark_message,
+    format_benchmark_settings_summary,
+    format_cpu_indicator,
+    format_detected_gpu_summary,
+    format_download_bytes,
+    format_download_progress,
+    format_metric,
+    format_model_size_gb,
+    format_queue_checkbox,
+    format_runtime_gpu_display,
+    format_serial_benchmark_progress,
+    get_gpu_aliases_path,
+    gpu_alias_for_label,
+    instance_alias_exists,
+    launch_gui,
+    load_gpu_aliases,
+    normalize_config_token,
+    normalize_gpu_alias,
+    normalize_model_path_for_config,
+    ordered_visible_names,
+    parse_tag_string,
+    persist_instance_health,
+    resolve_instance_config_dir,
+    resolve_instance_config_path,
+    resolve_models_directory_input,
+    run_serial_benchmark_queue,
+    save_gpu_aliases,
+    suggest_add_model_port,
+    suggest_next_add_model_port,
+    unique_instance_name,
+    update_instance_display_name,
+)
 
-for _source_path in (_app_path, _fallback_path):
-    if not _source_path.exists():
-        continue
-    try:
-        _gui_source = _source_path.read_text(encoding="utf-8")
-        exec(compile(_gui_source, str(_source_path), "exec"), globals())
-        GUI_IMPLEMENTATION_SOURCE = _source_path.name
-        if _source_path == _app_path:
-            sys.modules[f"{__name__}.app"] = sys.modules[__name__]
-            app = sys.modules[__name__]
-        break
-    except Exception:
-        if _source_path == _fallback_path:
-            raise
-else:
-    raise ImportError("Neither gui/app.py nor gui.py could be loaded")
+# --- Data classes ---
+from llama_orchestrator.gui.dataclasses import (  # noqa: F401
+    GuiRefreshSnapshot,
+    ImportDialogEvent,
+    TableRow,
+)
 
-_app_public_names = {name for name in globals() if not name.startswith("_")}
+# --- Dialog classes ---
+from llama_orchestrator.gui.dialogs import (  # noqa: F401
+    ExistingModelFileDialog as _ExistingModelFileDialog,
+)
+from llama_orchestrator.gui.grid_benchmark_dialog import GridBenchmarkDialog  # noqa: F401
+from llama_orchestrator.gui.grid_dialogs import (  # noqa: F401
+    GridDialogParameterVars,
+    format_kv_cache_profile_summary,
+    parse_grid_number,
+    parse_grid_values,
+)
+from llama_orchestrator.gui.hf_import_dialog import HuggingFaceImportDialog  # noqa: F401
+from llama_orchestrator.gui.install_dialog import InstallBinaryDialog  # noqa: F401
+from llama_orchestrator.gui.kv_cache_dialogs import KvCacheProfileDialog  # noqa: F401
+from llama_orchestrator.gui.model_dialogs import AddModelDialog  # noqa: F401
 
-_refresh = importlib.import_module("llama_orchestrator.gui.refresh")
-RefreshController = _refresh.RefreshController
-RenderDiffMixin = _refresh.RenderDiffMixin
+# --- Refresh controller ---
+from llama_orchestrator.gui.refresh import (  # noqa: F401
+    RefreshController,
+    RenderDiffMixin,
+)
 
-_usability = importlib.import_module("llama_orchestrator.gui.usability")
-SHORTCUT_REGISTRY = _usability.SHORTCUT_REGISTRY
-configure_status_tags = _usability.configure_status_tags
-create_progress_bar = _usability.create_progress_bar
-register_shortcuts = _usability.register_shortcuts
+# --- Usability helpers ---
+from llama_orchestrator.gui.usability import (  # noqa: F401
+    SHORTCUT_REGISTRY,
+    configure_status_tags,
+    create_progress_bar,
+    register_shortcuts,
+)
 
 __all__ = sorted(
-    _app_public_names
-    | {
+    [
+        # Main GUI
+        "BENCHMARK_PARAMS_MENU_LABEL",
+        "COLUMN_HEADINGS",
+        "COLUMN_WIDTHS",
+        "CPU_ACTIVE_GLYPH",
+        "DEFAULT_RUNTIME_ARGS",
+        "EDIT_BENCHMARK_PROMPT_LABEL",
+        "GRID_BENCHMARK_LABEL",
+        "INSTALL_LLAMA_SERVER_LABEL",
+        "QUEUE_CHECKED_GLYPH",
+        "QUEUE_UNCHECKED_GLYPH",
+        "RUNNING_BENCHMARK_ROW_TAG",
+        "VULKAN_BINARY_MISSING_MESSAGE",
+        "ExistingModelFileDialog",
+        "LlamaOrchestratorGui",
+        "launch_gui",
+        # Data classes
+        "GuiRefreshSnapshot",
+        "ImportDialogEvent",
+        "TableRow",
+        # Refresh
         "RefreshController",
         "RenderDiffMixin",
+        # Usability
         "SHORTCUT_REGISTRY",
         "configure_status_tags",
         "create_progress_bar",
         "register_shortcuts",
-    }
+        # Dialogs
+        "AddModelDialog",
+        "GridBenchmarkDialog",
+        "GridDialogParameterVars",
+        "HuggingFaceImportDialog",
+        "InstallBinaryDialog",
+        "KvCacheProfileDialog",
+        "format_kv_cache_profile_summary",
+        "parse_grid_number",
+        "parse_grid_values",
+        # Utilities
+        "apply_managed_runtime_args",
+        "benchmark_shared_ram_warning",
+        "derive_display_status_and_health",
+        "format_benchmark_memory",
+        "format_benchmark_message",
+        "format_benchmark_settings_summary",
+        "format_cpu_indicator",
+        "format_detected_gpu_summary",
+        "format_download_bytes",
+        "format_download_progress",
+        "format_metric",
+        "format_model_size_gb",
+        "format_queue_checkbox",
+        "format_runtime_gpu_display",
+        "format_serial_benchmark_progress",
+        "get_gpu_aliases_path",
+        "gpu_alias_for_label",
+        "instance_alias_exists",
+        "load_gpu_aliases",
+        "normalize_config_token",
+        "normalize_gpu_alias",
+        "normalize_model_path_for_config",
+        "ordered_visible_names",
+        "parse_tag_string",
+        "persist_instance_health",
+        "resolve_instance_config_dir",
+        "resolve_instance_config_path",
+        "resolve_models_directory_input",
+        "run_serial_benchmark_queue",
+        "save_gpu_aliases",
+        "suggest_add_model_port",
+        "suggest_next_add_model_port",
+        "unique_instance_name",
+        "update_instance_display_name",
+    ]
 )

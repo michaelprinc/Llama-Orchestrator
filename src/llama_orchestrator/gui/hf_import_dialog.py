@@ -7,14 +7,15 @@ from __future__ import annotations
 
 import queue
 import threading
-from pathlib import Path
-from tkinter import filedialog, messagebox, simpledialog, ttk
+import tkinter as tk
 from collections.abc import Callable
 from contextlib import suppress
-
-import tkinter as tk
+from pathlib import Path
+from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from llama_orchestrator.config.loader import get_project_root
+from llama_orchestrator.gui.dataclasses import ImportDialogEvent
+from llama_orchestrator.gui.dialogs import ExistingModelFileDialog
 from llama_orchestrator.hf_import import (
     DownloadCancelledError,
     DownloadProgress,
@@ -33,9 +34,6 @@ from llama_orchestrator.hf_import import (
     save_import_settings,
     write_import_metadata_sidecar,
 )
-from llama_orchestrator.gui.dataclasses import ImportDialogEvent
-from llama_orchestrator.gui.dialogs import ExistingModelFileDialog
-
 
 # --- Helper functions extracted from app.py ---
 
