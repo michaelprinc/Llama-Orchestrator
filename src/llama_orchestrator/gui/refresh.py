@@ -203,7 +203,7 @@ class RenderDiffMixin:
         re-inserted every row.  Now only changed/added/removed rows touch
         the Treeview.
         """
-        from llama_orchestrator.gui import RUNNING_BENCHMARK_ROW_TAG
+        from llama_orchestrator.gui.app import RUNNING_BENCHMARK_ROW_TAG
         new_map: dict[str, TableRow] = {row.name: row for row in new_rows}
         existing = self._row_map  # type: ignore[attr-defined]
 
