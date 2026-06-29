@@ -180,6 +180,7 @@ class AddModelDialog(tk.Toplevel):
         self.layers_var = tk.StringVar(value="0")
         self.context_var = tk.StringVar(value="4096")
         self.threads_var = tk.StringVar(value="8")
+        self.batch_size_var = tk.StringVar(value="512")
         self.tags_var = tk.StringVar()
         self.no_mmproj_var = tk.BooleanVar(value=True)
         self.reasoning_var = tk.StringVar(value="off")
@@ -230,13 +231,14 @@ class AddModelDialog(tk.Toplevel):
         self._entry(frame, "GPU layers", self.layers_var, 6)
         self._entry(frame, "Context", self.context_var, 7)
         self._entry(frame, "Threads", self.threads_var, 8)
-        self._entry(frame, "Tags", self.tags_var, 9)
+        self._entry(frame, "Batch size", self.batch_size_var, 9)
+        self._entry(frame, "Tags", self.tags_var, 10)
 
         ttk.Checkbutton(
             frame,
             text="--no-mmproj",
             variable=self.no_mmproj_var,
-        ).grid(row=10, column=1, sticky="w", pady=4)
+        ).grid(row=11, column=1, sticky="w", pady=4)
 
         reasoning = ttk.Combobox(
             frame,
@@ -244,8 +246,8 @@ class AddModelDialog(tk.Toplevel):
             values=("off", "auto"),
             width=18,
         )
-        ttk.Label(frame, text="--reasoning").grid(row=11, column=0, sticky="w", pady=4)
-        reasoning.grid(row=11, column=1, sticky="w", pady=4)
+        ttk.Label(frame, text="--reasoning").grid(row=12, column=0, sticky="w", pady=4)
+        reasoning.grid(row=12, column=1, sticky="w", pady=4)
 
         flash_attn = ttk.Combobox(
             frame,
@@ -253,11 +255,11 @@ class AddModelDialog(tk.Toplevel):
             values=("auto", "on", "off"),
             width=18,
         )
-        ttk.Label(frame, text="--flash-attn").grid(row=12, column=0, sticky="w", pady=4)
-        flash_attn.grid(row=12, column=1, sticky="w", pady=4)
+        ttk.Label(frame, text="--flash-attn").grid(row=13, column=0, sticky="w", pady=4)
+        flash_attn.grid(row=13, column=1, sticky="w", pady=4)
 
         buttons = ttk.Frame(frame)
-        buttons.grid(row=13, column=0, columnspan=3, sticky="e", pady=(12, 0))
+        buttons.grid(row=14, column=0, columnspan=3, sticky="e", pady=(12, 0))
         ttk.Button(buttons, text="Cancel", command=self.destroy).pack(side=tk.RIGHT)
         ttk.Button(buttons, text="Save", command=self._save).pack(side=tk.RIGHT, padx=(0, 8))
 
@@ -334,20 +336,32 @@ class AddModelDialog(tk.Toplevel):
                 raise ValueError("Name cannot be blank")
             name = unique_instance_name(display_name, {existing for existing, _ in discover_instances()})
             model_path = normalize_model_path_for_config(Path(self.model_var.get().strip()))
+            backend = self.backend_var.get()
+            # Map backend to binary variant — only CPU and Vulkan have known variants
+            binary: BinaryConfig | None = None
+            if backend == "vulkan":
+                binary = BinaryConfig(version="latest", variant=VULKAN_VARIANT)
+            elif backend == "cuda":
+                binary = BinaryConfig(version="latest", variant="win-cuda-12.4-x64")
+            elif backend == "hip":
+                binary = BinaryConfig(version="latest", variant="win-hip-radeon-x64")
+            elif backend == "metal":
+                # macOS only — no pre-built variant available
+                binary = None
+            # CPU backend: binary=None falls back to legacy bin/ directory
             config = InstanceConfig(
                 name=name,
                 display_name=display_name,
-                binary=BinaryConfig(version="latest", variant=VULKAN_VARIANT)
-                if self.backend_var.get() == "vulkan"
-                else None,
+                binary=binary,
                 model=ModelConfig(
                     path=model_path,
                     context_size=int(self.context_var.get()),
                     threads=int(self.threads_var.get()),
+                    batch_size=int(self.batch_size_var.get()),
                 ),
                 server=ServerConfig(port=int(self.port_var.get())),
                 gpu=GpuConfig(
-                    backend=self.backend_var.get(),  # type: ignore[arg-type]
+                    backend=backend,
                     device_id=int(self.device_var.get()),
                     layers=int(self.layers_var.get()),
                 ),

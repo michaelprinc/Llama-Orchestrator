@@ -417,137 +417,8 @@ class GridBenchmarkDialog(tk.Toplevel):
 
 
 # ---------------------------------------------------------------------------
-# Model Addition Dialogs
+# Existing Model File Dialog (still in use by hf_import_dialog.py)
 # ---------------------------------------------------------------------------
-
-
-class AddModelDialog(tk.Toplevel):
-    """Dialog for adding a new model instance."""
-
-    def __init__(
-        self,
-        parent: tk.Misc,
-        project_root: Path,
-        existing_names: list[str],
-    ) -> None:
-        super().__init__(parent)
-        self.title("Add model")
-        self._project_root = project_root
-        self._existing_names = existing_names
-        self._build()
-
-    def _build(self) -> None:
-        """Build the dialog UI."""
-        body = ttk.Frame(self, padding=10)
-        body.grid(row=0, column=0, sticky="nsew")
-        self.columnconfigure(0, weight=1)
-        self.rowconfigure(0, weight=1)
-
-        # Name field
-        ttk.Label(body, text="Instance name:").grid(row=0, column=0, sticky="e", padx=4, pady=2)
-        self.name_var = tk.StringVar()
-        ttk.Entry(body, textvariable=self.name_var).grid(row=0, column=1, sticky="ew", padx=4)
-
-        # Model path
-        ttk.Label(body, text="Model path:").grid(row=1, column=0, sticky="e", padx=4, pady=2)
-        self.model_var = tk.StringVar()
-        ttk.Entry(body, textvariable=self.model_var).grid(row=1, column=1, sticky="ew", padx=4)
-        ttk.Button(body, text="Browse...", command=self._browse_model).grid(
-            row=1, column=2, padx=4
-        )
-
-        # HuggingFace button
-        ttk.Button(
-            body, text="Import from HuggingFace", command=self._open_hf_import_dialog
-        ).grid(row=2, column=0, columnspan=2, sticky="w", pady=10)
-
-        # Port settings
-        ttk.Label(body, text="Port:").grid(row=3, column=0, sticky="e", padx=4, pady=2)
-        self.port_var = tk.StringVar(value="8080")
-        ttk.Entry(body, textvariable=self.port_var).grid(row=3, column=1, sticky="ew", padx=4)
-        ttk.Button(
-            body, text="Port scan...", command=self._find_free_port
-        ).grid(row=3, column=2, padx=4)
-
-        buttons = ttk.Frame(body)
-        buttons.grid(row=4, column=0, columnspan=2, sticky="e", pady=(10, 0))
-        ttk.Button(buttons, text="Cancel", command=self.destroy).pack(side=tk.RIGHT, padx=4)
-        ttk.Button(buttons, text="Save", command=self._save).pack(side=tk.RIGHT, padx=4)
-
-        self.protocol("WM_DELETE_WINDOW", self.destroy)
-
-    def _browse_model(self) -> None:
-        """Open a file dialog to select a model file."""
-        path = tk.filedialog.askopenfilename(
-            parent=self,
-            title="Select model file",
-            filetypes=[("GGUF files", "*.gguf"), ("All files", "*.*")],
-        )
-        if path:
-            self.model_var.set(path)
-
-    def _open_hf_import_dialog(self) -> None:
-        """Open the HuggingFace import dialog."""
-        hf_dialog = HuggingFaceImportDialog(
-            self, self._project_root, self._existing_names
-        )
-        hf_dialog.grab_set()
-
-    def _apply_hf_import_selection(self, selection: ImportedModelSelection) -> None:
-        """Apply the model selection from HuggingFace import."""
-        self.model_var.set(str(selection.local_path))
-
-    def _configure_port_scan(self) -> None:
-        """Configure port scanning options."""
-        pass
-
-    def _find_free_port(self) -> None:
-        """Find and suggest a free port."""
-        port = find_free_port(start_port=8080)
-        self.port_var.set(str(port))
-
-    def _save(self) -> None:
-        """Save the new model instance."""
-        name = self.name_var.get().strip()
-        model_path = self.model_var.get().strip()
-
-        if not name or not model_path:
-            messagebox.showerror(
-                "Add model",
-                "Name and model path are required.",
-                parent=self,
-            )
-            return
-
-        # Save the instance config (implementation delegated to config module)
-        self.destroy()
-
-
-class AddModelPortSettingsDialog(tk.Toplevel):
-    """Dialog for configuring port range settings."""
-
-    def __init__(self, master: tk.Misc, min_port: int) -> None:
-        super().__init__(master)
-        self.title("Port settings")
-        self._min_port = min_port
-        self._port_var = tk.StringVar(value=str(min_port))
-
-        body = ttk.Frame(self, padding=10)
-        body.grid(row=0, column=0, sticky="nsew")
-
-        ttk.Label(body, text=f"Starting port (min {min_port}):").grid(
-            row=0, column=0, sticky="e", padx=4, pady=2
-        )
-        ttk.Entry(body, textvariable=self._port_var).grid(row=0, column=1, sticky="ew", padx=4)
-
-        buttons = ttk.Frame(body)
-        buttons.grid(row=1, column=0, columnspan=2, sticky="e", pady=(10, 0))
-        ttk.Button(buttons, text="Cancel", command=self.destroy).pack(side=tk.RIGHT, padx=4)
-        ttk.Button(buttons, text="Save", command=self._save).pack(side=tk.RIGHT, padx=4)
-
-    def _save(self) -> None:
-        """Save the port settings."""
-        self.destroy()
 
 
 class ExistingModelFileDialog(tk.Toplevel):
@@ -595,18 +466,9 @@ class ExistingModelFileDialog(tk.Toplevel):
         self.destroy()
 
 
-# ---------------------------------------------------------------------------
-# HuggingFace Import Dialog
-# ---------------------------------------------------------------------------
-
-
-class HuggingFaceImportDialog(tk.Toplevel):
-    """Dialog for importing models from HuggingFace."""
-
-    def __init__(
-        self,
-        master: tk.Misc,
-        project_root: Path,
+# Dead code stubs removed:
+# - HuggingFaceImportDialog (line 474)
+# - InstallBinaryDialog (line 674)
         existing_names: list[str],
     ) -> None:
         super().__init__(master)
