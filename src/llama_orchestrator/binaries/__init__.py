@@ -15,9 +15,11 @@ from llama_orchestrator.binaries.downloader import (
     ChecksumError,
     DownloadError,
     DownloadProgress,
+    TLSVerificationError,
     calculate_sha256,
     download_and_extract,
     download_file,
+    download_file_safe,
     extract_archive,
     find_executables,
     get_directory_size,
@@ -79,6 +81,7 @@ __all__ = [
     "get_download_url",
     # Downloader
     "download_file",
+    "download_file_safe",
     "download_and_extract",
     "extract_archive",
     "calculate_sha256",
@@ -87,6 +90,7 @@ __all__ = [
     "get_directory_size",
     "DownloadError",
     "ChecksumError",
+    "TLSVerificationError",
     "DownloadProgress",
     # Registry
     "BinaryRegistryManager",

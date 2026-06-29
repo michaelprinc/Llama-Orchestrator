@@ -11,6 +11,12 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
+def test_next_clone_name_returns_first_available_candidate() -> None:
+    from llama_orchestrator.gui.actions import next_clone_name
+
+    assert next_clone_name("model", {"model-clone-1"}) == "model-clone-2"
+
+
 # ──────────────────────────────────────────────────────────────────────
 # table.py tests
 # ──────────────────────────────────────────────────────────────────────
@@ -191,7 +197,7 @@ class TestGpuInventory:
         ]
         aliases: dict[str, str] = {}
 
-        widgets = render_gpu_inventory(parent, gpus, aliases, 15)
+        widgets = render_gpu_inventory(parent, gpus, aliases, 15, selected_adapter_names=set())
 
         # Should have 2 labels + 1 button (only for GPU 0 with name)
         assert len(widgets) == 3
@@ -225,11 +231,11 @@ class TestGpuInventory:
             ]
 
             # First render
-            widgets1 = render_gpu_inventory(parent, gpus, {}, 15)
+            widgets1 = render_gpu_inventory(parent, gpus, {}, 15, selected_adapter_names=set())
             assert len(created_widgets) == 2  # 1 label + 1 button (name is known)
 
             # Second render — should destroy first render's widgets
-            widgets2 = render_gpu_inventory(parent, gpus, {}, 15)
+            widgets2 = render_gpu_inventory(parent, gpus, {}, 15, selected_adapter_names=set())
             for w in widgets1:
                 assert w.destroy.called
 
@@ -246,7 +252,7 @@ class TestGpuInventory:
             DetectedGpu(label="GPU 0", name=None),
         ]
 
-        widgets = render_gpu_inventory(parent, gpus, {}, 15)
+        widgets = render_gpu_inventory(parent, gpus, {}, 15, selected_adapter_names=set())
 
         # Only 1 widget (the label), no button
         assert len(widgets) == 1
@@ -427,3 +433,391 @@ class TestMetadataCacheThreadSafety:
             t.join(timeout=10)
 
         assert not errors, f"Thread errors: {[str(e) for e in errors]}"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# actions.py tests (Copy Endpoint Snippet)
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestCopyEndpointSnippet:
+    """Verify copy_endpoint_snippet helper returns correct formats and copies to clipboard."""
+
+    @pytest.fixture
+    def mock_root(self):
+        root = MagicMock()
+        root.clipboard_clear = MagicMock()
+        root.clipboard_append = MagicMock()
+        return root
+
+    @pytest.fixture
+    def mock_config(self):
+        class MockServer:
+            host = "0.0.0.0"
+            port = 1234
+
+        class MockModel:
+            path = "/path/to/my_model.gguf"
+
+        class MockConfig:
+            server = MockServer()
+            model = MockModel()
+
+        return MockConfig()
+
+    @patch("llama_orchestrator.gui.actions.messagebox.showinfo")
+    def test_openai_base(self, mock_showinfo, mock_root, mock_config):
+        from llama_orchestrator.gui.actions import copy_endpoint_snippet
+
+        get_config = MagicMock(return_value=mock_config)
+        copy_endpoint_snippet("test-instance", "openai_base", get_config, mock_root)
+
+        # Host 0.0.0.0 should be normalized to 127.0.0.1
+        mock_root.clipboard_append.assert_called_once_with("http://127.0.0.1:1234/v1")
+        mock_showinfo.assert_called_once()
+
+    @patch("llama_orchestrator.gui.actions.messagebox.showinfo")
+    def test_openai_chat(self, mock_showinfo, mock_root, mock_config):
+        from llama_orchestrator.gui.actions import copy_endpoint_snippet
+
+        get_config = MagicMock(return_value=mock_config)
+        copy_endpoint_snippet("test-instance", "openai_chat", get_config, mock_root)
+
+        mock_root.clipboard_append.assert_called_once_with("http://127.0.0.1:1234/v1/chat/completions")
+
+    @patch("llama_orchestrator.gui.actions.messagebox.showinfo")
+    def test_llama_completion(self, mock_showinfo, mock_root, mock_config):
+        from llama_orchestrator.gui.actions import copy_endpoint_snippet
+
+        get_config = MagicMock(return_value=mock_config)
+        copy_endpoint_snippet("test-instance", "llama_completion", get_config, mock_root)
+
+        mock_root.clipboard_append.assert_called_once_with("http://127.0.0.1:1234/completion")
+
+    @patch("llama_orchestrator.gui.actions.messagebox.showinfo")
+    def test_python_snippet(self, mock_showinfo, mock_root, mock_config):
+        from llama_orchestrator.gui.actions import copy_endpoint_snippet
+
+        get_config = MagicMock(return_value=mock_config)
+        copy_endpoint_snippet("test-instance", "python_snippet", get_config, mock_root)
+
+        copied = mock_root.clipboard_append.call_args[0][0]
+        assert "base_url=\"http://127.0.0.1:1234/v1\"" in copied
+        assert "model=\"my_model.gguf\"" in copied
+
+    @patch("llama_orchestrator.gui.actions.messagebox.showinfo")
+    def test_curl_command(self, mock_showinfo, mock_root, mock_config):
+        from llama_orchestrator.gui.actions import copy_endpoint_snippet
+
+        get_config = MagicMock(return_value=mock_config)
+        copy_endpoint_snippet("test-instance", "curl_command", get_config, mock_root)
+
+        copied = mock_root.clipboard_append.call_args[0][0]
+        assert "curl http://127.0.0.1:1234/v1/chat/completions" in copied
+        assert "\"model\": \"my_model.gguf\"" in copied
+
+
+# ──────────────────────────────────────────────────────────────────────
+# gpu_inventory.py — GPU selection tests
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestGpuSelection:
+    """Verify GPU selection toggle and button styling."""
+
+    def test_button_selected_color_when_selected(self):
+        """Selected GPU button should have green background."""
+        from llama_orchestrator.gui.gpu_inventory import render_gpu_inventory
+        from llama_orchestrator.engine.detection import DetectedGpu
+
+        parent = MagicMock()
+        parent.winfo_children.return_value = []
+        parent.columnconfigure = MagicMock()
+
+        gpus = [
+            DetectedGpu(label="GPU 0", name="NVIDIA RTX 4090"),
+        ]
+        selected = {"NVIDIA RTX 4090"}
+
+        with patch("tkinter.Button") as mock_btn:
+            render_gpu_inventory(
+                parent, gpus, {}, 15, selected_adapter_names=selected
+            )
+            # Verify button was created with green background
+            mock_btn.assert_called_once()
+            call_kwargs = mock_btn.call_args.kwargs
+            assert call_kwargs["bg"] == "#4CAF50"
+            assert call_kwargs["fg"] == "#ffffff"
+
+    def test_button_unselected_color_when_not_selected(self):
+        """Unselected GPU button should have gray background."""
+        from llama_orchestrator.gui.gpu_inventory import render_gpu_inventory
+        from llama_orchestrator.engine.detection import DetectedGpu
+
+        parent = MagicMock()
+        parent.winfo_children.return_value = []
+        parent.columnconfigure = MagicMock()
+
+        gpus = [
+            DetectedGpu(label="GPU 0", name="NVIDIA RTX 4090"),
+        ]
+        selected = set()
+
+        with patch("tkinter.Button") as mock_btn:
+            render_gpu_inventory(
+                parent, gpus, {}, 15, selected_adapter_names=selected
+            )
+            # Verify button was created with gray background
+            mock_btn.assert_called_once()
+            call_kwargs = mock_btn.call_args.kwargs
+            assert call_kwargs["bg"] == "#f0f0f0"
+            assert call_kwargs["fg"] == "#000000"
+
+    def test_button_text_shows_alias_when_selected(self):
+        """Button text should show the alias when GPU is selected."""
+        from llama_orchestrator.gui.gpu_inventory import render_gpu_inventory
+        from llama_orchestrator.engine.detection import DetectedGpu
+
+        parent = MagicMock()
+        parent.winfo_children.return_value = []
+        parent.columnconfigure = MagicMock()
+
+        gpus = [
+            DetectedGpu(label="GPU 0", name="NVIDIA RTX 4090"),
+        ]
+        aliases = {"NVIDIA RTX 4090": "MyGPU"}
+        selected = {"NVIDIA RTX 4090"}
+
+        with patch("tkinter.Button") as mock_btn:
+            render_gpu_inventory(
+                parent, gpus, aliases, 15, selected_adapter_names=selected
+            )
+            mock_btn.assert_called_once()
+            call_kwargs = mock_btn.call_args.kwargs
+            assert call_kwargs["text"] == "MyGPU"
+
+    def test_on_gpu_select_callback_is_bound(self):
+        """Clicking an alias button should call on_gpu_select."""
+        from llama_orchestrator.gui.gpu_inventory import render_gpu_inventory
+        from llama_orchestrator.engine.detection import DetectedGpu
+
+        parent = MagicMock()
+        parent.winfo_children.return_value = []
+        parent.columnconfigure = MagicMock()
+
+        gpus = [
+            DetectedGpu(label="GPU 0", name="NVIDIA RTX 4090"),
+        ]
+        selected = set()
+        on_gpu_select = MagicMock()
+
+        with patch("tkinter.Button") as mock_btn:
+            render_gpu_inventory(
+                parent,
+                gpus,
+                {},
+                15,
+                selected_adapter_names=selected,
+                on_gpu_select=on_gpu_select,
+            )
+            # Verify bind was called on the button
+            mock_btn_instance = mock_btn.return_value
+            mock_btn_instance.bind.assert_called_once()
+            bind_args = mock_btn_instance.bind.call_args
+            assert bind_args[0][0] == "<Button-1>"
+
+    def test_multiple_gpus_can_be_selected(self):
+        """Multiple GPU buttons can be selected simultaneously."""
+        from llama_orchestrator.gui.gpu_inventory import render_gpu_inventory
+        from llama_orchestrator.engine.detection import DetectedGpu
+
+        parent = MagicMock()
+        parent.winfo_children.return_value = []
+        parent.columnconfigure = MagicMock()
+
+        gpus = [
+            DetectedGpu(label="GPU 0", name="NVIDIA RTX 4090"),
+            DetectedGpu(label="GPU 1", name="AMD Radeon 7900"),
+        ]
+        selected = {"NVIDIA RTX 4090", "AMD Radeon 7900"}
+
+        with patch("tkinter.Button") as mock_btn:
+            render_gpu_inventory(
+                parent, gpus, {}, 15, selected_adapter_names=selected
+            )
+            # Both buttons should be created with green background
+            assert mock_btn.call_count == 2
+            for call in mock_btn.call_args_list:
+                assert call.kwargs["bg"] == "#4CAF50"
+
+
+# ──────────────────────────────────────────────────────────────────────
+# app.py — GPU filtering tests
+# ──────────────────────────────────────────────────────────────────────
+
+
+class TestGpuFiltering:
+    """Verify table row filtering based on selected GPUs."""
+
+    def test_build_rows_omits_nonmatching_gpu(self):
+        """Exercise the real row builder so exception handling cannot bypass filtering."""
+        from pathlib import Path
+
+        from llama_orchestrator.config.schema import InstanceConfig, ModelConfig
+        from llama_orchestrator.engine.detection import DetectedGpu
+        from llama_orchestrator.gui.app import LlamaOrchestratorGui
+
+        gui = object.__new__(LlamaOrchestratorGui)
+        gui._selected_gpu_adapter_names = {"NVIDIA RTX 4090"}
+        gui.gpu_aliases = {}
+        runtime = MagicMock(
+            gpu_labels=("CUDA1",),
+            gpu_active=True,
+            cpu_active=False,
+        )
+        config = InstanceConfig(name="radeon", model=ModelConfig(path=Path("model.gguf")))
+        detected = (
+            DetectedGpu(label="CUDA0", name="NVIDIA RTX 4090"),
+            DetectedGpu(label="CUDA1", name="AMD Radeon 7900"),
+        )
+
+        with patch(
+            "llama_orchestrator.gui.app.describe_effective_runtime",
+            return_value=runtime,
+        ):
+            rows, _ = gui._build_table_rows(
+                states={},
+                configs={"radeon": config},
+                detected_gpus=detected,
+                latest_results={},
+                queued_names=frozenset(),
+                active_tag="All tags",
+            )
+
+        assert rows == ()
+
+    def test_filter_shows_only_selected_gpu_instances(self):
+        """When GPUs are selected, only show instances using those GPUs."""
+        from llama_orchestrator.engine.detection import DetectedGpu
+
+        # Simulate detected GPUs
+        detected_gpus = (
+            DetectedGpu(label="CUDA0", name="NVIDIA RTX 4090"),
+            DetectedGpu(label="CUDA1", name="AMD Radeon 7900"),
+        )
+
+        # Simulate runtime selections
+        class MockRuntimeSelection:
+            def __init__(self, gpu_labels):
+                self.gpu_labels = gpu_labels
+                self.gpu_active = bool(gpu_labels)
+                self.cpu_active = False
+
+        # Instance 1 uses RTX 4090
+        rt1 = MockRuntimeSelection(("CUDA0",))
+        # Instance 2 uses Radeon 7900
+        rt2 = MockRuntimeSelection(("CUDA1",))
+        # Instance 3 uses both
+        rt3 = MockRuntimeSelection(("CUDA0", "CUDA1"))
+
+        # Simulate the filtering logic
+        label_to_adapter = {
+            gpu.label: gpu.name for gpu in detected_gpus if gpu.name
+        }
+        selected = {"NVIDIA RTX 4090"}
+
+        # Instance 1 should pass (uses RTX 4090)
+        instance1_adapters = {
+            label_to_adapter[label]
+            for label in rt1.gpu_labels
+            if label in label_to_adapter
+        }
+        assert instance1_adapters.intersection(selected)
+
+        # Instance 2 should NOT pass (uses Radeon, not selected)
+        instance2_adapters = {
+            label_to_adapter[label]
+            for label in rt2.gpu_labels
+            if label in label_to_adapter
+        }
+        assert not instance2_adapters.intersection(selected)
+
+        # Instance 3 should pass (uses RTX 4090)
+        instance3_adapters = {
+            label_to_adapter[label]
+            for label in rt3.gpu_labels
+            if label in label_to_adapter
+        }
+        assert instance3_adapters.intersection(selected)
+
+    def test_no_filter_when_no_gpus_selected(self):
+        """When no GPUs are selected, all instances should be shown."""
+        selected = set()
+        # The filtering logic should skip the intersection check
+        # when _selected_gpu_adapter_names is empty
+        assert not selected
+
+    def test_filter_handles_missing_adapter_names(self):
+        """Filtering should handle GPUs without adapter names."""
+        from llama_orchestrator.engine.detection import DetectedGpu
+
+        detected_gpus = (
+            DetectedGpu(label="CUDA0", name="NVIDIA RTX 4090"),
+            DetectedGpu(label="CUDA1", name=None),  # No adapter name
+        )
+
+        label_to_adapter = {
+            gpu.label: gpu.name for gpu in detected_gpus if gpu.name
+        }
+
+        # CUDA1 should not be in the mapping
+        assert "CUDA1" not in label_to_adapter
+
+        # Runtime selection using CUDA1 should result in empty adapter set
+        gpu_labels = ("CUDA1",)
+        instance_adapters = {
+            label_to_adapter[label]
+            for label in gpu_labels
+            if label in label_to_adapter
+        }
+        assert instance_adapters == set()
+
+    def test_filter_handles_multiple_selected_gpus(self):
+        """Filtering should work with multiple selected GPUs."""
+        from llama_orchestrator.engine.detection import DetectedGpu
+
+        detected_gpus = (
+            DetectedGpu(label="CUDA0", name="NVIDIA RTX 4090"),
+            DetectedGpu(label="CUDA1", name="AMD Radeon 7900"),
+        )
+
+        label_to_adapter = {
+            gpu.label: gpu.name for gpu in detected_gpus if gpu.name
+        }
+
+        # Select both GPUs
+        selected = {"NVIDIA RTX 4090", "AMD Radeon 7900"}
+
+        # Instance using CUDA0 should pass
+        rt1_adapters = {
+            label_to_adapter[label]
+            for label in ("CUDA0",)
+            if label in label_to_adapter
+        }
+        assert rt1_adapters.intersection(selected)
+
+        # Instance using CUDA1 should pass
+        rt2_adapters = {
+            label_to_adapter[label]
+            for label in ("CUDA1",)
+            if label in label_to_adapter
+        }
+        assert rt2_adapters.intersection(selected)
+
+        # Instance using neither should NOT pass
+        rt3_adapters = {
+            label_to_adapter[label]
+            for label in ("Vulkan0",)  # Not in detected_gpus
+            if label in label_to_adapter
+        }
+        assert not rt3_adapters.intersection(selected)

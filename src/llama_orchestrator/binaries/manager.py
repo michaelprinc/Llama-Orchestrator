@@ -104,13 +104,14 @@ class BinaryManager:
         expected_sha256: Optional[str] = None,
         progress_callback: Optional[ProgressCallback] = None,
         set_as_default: bool = False,
+        insecure: bool = False,
     ) -> BinaryVersion:
         """
         Install a llama.cpp binary version.
-        
+
         Downloads from GitHub releases, extracts to bins/{uuid}/, and
         registers in the registry.
-        
+
         Args:
             version: Version tag (e.g., 'b7572') or 'latest'
             variant: Platform variant (e.g., 'win-vulkan-x64')
@@ -118,14 +119,17 @@ class BinaryManager:
             expected_sha256: Expected SHA256 for verification
             progress_callback: Optional download progress callback
             set_as_default: Whether to set as default binary
-            
+            insecure: Disable TLS certificate verification (DANGEROUS)
+
         Returns:
             BinaryVersion with UUID for the installed binary
-            
+
         Raises:
             BinaryManagerError: If installation fails
         """
-        logger.info(f"Installing llama.cpp {version} ({variant})")
+        logger.info("Installing llama.cpp %s (%s)", version, variant)
+        if insecure:
+            logger.warning("TLS verification DISABLED for binary download")
 
         # Resolve 'latest' to actual version
         actual_version = version
@@ -156,6 +160,7 @@ class BinaryManager:
                 dest_dir=binary_dir,
                 expected_sha256=expected_sha256,
                 progress_callback=progress_callback,
+                verify_tls=not insecure,
             )
 
             # Get release info from GitHub

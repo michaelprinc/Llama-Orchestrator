@@ -10,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import logging
 import tempfile
+import warnings
 import zipfile
 from pathlib import Path
 from typing import Callable, Optional
@@ -21,6 +22,20 @@ logger = logging.getLogger(__name__)
 # Download settings
 DEFAULT_TIMEOUT = 300.0  # 5 minutes for large files
 CHUNK_SIZE = 8192  # 8KB chunks for progress reporting
+VERIFY_TLS = True  # Verify TLS certificates by default
+MAX_DOWNLOAD_SIZE = 5 * 1024 * 1024 * 1024  # 5GB max download size
+INSECURE_MODE = False  # Global insecure mode — must be explicitly enabled
+
+
+class InsecureModeWarning(RuntimeWarning):
+    """Emitted when TLS verification is disabled."""
+
+    def __init__(self, url: str):
+        super().__init__(
+            f"SECURITY WARNING: TLS certificate verification is DISABLED for {url}. "
+            f"This exposes the download to man-in-the-middle attacks. "
+            f"Use only for diagnostic purposes with explicit --insecure flag."
+        )
 
 
 class DownloadError(Exception):
@@ -43,6 +58,18 @@ class ChecksumError(DownloadError):
         )
 
 
+class TLSVerificationError(DownloadError):
+    """TLS certificate verification failed."""
+
+    def __init__(self, url: str, cause: Exception):
+        self.url = url
+        self.cause = cause
+        super().__init__(
+            f"TLS certificate verification failed for {url}: {cause}",
+            cause=cause
+        )
+
+
 # Type for progress callback: (downloaded_bytes, total_bytes) -> None
 ProgressCallback = Callable[[int, Optional[int]], None]
 
@@ -52,46 +79,130 @@ def download_file(
     dest_path: Path,
     timeout: float = DEFAULT_TIMEOUT,
     progress_callback: Optional[ProgressCallback] = None,
+    verify_tls: bool = VERIFY_TLS,
+    expected_sha256: Optional[str] = None,
 ) -> Path:
     """
-    Download a file from URL to destination path.
-    
+    Download a file from URL to destination path with TLS verification.
+
+    Downloads to a temporary file first, then atomically moves to destination
+    to prevent partial/corrupted files.
+
     Args:
         url: URL to download from
         dest_path: Destination file path
         timeout: Request timeout in seconds
         progress_callback: Optional callback for progress updates
-        
+        verify_tls: Whether to verify TLS certificates (default: True)
+        expected_sha256: Optional SHA256 to verify after download
+
     Returns:
         Path to downloaded file
-        
+
     Raises:
         DownloadError: If download fails
+        TLSVerificationError: If TLS verification fails
+        ChecksumError: If checksum verification fails
     """
-    logger.info(f"Downloading {url} to {dest_path}")
+    # Disabling verification is allowed only through an explicit call-site
+    # choice (for example CLI --insecure), but must remain visible.
+    if not verify_tls:
+        logger.critical(
+            "SECURITY WARNING: TLS certificate verification is DISABLED for %s. "
+            "This exposes the download to man-in-the-middle attacks. "
+            "Use only for diagnostic purposes with explicit --insecure flag.",
+            url,
+        )
+        warnings.warn(InsecureModeWarning(url), stacklevel=2)
+
+    logger.info(
+        "Downloading %s to %s (TLS verification: %s)",
+        url,
+        dest_path,
+        "enabled" if verify_tls else "disabled",
+    )
 
     # Ensure parent directory exists
     dest_path.parent.mkdir(parents=True, exist_ok=True)
 
+    tmp_path: Path | None = None
     try:
-        with httpx.stream("GET", url, timeout=timeout, follow_redirects=True) as response:
-            response.raise_for_status()
+        # Use httpx client with TLS verification
+        client_kwargs = {"timeout": timeout, "follow_redirects": True}
 
-            # Get total size if available
-            total_size = response.headers.get("content-length")
-            total_bytes = int(total_size) if total_size else None
+        if verify_tls:
+            client_kwargs["verify"] = True
+        else:
+            client_kwargs["verify"] = False
+            logger.warning(f"TLS verification disabled for {url}")
 
-            downloaded = 0
-            with open(dest_path, "wb") as f:
-                for chunk in response.iter_bytes(chunk_size=CHUNK_SIZE):
-                    f.write(chunk)
-                    downloaded += len(chunk)
+        with httpx.Client(**client_kwargs) as client:
+            with client.stream("GET", url) as response:
+                response.raise_for_status()
 
-                    if progress_callback:
-                        progress_callback(downloaded, total_bytes)
+                # Get total size if available
+                total_size = response.headers.get("content-length")
+                total_bytes = int(total_size) if total_size else None
 
-            logger.info(f"Downloaded {downloaded} bytes to {dest_path}")
-            return dest_path
+                # Check max download size
+                if total_bytes and total_bytes > MAX_DOWNLOAD_SIZE:
+                    raise DownloadError(
+                        f"Download too large: {total_bytes} bytes "
+                        f"(max: {MAX_DOWNLOAD_SIZE} bytes)"
+                    )
+
+                # Download to temporary file first (atomic write)
+                with tempfile.NamedTemporaryFile(
+                    dir=str(dest_path.parent),
+                    suffix=".tmp",
+                    delete=False,
+                ) as tmp_file:
+                    tmp_path = Path(tmp_file.name)
+                    downloaded = 0
+
+                    for chunk in response.iter_bytes(chunk_size=CHUNK_SIZE):
+                        downloaded += len(chunk)
+                        if downloaded > MAX_DOWNLOAD_SIZE:
+                            raise DownloadError(
+                                f"Download too large: exceeded {MAX_DOWNLOAD_SIZE} bytes"
+                            )
+                        tmp_file.write(chunk)
+
+                        if progress_callback:
+                            progress_callback(downloaded, total_bytes)
+
+                # Verify size if we got content-length
+                if total_bytes and downloaded != total_bytes:
+                    tmp_path.unlink(missing_ok=True)
+                    raise DownloadError(
+                        f"Download size mismatch: expected {total_bytes}, "
+                        f"got {downloaded}"
+                    )
+
+                # Verify checksum if expected
+                if expected_sha256:
+                    actual_sha256 = calculate_sha256(tmp_path)
+                    if actual_sha256 != expected_sha256.lower().strip():
+                        tmp_path.unlink(missing_ok=True)
+                        raise ChecksumError(expected_sha256, actual_sha256)
+                    logger.info(
+                        "SHA256 checksum verified for %s: %s",
+                        dest_path.name,
+                        actual_sha256[:16] + "...",
+                    )
+
+                # Atomically move to destination
+                tmp_path.replace(dest_path)
+                tmp_path = None
+
+                logger.info(
+                    "Downloaded %d bytes to %s (TLS verification: %s, source: %s)",
+                    downloaded,
+                    dest_path,
+                    "enabled" if verify_tls else "disabled",
+                    url,
+                )
+                return dest_path
 
     except httpx.HTTPStatusError as e:
         raise DownloadError(
@@ -102,15 +213,64 @@ def download_file(
         raise DownloadError(f"Request failed: {e}", cause=e) from e
     except OSError as e:
         raise DownloadError(f"File write error: {e}", cause=e) from e
+    finally:
+        if tmp_path is not None:
+            try:
+                tmp_path.unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Could not remove temporary download %s", tmp_path)
+
+
+def download_file_safe(
+    url: str,
+    dest_path: Path,
+    expected_sha256: Optional[str] = None,
+    timeout: float = DEFAULT_TIMEOUT,
+    progress_callback: Optional[ProgressCallback] = None,
+) -> Path:
+    """
+    Download a file with full safety checks (TLS + checksum + atomic write).
+
+    This is the recommended function for downloading binaries.
+
+    Args:
+        url: URL to download from
+        dest_path: Destination file path
+        expected_sha256: Required SHA256 checksum for verification
+        timeout: Request timeout in seconds
+        progress_callback: Optional callback for progress updates
+
+    Returns:
+        Path to downloaded file
+
+    Raises:
+        DownloadError: If download fails
+        TLSVerificationError: If TLS verification fails
+        ChecksumError: If checksum verification fails
+    """
+    if expected_sha256 is None:
+        logger.warning(
+            f"Download without checksum verification: {url}. "
+            f"Use download_file_safe with expected_sha256 for security."
+        )
+
+    return download_file(
+        url=url,
+        dest_path=dest_path,
+        timeout=timeout,
+        progress_callback=progress_callback,
+        verify_tls=True,
+        expected_sha256=expected_sha256,
+    )
 
 
 def calculate_sha256(file_path: Path) -> str:
     """
     Calculate SHA256 checksum of a file.
-    
+
     Args:
         file_path: Path to file
-        
+
     Returns:
         Lowercase hex SHA256 hash
     """
@@ -124,14 +284,14 @@ def calculate_sha256(file_path: Path) -> str:
 def verify_checksum(file_path: Path, expected_sha256: str) -> bool:
     """
     Verify SHA256 checksum of a file.
-    
+
     Args:
         file_path: Path to file
         expected_sha256: Expected SHA256 hash (hex)
-        
+
     Returns:
         True if checksum matches
-        
+
     Raises:
         ChecksumError: If checksum doesn't match
     """
@@ -148,14 +308,14 @@ def verify_checksum(file_path: Path, expected_sha256: str) -> bool:
 def extract_zip(archive_path: Path, dest_dir: Path) -> Path:
     """
     Extract a ZIP archive to destination directory.
-    
+
     Args:
         archive_path: Path to ZIP file
         dest_dir: Destination directory
-        
+
     Returns:
         Path to extracted directory
-        
+
     Raises:
         DownloadError: If extraction fails
     """
@@ -169,6 +329,12 @@ def extract_zip(archive_path: Path, dest_dir: Path) -> Path:
             total_size = sum(info.file_size for info in zf.infolist())
             if total_size > 10 * 1024 * 1024 * 1024:  # 10GB limit
                 raise DownloadError("Archive too large (potential zip bomb)")
+
+            destination = dest_dir.resolve()
+            for info in zf.infolist():
+                member_path = (destination / info.filename).resolve()
+                if member_path != destination and destination not in member_path.parents:
+                    raise DownloadError(f"Unsafe path in archive: {info.filename}")
 
             zf.extractall(dest_dir)
 
@@ -187,14 +353,14 @@ def extract_zip(archive_path: Path, dest_dir: Path) -> Path:
 def extract_tar_gz(archive_path: Path, dest_dir: Path) -> Path:
     """
     Extract a tar.gz archive to destination directory.
-    
+
     Args:
         archive_path: Path to tar.gz file
         dest_dir: Destination directory
-        
+
     Returns:
         Path to extracted directory
-        
+
     Raises:
         DownloadError: If extraction fails
     """
@@ -230,11 +396,11 @@ def extract_tar_gz(archive_path: Path, dest_dir: Path) -> Path:
 def extract_archive(archive_path: Path, dest_dir: Path) -> Path:
     """
     Extract an archive (ZIP or tar.gz) based on extension.
-    
+
     Args:
         archive_path: Path to archive file
         dest_dir: Destination directory
-        
+
     Returns:
         Path to extracted directory
     """
@@ -272,20 +438,25 @@ def download_and_extract(
     expected_sha256: Optional[str] = None,
     progress_callback: Optional[ProgressCallback] = None,
     cleanup: bool = True,
+    verify_tls: bool = True,
 ) -> tuple[Path, str]:
     """
-    Download and extract an archive in one operation.
-    
+    Download and extract an archive in one operation with safety checks.
+
+    Downloads to a temporary file first, verifies checksum, then extracts.
+    Uses atomic write to prevent partial/corrupted files.
+
     Args:
         url: URL to download from
         dest_dir: Directory to extract to
         expected_sha256: Optional SHA256 to verify
         progress_callback: Optional progress callback
         cleanup: Whether to delete archive after extraction
-        
+        verify_tls: Whether to verify TLS certificates (default: True)
+
     Returns:
         Tuple of (extracted_dir, actual_sha256)
-        
+
     Raises:
         DownloadError: If download or extraction fails
         ChecksumError: If checksum verification fails
@@ -298,13 +469,20 @@ def download_and_extract(
         archive_name = url.split("/")[-1]
         archive_path = temp_path / archive_name
 
-        # Download
-        download_file(url, archive_path, progress_callback=progress_callback)
+        # Download with TLS verification and checksum check
+        download_file(
+            url,
+            archive_path,
+            progress_callback=progress_callback,
+            verify_tls=verify_tls,
+            expected_sha256=expected_sha256,
+        )
 
         # Calculate checksum
         actual_sha256 = calculate_sha256(archive_path)
 
-        # Verify if expected checksum provided
+        # Verify if expected checksum provided (already done in download_file,
+        # but double-check here for safety)
         if expected_sha256:
             verify_checksum(archive_path, expected_sha256)
 

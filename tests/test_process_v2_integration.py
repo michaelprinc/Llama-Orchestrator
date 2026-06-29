@@ -73,26 +73,26 @@ def test_start_instance_updates_runtime_and_events() -> None:
              patch("llama_orchestrator.health.checker.check_instance_health", return_value=healthy_result) as mock_check_health, \
              patch("llama_orchestrator.engine.process.record_health_check") as mock_record_health, \
              patch("llama_orchestrator.engine.process.save_state") as mock_save_state, \
-             patch("llama_orchestrator.engine.process.save_runtime") as mock_save_runtime, \
+             patch("llama_orchestrator.engine.process.save_state_atomic") as mock_save_state_atomic, \
              patch("llama_orchestrator.engine.process.log_event") as mock_log_event, \
              patch("llama_orchestrator.engine.process.time.sleep"):
             state = start_instance("test-instance")
 
-        assert state.pid == 4321
-        assert state.status == InstanceStatus.RUNNING
-        assert state.health == HealthStatus.HEALTHY
-        mock_lock.assert_called_once()
-        saved_runtime = mock_save_runtime.call_args.args[0]
-        assert saved_runtime.pid == 4321
-        assert saved_runtime.port == 8001
-        assert saved_runtime.status == InstanceStatus.RUNNING
-        assert saved_runtime.health == HealthStatus.HEALTHY
-        assert saved_runtime.last_health_ok_at is not None
-        assert saved_runtime.cmdline == "llama-server --port 8001"
-        mock_check_health.assert_called_once_with("test-instance", timeout=2.0)
-        mock_record_health.assert_called_once()
-        assert any(call.kwargs.get("event_type") == "started" for call in mock_log_event.call_args_list)
-        assert mock_save_state.called
+    assert state.pid == 4321
+    assert state.status == InstanceStatus.RUNNING
+    assert state.health == HealthStatus.HEALTHY
+    mock_lock.assert_called_once()
+    saved_runtime = mock_save_state_atomic.call_args.args[1]
+    assert saved_runtime.pid == 4321
+    assert saved_runtime.port == 8001
+    assert saved_runtime.status == InstanceStatus.RUNNING
+    assert saved_runtime.health == HealthStatus.HEALTHY
+    assert saved_runtime.last_health_ok_at is not None
+    assert saved_runtime.cmdline == "llama-server --port 8001"
+    mock_check_health.assert_called_once_with("test-instance", timeout=2.0)
+    mock_record_health.assert_called_once()
+    assert any(call.kwargs.get("event_type") == "started" for call in mock_log_event.call_args_list)
+    assert mock_save_state_atomic.called
 
 
 def test_start_instance_stays_loading_when_readiness_never_succeeds_within_budget() -> None:
@@ -131,7 +131,7 @@ def test_start_instance_stays_loading_when_readiness_never_succeeds_within_budge
              patch("llama_orchestrator.health.checker.check_instance_health", return_value=loading_result) as mock_check_health, \
              patch("llama_orchestrator.engine.process.record_health_check") as mock_record_health, \
              patch("llama_orchestrator.engine.process.save_state") as mock_save_state, \
-             patch("llama_orchestrator.engine.process.save_runtime") as mock_save_runtime, \
+             patch("llama_orchestrator.engine.process.save_state_atomic") as mock_save_state_atomic, \
              patch("llama_orchestrator.engine.process.log_event"), \
              patch("llama_orchestrator.engine.process.time.sleep"), \
              patch("llama_orchestrator.engine.process.time.monotonic", side_effect=[0.0, 0.0, 1.1]):
@@ -146,10 +146,10 @@ def test_start_instance_stays_loading_when_readiness_never_succeeds_within_budge
         response_time_ms=30.0,
         error_message="still loading",
     )
-    final_runtime = mock_save_runtime.call_args.args[0]
+    final_runtime = mock_save_state_atomic.call_args.args[1]
     assert final_runtime.health == HealthStatus.LOADING
     assert final_runtime.last_health_ok_at is None
-    assert mock_save_state.called
+    assert mock_save_state_atomic.called
 
 
 def test_start_instance_fails_if_process_exits_during_readiness_wait() -> None:
@@ -188,7 +188,7 @@ def test_start_instance_fails_if_process_exits_during_readiness_wait() -> None:
              patch("llama_orchestrator.health.checker.check_instance_health", return_value=loading_result), \
              patch("llama_orchestrator.engine.process.record_health_check") as mock_record_health, \
              patch("llama_orchestrator.engine.process.save_state") as mock_save_state, \
-             patch("llama_orchestrator.engine.process.save_runtime") as mock_save_runtime, \
+             patch("llama_orchestrator.engine.process.save_state_atomic") as mock_save_state_atomic, \
              patch("llama_orchestrator.engine.process.log_event") as mock_log_event, \
              patch("llama_orchestrator.engine.process.time.sleep"):
             try:
@@ -199,8 +199,7 @@ def test_start_instance_fails_if_process_exits_during_readiness_wait() -> None:
                 raise AssertionError("Expected start_instance to fail when process exits during readiness wait")
 
     assert mock_record_health.call_count == 0
-    assert mock_save_state.called
-    assert mock_save_runtime.called
+    assert mock_save_state_atomic.called
     assert any(call.kwargs.get("event_type") == "start_failed" for call in mock_log_event.call_args_list)
 
 
@@ -222,7 +221,7 @@ def test_start_instance_uses_detached_launcher_when_requested() -> None:
          patch("llama_orchestrator.health.checker.check_instance_health", return_value=healthy_result) as mock_check_health, \
          patch("llama_orchestrator.engine.process.record_health_check") as mock_record_health, \
          patch("llama_orchestrator.engine.process.save_state") as mock_save_state, \
-         patch("llama_orchestrator.engine.process.save_runtime"), \
+         patch("llama_orchestrator.engine.process.save_state_atomic") as mock_save_state_atomic, \
          patch("llama_orchestrator.engine.process.log_event") as mock_log_event:
         mock_start_detached.return_value = MagicMock(success=True, pid=2468)
 
@@ -235,7 +234,7 @@ def test_start_instance_uses_detached_launcher_when_requested() -> None:
     mock_check_health.assert_called_once_with("test-instance", timeout=2.0)
     mock_record_health.assert_called_once()
     assert any(call.kwargs.get("event_type") == "started" for call in mock_log_event.call_args_list)
-    assert mock_save_state.called
+    assert mock_save_state_atomic.called
 
 
 def test_start_instance_detached_can_skip_readiness_wait() -> None:
@@ -253,7 +252,7 @@ def test_start_instance_detached_can_skip_readiness_wait() -> None:
          patch("llama_orchestrator.engine.process.start_detached") as mock_start_detached, \
          patch("llama_orchestrator.health.checker.check_instance_health") as mock_check_health, \
          patch("llama_orchestrator.engine.process.save_state") as mock_save_state, \
-         patch("llama_orchestrator.engine.process.save_runtime"):
+         patch("llama_orchestrator.engine.process.save_state_atomic") as mock_save_state_atomic:
         mock_start_detached.return_value = MagicMock(success=True, pid=2468)
 
         state = start_instance("test-instance", detach=True, wait_for_ready=False)
@@ -263,7 +262,7 @@ def test_start_instance_detached_can_skip_readiness_wait() -> None:
     assert state.health == HealthStatus.LOADING
     mock_start_detached.assert_called_once()
     mock_check_health.assert_not_called()
-    assert mock_save_state.called
+    assert mock_save_state_atomic.called
 
 
 def test_restart_instance_waits_by_default_and_can_skip_waiting() -> None:
@@ -292,7 +291,7 @@ def test_restart_instance_waits_by_default_and_can_skip_waiting() -> None:
          patch("llama_orchestrator.engine.process.stop_instance") as mock_stop, \
          patch("llama_orchestrator.engine.process.start_instance", side_effect=[healthy_state, loading_state]) as mock_start, \
          patch("llama_orchestrator.engine.process.save_state") as mock_save_state, \
-         patch("llama_orchestrator.engine.process.save_runtime") as mock_save_runtime, \
+         patch("llama_orchestrator.engine.process.save_state_atomic") as mock_save_state_atomic, \
          patch("llama_orchestrator.engine.process.log_event") as mock_log_event, \
          patch("llama_orchestrator.engine.process.time.sleep"):
         waited = restart_instance("test-instance")
@@ -307,8 +306,7 @@ def test_restart_instance_waits_by_default_and_can_skip_waiting() -> None:
     assert mock_start.call_args_list[0].kwargs == {"wait_for_ready": True}
     assert mock_start.call_args_list[1].args == ("test-instance",)
     assert mock_start.call_args_list[1].kwargs == {"wait_for_ready": False}
-    assert mock_save_state.call_count == 2
-    assert mock_save_runtime.call_count == 2
+    assert mock_save_state_atomic.call_count == 2
     assert mock_log_event.call_count == 2
 
 
@@ -332,7 +330,7 @@ def test_restart_instance_passes_config_override_to_start() -> None:
          patch("llama_orchestrator.engine.process.stop_instance"), \
          patch("llama_orchestrator.engine.process.start_instance", return_value=restarted_state) as mock_start, \
          patch("llama_orchestrator.engine.process.save_state"), \
-         patch("llama_orchestrator.engine.process.save_runtime"), \
+         patch("llama_orchestrator.engine.process.save_state_atomic"), \
          patch("llama_orchestrator.engine.process.log_event"), \
          patch("llama_orchestrator.engine.process.time.sleep"):
         restart_instance("test-instance", config_override=override)
@@ -358,10 +356,10 @@ def test_stop_instance_uses_runtime_when_legacy_state_missing() -> None:
     with patch("llama_orchestrator.engine.process.instance_lock", return_value=nullcontext()), \
          patch("llama_orchestrator.engine.process.load_state", return_value=None), \
          patch("llama_orchestrator.engine.process.load_runtime", side_effect=[runtime, runtime, runtime]), \
-            patch("llama_orchestrator.engine.process.is_process_running", return_value=True), \
+         patch("llama_orchestrator.engine.process.is_process_running", return_value=True), \
          patch("llama_orchestrator.engine.process.kill_process_tree", return_value=True), \
          patch("llama_orchestrator.engine.process.save_state") as mock_save_state, \
-         patch("llama_orchestrator.engine.process.save_runtime") as mock_save_runtime, \
+         patch("llama_orchestrator.engine.process.save_state_atomic") as mock_save_state_atomic, \
          patch("llama_orchestrator.engine.process.log_event") as mock_log_event, \
          patch("llama_orchestrator.engine.process.get_log_files", return_value=(Path("stdout.log"), Path("stderr.log"))), \
          patch("builtins.open", MagicMock()):
@@ -369,10 +367,11 @@ def test_stop_instance_uses_runtime_when_legacy_state_missing() -> None:
 
     assert state.status == InstanceStatus.STOPPED
     assert state.pid is None
-    assert mock_save_state.called
-    saved_runtime = mock_save_runtime.call_args.args[0]
-    assert saved_runtime.status == InstanceStatus.STOPPED
-    assert saved_runtime.pid is None
+    assert mock_save_state_atomic.called
+    # save_state_atomic(state) is called with only state in stop_instance main path
+    saved_state = mock_save_state_atomic.call_args.args[0]
+    assert saved_state.status == InstanceStatus.STOPPED
+    assert saved_state.pid is None
     assert any(call.kwargs.get("event_type") == "stopped" for call in mock_log_event.call_args_list)
 
 

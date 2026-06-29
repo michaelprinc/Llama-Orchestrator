@@ -79,8 +79,9 @@ def build_command(config: InstanceConfig) -> list[str]:
     if config.server.parallel > 1:
         args.extend(["--parallel", str(config.server.parallel)])
 
-    # Disable memory fit (can cause issues)
-    args.extend(["-fit", "off"])
+    # Disable memory fit (configurable — some llama.cpp versions require it, others do not)
+    if config.server.disable_fit:
+        args.extend(["-fit", "off"])
 
     # Add any extra args from config
     if config.args:

@@ -57,7 +57,9 @@ def render_gpu_inventory(
     gpus: Sequence[DetectedGpu],
     aliases: dict[str, str],
     gpu_alias_button_width: int,
+    selected_adapter_names: set[str],
     on_edit_alias: Callable[[str, str], None] | None = None,
+    on_gpu_select: Callable[[str], None] | None = None,
 ) -> list[tk.Widget]:
     """Render GPU inventory rows.
 
@@ -66,8 +68,11 @@ def render_gpu_inventory(
         gpus: Sequence of DetectedGpu objects.
         aliases: GPU alias mapping (adapter_name -> normalized_alias).
         gpu_alias_button_width: Width for alias edit buttons.
+        selected_adapter_names: Set of currently selected adapter names.
         on_edit_alias: Callback invoked when user right-clicks and selects
             "Edit" on an alias button. Signature: (adapter_name, alias).
+        on_gpu_select: Callback invoked when user clicks an alias button
+            to toggle GPU selection. Signature: (adapter_name,).
 
     Returns:
         List of created widgets for later cleanup.
@@ -96,16 +101,31 @@ def render_gpu_inventory(
             # Button text: show the aliased GPU name (the alias itself)
             btn_text = alias if alias else gpu_name
 
+            # Determine button styling based on selection state
+            is_selected = gpu_name in selected_adapter_names
+            bg_color = "#4CAF50" if is_selected else "#f0f0f0"
+            fg_color = "#ffffff" if is_selected else "#000000"
+
             alias_btn = tk.Button(
                 parent,
                 text=btn_text,
                 width=gpu_alias_button_width,
+                bg=bg_color,
+                fg=fg_color,
+                activebackground="#45a049" if is_selected else "#e0e0e0",
+                activeforeground=fg_color,
+                relief="raised",
+                bd=2,
             )
             # Position button to the left, just behind the GPU label
             alias_btn.grid(
                 row=len(widgets) - 1, column=1, padx=(4, 0), sticky="w"
             )
             widgets.append(alias_btn)
+
+            # Bind left-click to toggle GPU selection
+            if on_gpu_select is not None:
+                alias_btn.bind("<Button-1>", lambda e, name=gpu_name: on_gpu_select(name))
 
             # Add right-click context menu for editing the alias
             if on_edit_alias is not None:

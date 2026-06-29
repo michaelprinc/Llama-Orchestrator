@@ -313,81 +313,50 @@ def start_detached(
 def stop_detached(
     name: str,
     pid: int,
+    port: int | None = None,
     timeout: float = 10.0,
     force: bool = False,
 ) -> bool:
     """
-    Stop a detached process gracefully.
+    Stop a detached process gracefully with Windows-first approach.
     
     Args:
         name: Instance name (for logging)
         pid: Process ID to stop
+        port: Optional port for HTTP shutdown
         timeout: Timeout for graceful shutdown
         force: Force kill immediately
         
     Returns:
         True if process was stopped
     """
+    from llama_orchestrator.engine.process import graceful_shutdown
+
     try:
-        proc = psutil.Process(pid)
-    except psutil.NoSuchProcess:
-        logger.debug(f"Process {pid} not found (already stopped)")
+        result = graceful_shutdown(pid, port=port, timeout=timeout, force=force)
+    except Exception as e:
+        logger.error(f"Failed to stop detached process {pid}: {e}")
+        return False
+
+    # Stopping is idempotent: a process that already exited is in the desired
+    # state. Preserve the previous stop_detached contract and avoid recording a
+    # misleading new shutdown event for it.
+    if result["method"] == "not_found":
+        logger.debug("Process %s not found (already stopped)", pid)
         return True
-
-    # Get children before terminating parent
-    try:
-        children = proc.children(recursive=True)
-    except psutil.NoSuchProcess:
-        children = []
-
-    # Terminate
-    if force:
-        # Force kill immediately
-        try:
-            proc.kill()
-        except psutil.NoSuchProcess:
-            pass
-
-        for child in children:
-            try:
-                child.kill()
-            except psutil.NoSuchProcess:
-                pass
-    else:
-        # Graceful shutdown
-        try:
-            proc.terminate()
-        except psutil.NoSuchProcess:
-            pass
-
-        for child in children:
-            try:
-                child.terminate()
-            except psutil.NoSuchProcess:
-                pass
-
-        # Wait for graceful shutdown
-        gone, alive = psutil.wait_procs([proc] + children, timeout=timeout)
-
-        # Force kill remaining
-        for p in alive:
-            try:
-                p.kill()
-            except psutil.NoSuchProcess:
-                pass
 
     # Write shutdown marker
     log_dir = get_instance_log_dir(name)
     stdout_log = log_dir / "stdout.log"
     if stdout_log.exists():
-        write_shutdown_marker(stdout_log, name, "stopped" if not force else "killed")
+        write_shutdown_marker(stdout_log, name, result["method"])
 
     log_event(
         event_type="stopped",
-        message=f"Instance stopped (PID: {pid}, force: {force})",
+        message=f"Instance stopped (PID: {pid}, method: {result['method']})",
         instance_name=name,
         level="info",
-        meta={"pid": pid, "force": force},
+        meta={"pid": pid, "method": result["method"], "duration": result["duration"]},
     )
 
     return True

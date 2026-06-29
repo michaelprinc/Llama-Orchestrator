@@ -66,7 +66,7 @@ DEFAULT_SHUTDOWN_TIMEOUT = 10.0
 class DaemonService:
     """
     Background daemon service for llama-orchestrator V2.
-    
+
     Monitors all instances and triggers auto-restarts based on health policy.
     Uses threading.Event for reliable shutdown without blocking.
     """
@@ -79,7 +79,7 @@ class DaemonService:
     ):
         """
         Initialize daemon service.
-        
+
         Args:
             check_interval: Seconds between health checks
             reconcile_interval: Seconds between state reconciliation
@@ -104,7 +104,7 @@ class DaemonService:
     def start(self, foreground: bool = False) -> None:
         """
         Start the daemon service.
-        
+
         Args:
             foreground: If True, run in foreground (blocking).
                        If False, daemonize and run in background.
@@ -217,6 +217,9 @@ daemon._run_foreground()
         if stop_request.exists():
             stop_request.unlink()
 
+        # Check for port collisions before starting
+        self._check_port_collisions()
+
         # Setup file logging
         log_file = get_log_file()
         log_file.parent.mkdir(parents=True, exist_ok=True)
@@ -229,6 +232,29 @@ daemon._run_foreground()
         root_logger = logging.getLogger("llama_orchestrator")
         root_logger.addHandler(file_handler)
         root_logger.setLevel(logging.INFO)
+
+    def _check_port_collisions(self) -> None:
+        """
+        Check for port collisions before daemon starts.
+
+        Logs warnings for any ports that are in use by unknown processes.
+        """
+        from llama_orchestrator.health.ports import (
+            get_used_ports_by_instances,
+            get_port_info,
+        )
+
+        used_ports = get_used_ports_by_instances()
+
+        for instance_name, port in used_ports.items():
+            port_info = get_port_info(port)
+
+            if not port_info.is_available and not port_info.is_owned_by_us():
+                logger.warning(
+                    f"Port collision detected for instance '{instance_name}': "
+                    f"port {port} is in use by {port_info.owner_name or 'unknown process'} "
+                    f"(PID: {port_info.owner_pid})"
+                )
 
     def _write_pid_file(self) -> None:
         """Write the current PID to the PID file."""
@@ -278,7 +304,7 @@ daemon._run_foreground()
     def _main_loop(self) -> None:
         """
         Main daemon loop using event-based waiting.
-        
+
         Uses threading.Event.wait() instead of time.sleep() for
         responsive shutdown without blocking.
         """
@@ -353,10 +379,10 @@ daemon._run_foreground()
     def stop(self, timeout: float | None = None) -> bool:
         """
         Request daemon to stop gracefully.
-        
+
         Args:
             timeout: Maximum time to wait for stop (default: shutdown_timeout)
-            
+
         Returns:
             True if stopped within timeout
         """
@@ -454,10 +480,10 @@ def get_daemon_status() -> DaemonStatus:
 def start_daemon(foreground: bool = False) -> bool:
     """
     Start the daemon service.
-    
+
     Args:
         foreground: Run in foreground mode
-        
+
     Returns:
         True if daemon started successfully
     """
@@ -473,7 +499,7 @@ def start_daemon(foreground: bool = False) -> bool:
 def stop_daemon() -> bool:
     """
     Stop the daemon service.
-    
+
     Returns:
         True if daemon was stopped
     """

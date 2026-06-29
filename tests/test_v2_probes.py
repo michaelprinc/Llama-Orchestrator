@@ -17,6 +17,7 @@ from llama_orchestrator.health.probes import (
     HealthProbe,
     HTTPProbe,
     ProbeConfig,
+    ProbeExecutionMode,
     ProbeFactory,
     ProbeResult,
     ProbeType,
@@ -239,12 +240,15 @@ class TestCustomProbe:
     
     def test_probe_type(self):
         """Test probe type is CUSTOM."""
-        probe = CustomProbe(script="echo ok")
+        probe = CustomProbe(script="echo ok", execution_mode=ProbeExecutionMode.RESTRICTED)
         assert probe.probe_type == ProbeType.CUSTOM
     
     def test_placeholder_substitution(self):
         """Test host and port placeholder substitution."""
-        probe = CustomProbe(script="curl http://{host}:{port}/health")
+        probe = CustomProbe(
+            script="curl http://{host}:{port}/health",
+            execution_mode=ProbeExecutionMode.RESTRICTED,
+        )
         
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
@@ -254,14 +258,20 @@ class TestCustomProbe:
             )
             probe.check("localhost", 8080)
             
-            # Check that placeholders were replaced
+            # Check that placeholders were replaced (restricted mode uses shlex.split)
             call_args = mock_run.call_args
-            assert "localhost" in call_args[0][0]
-            assert "8080" in call_args[0][0]
+            # In restricted mode, args is a list: ['curl', 'http://localhost:8080/health']
+            full_args = " ".join(call_args[0][0]) if isinstance(call_args[0][0], list) else call_args[0][0]
+            assert "localhost" in full_args
+            assert "8080" in full_args
     
     def test_successful_script(self):
         """Test successful script execution."""
-        probe = CustomProbe(script="echo ok", timeout=5.0)
+        probe = CustomProbe(
+            script="echo ok",
+            timeout=5.0,
+            execution_mode=ProbeExecutionMode.RESTRICTED,
+        )
         
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
@@ -276,7 +286,10 @@ class TestCustomProbe:
     
     def test_failed_script(self):
         """Test failed script execution."""
-        probe = CustomProbe(script="exit 1")
+        probe = CustomProbe(
+            script="exit 1",
+            execution_mode=ProbeExecutionMode.RESTRICTED,
+        )
         
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(
@@ -292,7 +305,11 @@ class TestCustomProbe:
     
     def test_script_timeout(self):
         """Test script timeout."""
-        probe = CustomProbe(script="sleep 10", timeout=0.1)
+        probe = CustomProbe(
+            script="sleep 10",
+            timeout=0.1,
+            execution_mode=ProbeExecutionMode.RESTRICTED,
+        )
         
         with patch("subprocess.run") as mock_run:
             mock_run.side_effect = subprocess.TimeoutExpired(cmd="sleep 10", timeout=0.1)
@@ -436,6 +453,7 @@ class TestProbeFactory:
             type=ProbeType.CUSTOM,
             custom_script="echo ok",
             timeout=5.0,
+            execution_mode="restricted",
         )
         
         probe = ProbeFactory.create(config)
@@ -445,7 +463,10 @@ class TestProbeFactory:
     
     def test_custom_probe_requires_script(self):
         """Test that custom probe requires script."""
-        config = ProbeConfig(type=ProbeType.CUSTOM)
+        config = ProbeConfig(
+            type=ProbeType.CUSTOM,
+            execution_mode="restricted",
+        )
         
         with pytest.raises(ValueError, match="custom_script is required"):
             ProbeFactory.create(config)

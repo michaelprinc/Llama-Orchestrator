@@ -348,7 +348,6 @@ class Reconciler:
 
     def run(self) -> ReconcileSummary:
         """Run a reconciliation pass."""
-        self._last_run = time.time()
         self._run_count += 1
 
         summary = reconcile_all(
@@ -360,6 +359,7 @@ class Reconciler:
         if self.on_reconcile:
             self.on_reconcile(summary)
 
+        self._last_run = time.time()
         return summary
 
     def run_if_due(self) -> ReconcileSummary | None:

@@ -10,6 +10,7 @@ import tkinter as tk
 from collections.abc import Callable
 from pathlib import Path
 from tkinter import messagebox
+from typing import Any
 
 
 def clone_instance(
@@ -57,7 +58,6 @@ def next_clone_name(
     while candidate in existing_names:
         counter += 1
         candidate = f"{base}-clone-{counter}"
-    return counter if counter > 0 else 0  # Dummy check to keep signature, but counter is always > 0
     return candidate
 
 
@@ -163,3 +163,74 @@ def rename_instance(
 
     parent.wait_window(dialog)
     return result[0]
+
+
+def copy_endpoint_snippet(
+    instance_name: str,
+    endpoint_type: str,
+    get_config_fn: Callable[[str], Any],
+    root: tk.Misc,
+) -> None:
+    """Generate and copy endpoint configuration snippet to clipboard.
+
+    Args:
+        instance_name: Name of the instance.
+        endpoint_type: Type of endpoint snippet ("openai_base", "openai_chat", "llama_completion", "python_snippet", "curl_command").
+        get_config_fn: Function to get the InstanceConfig object.
+        root: The active Tkinter root/widget.
+    """
+    try:
+        config = get_config_fn(instance_name)
+        host = getattr(getattr(config, "server", None), "host", "127.0.0.1")
+        if host == "0.0.0.0":
+            host = "127.0.0.1"
+        port = getattr(getattr(config, "server", None), "port", 8080)
+        model_path = getattr(getattr(config, "model", None), "path", "")
+        model_name = Path(model_path).name if model_path else "model"
+
+        snippet = ""
+        if endpoint_type == "openai_base":
+            snippet = f"http://{host}:{port}/v1"
+        elif endpoint_type == "openai_chat":
+            snippet = f"http://{host}:{port}/v1/chat/completions"
+        elif endpoint_type == "llama_completion":
+            snippet = f"http://{host}:{port}/completion"
+        elif endpoint_type == "python_snippet":
+            snippet = (
+                "from openai import OpenAI\n\n"
+                f"client = OpenAI(\n"
+                f"    base_url=\"http://{host}:{port}/v1\",\n"
+                f"    api_key=\"no-key-required\"\n"
+                ")\n\n"
+                "response = client.chat.completions.create(\n"
+                f"    model=\"{model_name}\",\n"
+                "    messages=[{\"role\": \"user\", \"content\": \"Hello!\"}]\n"
+                ")\n"
+                "print(response.choices[0].message.content)\n"
+            )
+        elif endpoint_type == "curl_command":
+            snippet = (
+                f"curl http://{host}:{port}/v1/chat/completions \\\n"
+                "  -H \"Content-Type: application/json\" \\\n"
+                "  -d '{\n"
+                f"    \"model\": \"{model_name}\",\n"
+                "    \"messages\": [\n"
+                "      {\n"
+                "        \"role\": \"system\",\n"
+                "        \"content\": \"You are a helpful assistant.\"\n"
+                "      },\n"
+                "      {\n"
+                "        \"role\": \"user\",\n"
+                "        \"content\": \"Hello!\"\n"
+                "      }\n"
+                "    ]\n"
+                "  }'"
+            )
+        else:
+            raise ValueError(f"Unknown endpoint type: {endpoint_type}")
+
+        root.clipboard_clear()
+        root.clipboard_append(snippet)
+        messagebox.showinfo("Copied", f"Copied {endpoint_type.replace('_', ' ')} snippet to clipboard.", parent=root)
+    except Exception as exc:
+        messagebox.showerror("Copy failed", str(exc), parent=root)

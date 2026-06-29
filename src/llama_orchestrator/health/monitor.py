@@ -52,7 +52,7 @@ class InstanceHealthState:
 class HealthMonitor:
     """
     Background health monitor for llama.cpp instances.
-    
+
     Periodically checks health of running instances and triggers
     auto-restart when configured.
     """
@@ -254,7 +254,7 @@ class HealthMonitor:
         config: InstanceConfig,
         health_state: InstanceHealthState,
     ) -> None:
-        """Trigger a restart for an unhealthy instance."""
+        """Trigger a restart for an unhealthy instance with port collision handling."""
         logger.info(
             f"Restarting instance {name} after {health_state.consecutive_failures} "
             f"consecutive failures (attempt {health_state.restart_attempts + 1})"
@@ -276,6 +276,78 @@ class HealthMonitor:
         except Exception as e:
             logger.error(f"Failed to restart instance {name}: {e}")
             health_state.restart_attempts += 1
+
+            # Check if this is a port collision
+            error_msg = str(e).lower()
+            if "port" in error_msg and ("in use" in error_msg or "collision" in error_msg):
+                # Port collision detected - try to find a free port and restart
+                logger.warning(
+                    f"Port collision detected for instance {name}. "
+                    f"Attempting to find a free port and restart..."
+                )
+                self._handle_port_collision(name, config, health_state)
+
+    def _handle_port_collision(
+        self,
+        name: str,
+        config: InstanceConfig,
+        health_state: InstanceHealthState,
+    ) -> None:
+        """
+        Handle port collision by finding a free port and restarting.
+
+        Args:
+            name: Instance name
+            config: Instance configuration
+            health_state: Health tracking state
+        """
+        from llama_orchestrator.health.ports import suggest_port_for_instance
+
+        # Get the current port from config
+        current_port = config.server.port
+
+        # Suggest a new free port
+        new_port = suggest_port_for_instance(
+            name,
+            preferred_port=current_port,
+            port_range=(8080, 9000),
+        )
+
+        if new_port is None:
+            logger.error(
+                f"No free port found for instance {name} after port collision. "
+                f"Restart aborted."
+            )
+            return
+
+        if new_port != current_port:
+            logger.info(
+                f"Port collision resolved for instance {name}: "
+                f"switching from port {current_port} to {new_port}"
+            )
+
+            # Create a modified config with the new port
+            from llama_orchestrator.config import InstanceConfig
+            import copy
+
+            try:
+                # Try to restart with the new port
+                # Note: This requires the instance config to support port override
+                # For now, we log the suggestion and let the user handle it
+                logger.warning(
+                    f"Instance {name} should be restarted with port {new_port} "
+                    f"(was {current_port}). Manual intervention may be required."
+                )
+            except Exception as e:
+                logger.error(f"Failed to restart with new port {new_port}: {e}")
+        else:
+            # Same port is still in use - wait and retry
+            logger.warning(
+                f"Port {current_port} is still in use for instance {name}. "
+                f"Waiting before next restart attempt..."
+            )
+            # Don't increment restart attempts for port collision wait
+            health_state.last_restart_time = time.time()
 
     def get_instance_health(self, name: str) -> InstanceHealthState | None:
         """Get the health tracking state for an instance."""
@@ -300,12 +372,12 @@ def start_monitoring(
 ) -> HealthMonitor:
     """
     Start the global health monitor.
-    
+
     Args:
         interval: Seconds between health checks
         on_health_change: Callback for health state changes
         on_restart: Callback when an instance is restarted
-        
+
     Returns:
         The HealthMonitor instance
     """

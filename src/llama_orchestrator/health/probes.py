@@ -31,6 +31,23 @@ class ProbeType(Enum):
     CUSTOM = "custom"
 
 
+class ProbeExecutionMode(Enum):
+    """Execution mode for custom probes."""
+
+    DISABLED = "disabled"
+    RESTRICTED = "restricted"
+    SANDBOXED = "sandboxed"
+
+
+class ProbeSecurityError(Exception):
+    """Raised when a custom probe security violation is detected."""
+
+    def __init__(self, message: str, script: str = ""):
+        self.message = message
+        self.script = script
+        super().__init__(self.message)
+
+
 @dataclass
 class ProbeResult:
     """Result of a health probe check."""
@@ -276,65 +293,148 @@ class TCPProbe(HealthProbe):
 class CustomProbe(HealthProbe):
     """
     Custom script health probe.
-    
+
     Executes a custom script/command to check health.
     Exit code 0 = healthy, non-zero = unhealthy.
+
+    SECURITY: Custom probes are disabled by default. They must be
+    explicitly enabled via an execution policy before use.
     """
+
+    # Maximum output size to prevent memory exhaustion (16 KB)
+    MAX_OUTPUT_BYTES = 16384
 
     def __init__(
         self,
         script: str,
-        shell: bool = True,
+        shell: bool = False,
+        execution_mode: ProbeExecutionMode = ProbeExecutionMode.DISABLED,
+        allowlist_directory: str | None = None,
         **kwargs,
     ):
         """
         Initialize custom probe.
-        
+
         Args:
             script: Script or command to execute
-            shell: Whether to run in shell
+            shell: Whether to run in shell (always False in restricted mode)
+            execution_mode: Security policy for probe execution
+            allowlist_directory: Directory path where scripts are allowed to reside
             **kwargs: Additional arguments for HealthProbe
+
+        Raises:
+            ProbeSecurityError: If execution mode is DISABLED or security checks fail
         """
         super().__init__(**kwargs)
         self.script = script
         self.shell = shell
+        self.execution_mode = execution_mode
+        self.allowlist_directory = allowlist_directory
+
+        # Security checks at construction time
+        if execution_mode == ProbeExecutionMode.DISABLED:
+            raise ProbeSecurityError(
+                "Custom probes are disabled. Set execution_mode to 'restricted' or 'sandboxed' to enable.",
+                script=script,
+            )
+
+        # Validate script path if allowlist is set
+        if allowlist_directory and execution_mode in (
+            ProbeExecutionMode.RESTRICTED,
+            ProbeExecutionMode.SANDBOXED,
+        ):
+            self._validate_allowlist(script, allowlist_directory)
+
+    def _validate_allowlist(self, script: str, allowlist_dir: str) -> None:
+        """Validate that the script resides within the allowlisted directory."""
+        import os
+
+        # Extract script path (first token, handling quotes)
+        raw = script.strip()
+        if raw.startswith(("'", '"')):
+            end = raw.index(raw[0], 1)
+            path = raw[1:end] if end > 1 else raw
+        else:
+            path = raw.split()[0] if raw.split() else raw
+
+        # Resolve to absolute path
+        resolved = os.path.realpath(path)
+        allowed = os.path.realpath(allowlist_dir)
+
+        if not resolved.startswith(allowed + os.sep) and resolved != allowed:
+            raise ProbeSecurityError(
+                f"Script '{path}' is outside allowlisted directory '{allowlist_dir}'",
+                script=script,
+            )
 
     @property
     def probe_type(self) -> ProbeType:
         return ProbeType.CUSTOM
 
     def check(self, host: str, port: int) -> ProbeResult:
-        """Execute custom health check script."""
+        """Execute custom health check script with security restrictions."""
         start = time.perf_counter()
 
         # Substitute placeholders in script
         script = self.script.replace("{host}", host).replace("{port}", str(port))
 
         try:
-            result = subprocess.run(
-                script,
-                shell=self.shell,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout,
-            )
+            # Restricted mode: always use list args, never shell=True
+            if self.execution_mode in (
+                ProbeExecutionMode.RESTRICTED,
+                ProbeExecutionMode.SANDBOXED,
+            ):
+                import shlex
+
+                args = shlex.split(script)
+                result = subprocess.run(
+                    args,
+                    shell=False,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.timeout,
+                    cwd=self.allowlist_directory or None,
+                    env=self._sanitized_env(),
+                )
+            else:
+                # Legacy mode (execution_mode not restricted/sandboxed)
+                result = subprocess.run(
+                    script,
+                    shell=self.shell,
+                    capture_output=True,
+                    text=True,
+                    timeout=self.timeout,
+                )
 
             elapsed_ms = (time.perf_counter() - start) * 1000
+
+            # Truncate output to prevent memory exhaustion
+            stdout = (result.stdout or "")[: self.MAX_OUTPUT_BYTES]
+            stderr = (result.stderr or "")[: self.MAX_OUTPUT_BYTES]
 
             if result.returncode == 0:
                 return ProbeResult(
                     success=True,
                     response_time_ms=elapsed_ms,
                     status_code=result.returncode,
-                    message=result.stdout.strip() or "OK",
-                    details={"script": script},
+                    message=stdout.strip() or "OK",
+                    details={
+                        "script": script,
+                        "execution_mode": self.execution_mode.value,
+                        "duration_ms": round(elapsed_ms, 2),
+                    },
                 )
             else:
                 return ProbeResult(
                     success=False,
                     response_time_ms=elapsed_ms,
                     status_code=result.returncode,
-                    message=result.stderr.strip() or f"Exit code: {result.returncode}",
+                    message=stderr.strip() or f"Exit code: {result.returncode}",
+                    details={
+                        "script": script,
+                        "execution_mode": self.execution_mode.value,
+                        "duration_ms": round(elapsed_ms, 2),
+                    },
                 )
 
         except subprocess.TimeoutExpired:
@@ -353,6 +453,25 @@ class CustomProbe(HealthProbe):
                 message=f"Script error: {e}",
             )
 
+    @staticmethod
+    def _sanitized_env() -> dict[str, str]:
+        """Return a sanitized environment for restricted probe execution."""
+        import os
+
+        # Only allow safe environment variables
+        safe_keys = {
+            "PATH",
+            "HOME",
+            "TEMP",
+            "TMP",
+            "SYSTEMROOT",
+            "WINDIR",
+            "PROGRAMFILES",
+            "PROGRAMFILES(X86)",
+            "PROGRAMDATA",
+        }
+        return {k: v for k, v in os.environ.items() if k in safe_keys}
+
 
 @dataclass
 class ProbeConfig:
@@ -366,6 +485,9 @@ class ProbeConfig:
     timeout: float = 5.0
     retries: int = 0
     retry_delay: float = 1.0
+    # Custom probe security settings
+    execution_mode: str = "disabled"
+    allowlist_directory: str | None = None
 
 
 class ProbeFactory:
@@ -404,8 +526,15 @@ class ProbeFactory:
         elif config.type == ProbeType.CUSTOM:
             if not config.custom_script:
                 raise ValueError("custom_script is required for CUSTOM probe type")
+            # Parse execution mode string to enum
+            try:
+                exec_mode = ProbeExecutionMode(config.execution_mode)
+            except ValueError:
+                exec_mode = ProbeExecutionMode.DISABLED
             return CustomProbe(
                 script=config.custom_script,
+                execution_mode=exec_mode,
+                allowlist_directory=config.allowlist_directory,
                 **common_kwargs,
             )
 
@@ -434,6 +563,8 @@ class ProbeFactory:
             timeout=data.get("timeout", 5.0),
             retries=data.get("retries", 0),
             retry_delay=data.get("retry_delay", 1.0),
+            execution_mode=data.get("execution_mode", "disabled"),
+            allowlist_directory=data.get("allowlist_directory"),
         )
 
         return ProbeFactory.create(config)

@@ -28,15 +28,22 @@ from llama_orchestrator.engine.state import (
     HealthStatus,
     InstanceState,
     InstanceStatus,
-    record_health_check,
     RuntimeState,
-    load_all_states,
+    delete_runtime,
+    delete_state,
+    get_health_history,
+    get_recent_events,
+    list_divergent_instances,
     load_all_runtime,
+    load_all_states,
     load_runtime,
-    log_event,
-    save_runtime,
     load_state,
+    log_event,
+    record_health_check,
+    reconcile_state,
+    save_runtime,
     save_state,
+    save_state_atomic,
 )
 
 if TYPE_CHECKING:
@@ -66,13 +73,13 @@ def _runtime_to_state(runtime: RuntimeState) -> InstanceState:
     )
 
 
-def _sync_runtime_from_state(
+def _build_runtime_from_state(
     state: InstanceState,
     config: "InstanceConfig | None" = None,
     cmdline: str = "",
     last_error: str | None = None,
 ) -> RuntimeState:
-    """Mirror the legacy state updates into the V2 runtime table."""
+    """Build a RuntimeState from an InstanceState without persisting."""
     runtime = load_runtime(state.name) or RuntimeState(name=state.name)
     runtime.pid = state.pid
     runtime.port = config.server.port if config else runtime.port
@@ -90,7 +97,6 @@ def _sync_runtime_from_state(
         runtime.last_error = state.error_message
     elif state.status == InstanceStatus.STOPPED:
         runtime.last_error = ""
-    save_runtime(runtime)
     return runtime
 
 
@@ -107,23 +113,21 @@ def _persist_health_update(
     checked_at = time.time() if checked_at is None else checked_at
     state.health = health
     state.last_health_check = checked_at
-    save_state(state)
 
-    runtime = load_runtime(state.name) or RuntimeState(name=state.name)
-    runtime.pid = state.pid
-    runtime.port = config.server.port
-    runtime.cmdline = cmdline or runtime.cmdline
-    runtime.status = state.status
-    runtime.health = health
-    runtime.started_at = runtime.started_at or state.start_time
+    runtime = _build_runtime_from_state(
+        state,
+        config=config,
+        cmdline=cmdline,
+        last_error="" if health == HealthStatus.HEALTHY else (error_message or None),
+    )
     runtime.last_seen_at = checked_at
-    runtime.restart_attempts = state.restart_count
+    runtime.started_at = runtime.started_at or state.start_time
     if health == HealthStatus.HEALTHY:
         runtime.last_health_ok_at = checked_at
-        runtime.last_error = ""
     elif error_message:
         runtime.last_error = error_message
-    save_runtime(runtime)
+
+    save_state_atomic(state, runtime)
     record_health_check(
         state.name,
         health,
@@ -149,8 +153,10 @@ def _wait_for_instance_ready(
             state.status = InstanceStatus.ERROR
             state.health = HealthStatus.ERROR
             state.error_message = f"Process exited with code {proc.returncode}"
-            save_state(state)
-            _sync_runtime_from_state(state, config=config, cmdline=cmdline, last_error=state.error_message)
+            runtime = _build_runtime_from_state(
+                state, config=config, cmdline=cmdline, last_error=state.error_message
+            )
+            save_state_atomic(state, runtime)
             log_event(
                 event_type="start_failed",
                 message=state.error_message,
@@ -173,8 +179,10 @@ def _wait_for_instance_ready(
             state.status = InstanceStatus.ERROR
             state.health = HealthStatus.ERROR
             state.error_message = f"Process exited with code {proc.returncode}"
-            save_state(state)
-            _sync_runtime_from_state(state, config=config, cmdline=cmdline, last_error=state.error_message)
+            runtime = _build_runtime_from_state(
+                state, config=config, cmdline=cmdline, last_error=state.error_message
+            )
+            save_state_atomic(state, runtime)
             log_event(
                 event_type="start_failed",
                 message=state.error_message,
@@ -205,8 +213,8 @@ def _wait_for_instance_ready(
 
     state.status = InstanceStatus.RUNNING
     state.health = HealthStatus.LOADING
-    save_state(state)
-    _sync_runtime_from_state(state, config=config, cmdline=cmdline)
+    runtime = _build_runtime_from_state(state, config=config, cmdline=cmdline)
+    save_state_atomic(state, runtime)
     return state
 
 
@@ -229,8 +237,10 @@ def _wait_for_detached_instance_ready(
             state.status = InstanceStatus.ERROR
             state.health = HealthStatus.ERROR
             state.error_message = "Detached process exited before readiness completed"
-            save_state(state)
-            _sync_runtime_from_state(state, config=config, cmdline=cmdline, last_error=state.error_message)
+            runtime = _build_runtime_from_state(
+                state, config=config, cmdline=cmdline, last_error=state.error_message
+            )
+            save_state_atomic(state, runtime)
             log_event(
                 event_type="start_failed",
                 message=state.error_message,
@@ -253,8 +263,10 @@ def _wait_for_detached_instance_ready(
             state.status = InstanceStatus.ERROR
             state.health = HealthStatus.ERROR
             state.error_message = "Detached process exited before readiness completed"
-            save_state(state)
-            _sync_runtime_from_state(state, config=config, cmdline=cmdline, last_error=state.error_message)
+            runtime = _build_runtime_from_state(
+                state, config=config, cmdline=cmdline, last_error=state.error_message
+            )
+            save_state_atomic(state, runtime)
             log_event(
                 event_type="start_failed",
                 message=state.error_message,
@@ -285,8 +297,8 @@ def _wait_for_detached_instance_ready(
 
     state.status = InstanceStatus.RUNNING
     state.health = HealthStatus.LOADING
-    save_state(state)
-    _sync_runtime_from_state(state, config=config, cmdline=cmdline)
+    runtime = _build_runtime_from_state(state, config=config, cmdline=cmdline)
+    save_state_atomic(state, runtime)
     return state
 
 
@@ -330,16 +342,181 @@ def get_process_info(pid: int) -> dict | None:
         return None
 
 
-def kill_process_tree(pid: int, timeout: float = 10.0) -> bool:
+def _send_windows_ctrl_c(pid: int) -> bool:
     """
-    Kill a process and all its children.
-    
+    Send Ctrl+C to a Windows process group.
+
+    Args:
+        pid: Process ID to send Ctrl+C to
+
+    Returns:
+        True if Ctrl+C was sent successfully
+    """
+    import sys
+
+    if sys.platform != "win32":
+        return False
+
+    try:
+        import ctypes
+        import ctypes.wintypes
+
+        # CTRL_C_EVENT cannot be scoped to a process group on Windows. A
+        # CTRL_BREAK_EVENT can, and start_instance creates a new process group.
+        # Using Ctrl+C here could also interrupt the orchestrator itself.
+        kernel32 = ctypes.windll.kernel32
+        ctrl_break_event = 1
+        result = kernel32.GenerateConsoleCtrlEvent(ctrl_break_event, pid)
+
+        if result == 0:
+            # Failed to send event - might not be a console process
+            return False
+        return True
+    except (ImportError, AttributeError, OSError):
+        # ctypes or kernel32 not available
+        return False
+
+
+def _try_http_shutdown(port: int, timeout: float = 2.0) -> bool:
+    """
+    Try to send HTTP shutdown request to llama-server.
+
+    Args:
+        port: Port number to send shutdown request to
+        timeout: Timeout for the HTTP request
+
+    Returns:
+        True if shutdown request was sent successfully
+    """
+    import httpx
+
+    try:
+        with httpx.Client(timeout=timeout) as client:
+            response = client.post(f"http://127.0.0.1:{port}/shutdown")
+            return response.status_code in (200, 404)  # 404 means no endpoint (still ok)
+    except (httpx.RequestError, httpx.ConnectError):
+        return False
+
+
+def graceful_shutdown(
+    pid: int,
+    port: int | None = None,
+    timeout: float = 10.0,
+    force: bool = False,
+) -> dict:
+    """
+    Gracefully shut down a process with Windows-first approach.
+
+    Implements a multi-stage shutdown sequence:
+    1. On Windows: Try Ctrl+C to process group
+    2. Try HTTP /shutdown endpoint if port is available
+    3. Send SIGTERM/terminate() to process tree
+    4. Wait for graceful shutdown
+    5. Force kill if needed
+
+    Args:
+        pid: Process ID to shut down
+        port: Optional port for HTTP shutdown
+        timeout: Total timeout for graceful shutdown
+        force: If True, skip graceful steps and force kill immediately
+
+    Returns:
+        Dictionary with shutdown details:
+        - method: How the process was stopped
+        - duration: Time taken to stop
+        - children_killed: Number of children killed
+    """
+    import sys
+    import time
+
+    start_time = time.monotonic()
+    result = {
+        "method": "unknown",
+        "duration": 0.0,
+        "children_killed": 0,
+    }
+
+    if force:
+        # Force kill immediately
+        _force_kill_process_tree(pid)
+        result["method"] = "force_kill"
+        result["duration"] = time.monotonic() - start_time
+        return result
+
+    try:
+        parent = psutil.Process(pid)
+    except psutil.NoSuchProcess:
+        result["method"] = "not_found"
+        result["duration"] = time.monotonic() - start_time
+        return result
+
+    # Get all children first
+    try:
+        children = parent.children(recursive=True)
+    except psutil.NoSuchProcess:
+        children = []
+
+    result["children_killed"] = len(children)
+
+    # Stage 1: Windows-first - Try Ctrl+C
+    if sys.platform == "win32":
+        if _send_windows_ctrl_c(pid):
+            # Wait a bit to see if Ctrl+C worked
+            gone, alive = psutil.wait_procs([parent] + children, timeout=3.0)
+            if not alive:
+                result["method"] = "ctrl_c"
+                result["duration"] = time.monotonic() - start_time
+                return result
+
+    # Stage 2: Try HTTP /shutdown endpoint
+    if port is not None:
+        if _try_http_shutdown(port, timeout=2.0):
+            # Wait to see if HTTP shutdown worked
+            gone, alive = psutil.wait_procs([parent] + children, timeout=3.0)
+            if not alive:
+                result["method"] = "http_shutdown"
+                result["duration"] = time.monotonic() - start_time
+                return result
+
+    # Stage 3: Send SIGTERM/terminate()
+    try:
+        parent.terminate()
+    except psutil.NoSuchProcess:
+        pass
+
+    for child in children:
+        try:
+            child.terminate()
+        except psutil.NoSuchProcess:
+            pass
+
+    # Stage 4: Wait for graceful shutdown
+    gone, alive = psutil.wait_procs([parent] + children, timeout=timeout)
+
+    # Stage 5: Force kill remaining
+    if alive:
+        for proc in alive:
+            try:
+                proc.kill()
+            except psutil.NoSuchProcess:
+                pass
+        result["method"] = "terminate_then_kill"
+    else:
+        result["method"] = "terminate"
+
+    result["duration"] = time.monotonic() - start_time
+    return result
+
+
+def _force_kill_process_tree(pid: int) -> bool:
+    """
+    Force kill a process and all its children immediately.
+
     Args:
         pid: Process ID to kill
-        timeout: Timeout for graceful shutdown before force kill
-        
+
     Returns:
-        True if process was killed, False if not found
+        True if process was killed
     """
     try:
         parent = psutil.Process(pid)
@@ -352,36 +529,44 @@ def kill_process_tree(pid: int, timeout: float = 10.0) -> bool:
     except psutil.NoSuchProcess:
         children = []
 
-    # Terminate parent first
+    # Kill parent first
     try:
-        parent.terminate()
+        parent.kill()
     except psutil.NoSuchProcess:
         pass
 
-    # Terminate all children
+    # Kill all children
     for child in children:
         try:
-            child.terminate()
-        except psutil.NoSuchProcess:
-            pass
-
-    # Wait for graceful shutdown
-    gone, alive = psutil.wait_procs([parent] + children, timeout=timeout)
-
-    # Force kill any remaining
-    for proc in alive:
-        try:
-            proc.kill()
+            child.kill()
         except psutil.NoSuchProcess:
             pass
 
     return True
 
 
+def kill_process_tree(pid: int, timeout: float = 10.0, port: int | None = None) -> bool:
+    """
+    Kill a process and all its children.
+
+    Uses graceful_shutdown internally for Windows-first graceful shutdown.
+
+    Args:
+        pid: Process ID to kill
+        timeout: Timeout for graceful shutdown before force kill
+        port: Optional port for HTTP shutdown attempt
+
+    Returns:
+        True if process was killed, False if not found
+    """
+    result = graceful_shutdown(pid, port=port, timeout=timeout, force=False)
+    return result["method"] != "not_found"
+
+
 def check_stale_state(state: InstanceState) -> InstanceState:
     """
     Check if state is stale (process died but state shows running).
-    
+
     Updates and returns the corrected state.
     """
     if state.status in (InstanceStatus.RUNNING, InstanceStatus.STARTING):
@@ -391,8 +576,8 @@ def check_stale_state(state: InstanceState) -> InstanceState:
             state.pid = None
             state.health = HealthStatus.UNKNOWN
             state.error_message = "Process died unexpectedly"
-            save_state(state)
-            _sync_runtime_from_state(state, last_error=state.error_message)
+            runtime = _build_runtime_from_state(state, last_error=state.error_message)
+            save_state_atomic(state, runtime)
 
     return state
 
@@ -405,14 +590,14 @@ def start_instance(
 ) -> InstanceState:
     """
     Start a llama-server instance.
-    
+
     Args:
         name: Instance name to start
         wait_for_ready: Wait for the server to become ready
-        
+
     Returns:
         Updated instance state
-        
+
     Raises:
         ProcessError: If instance cannot be started
     """
@@ -454,8 +639,8 @@ def start_instance(
             state.status = InstanceStatus.ERROR
             state.health = HealthStatus.ERROR
             state.error_message = port_message
-            save_state(state)
-            _sync_runtime_from_state(state, config=config, last_error=port_message)
+            runtime = _build_runtime_from_state(state, config=config, last_error=port_message)
+            save_state_atomic(state, runtime)
             raise ProcessError(name, port_message)
 
         cmd = build_command(config)
@@ -472,8 +657,8 @@ def start_instance(
         state.status = InstanceStatus.STARTING
         state.health = HealthStatus.UNKNOWN
         state.error_message = ""
-        save_state(state)
-        _sync_runtime_from_state(state, config=config, cmdline=cmdline, last_error="")
+        runtime = _build_runtime_from_state(state, config=config, cmdline=cmdline, last_error="")
+        save_state_atomic(state, runtime)
 
         stdout_file = None
         stderr_file = None
@@ -492,16 +677,20 @@ def start_instance(
                     state.status = InstanceStatus.ERROR
                     state.health = HealthStatus.ERROR
                     state.error_message = error_message
-                    save_state(state)
-                    _sync_runtime_from_state(state, config=config, cmdline=cmdline, last_error=error_message)
+                    runtime = _build_runtime_from_state(
+                        state, config=config, cmdline=cmdline, last_error=error_message
+                    )
+                    save_state_atomic(state, runtime)
                     raise ProcessError(name, error_message)
 
                 state.pid = detach_result.pid
                 state.start_time = time.time()
                 state.status = InstanceStatus.RUNNING
                 state.health = HealthStatus.LOADING
-                save_state(state)
-                _sync_runtime_from_state(state, config=config, cmdline=cmdline, last_error="")
+                runtime = _build_runtime_from_state(
+                    state, config=config, cmdline=cmdline, last_error=""
+                )
+                save_state_atomic(state, runtime)
                 log_event(
                     event_type="started",
                     message=f"Instance started (PID: {detach_result.pid}, port: {config.server.port})",
@@ -530,7 +719,9 @@ def start_instance(
                 stderr=stderr_file,
                 env=env,
                 cwd=str(get_project_root()),
-                creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,  # Windows: allow Ctrl+Break
+                **({
+                    "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+                } if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP") else {}),
             )
 
             # Release parent-side handles immediately after spawn
@@ -545,8 +736,10 @@ def start_instance(
             state.start_time = started_at
             state.status = InstanceStatus.RUNNING
             state.health = HealthStatus.LOADING
-            save_state(state)
-            _sync_runtime_from_state(state, config=config, cmdline=cmdline, last_error="")
+            runtime = _build_runtime_from_state(
+                state, config=config, cmdline=cmdline, last_error=""
+            )
+            save_state_atomic(state, runtime)
             log_event(
                 event_type="started",
                 message=f"Instance started (PID: {proc.pid}, port: {config.server.port})",
@@ -562,8 +755,10 @@ def start_instance(
                 state.status = InstanceStatus.ERROR
                 state.health = HealthStatus.ERROR
                 state.error_message = f"Process exited with code {proc.returncode}"
-                save_state(state)
-                _sync_runtime_from_state(state, config=config, cmdline=cmdline, last_error=state.error_message)
+                runtime = _build_runtime_from_state(
+                    state, config=config, cmdline=cmdline, last_error=state.error_message
+                )
+                save_state_atomic(state, runtime)
                 log_event(
                     event_type="start_failed",
                     message=state.error_message,
@@ -583,8 +778,10 @@ def start_instance(
             state.status = InstanceStatus.ERROR
             state.health = HealthStatus.ERROR
             state.error_message = str(e)
-            save_state(state)
-            _sync_runtime_from_state(state, config=config, cmdline=cmdline, last_error=state.error_message)
+            runtime = _build_runtime_from_state(
+                state, config=config, cmdline=cmdline, last_error=state.error_message
+            )
+            save_state_atomic(state, runtime)
             log_event(
                 event_type="start_failed",
                 message=state.error_message,
@@ -606,16 +803,16 @@ def start_instance(
 
 def stop_instance(name: str, force: bool = False, timeout: float = 10.0) -> InstanceState:
     """
-    Stop a llama-server instance.
-    
+    Stop a llama-server instance with Windows-first graceful shutdown.
+
     Args:
         name: Instance name to stop
         force: Force kill without graceful shutdown
         timeout: Timeout for graceful shutdown
-        
+
     Returns:
         Updated instance state
-        
+
     Raises:
         ProcessError: If instance cannot be stopped
     """
@@ -631,23 +828,26 @@ def stop_instance(name: str, force: bool = False, timeout: float = 10.0) -> Inst
         state = check_stale_state(state)
 
         if state.status == InstanceStatus.STOPPED:
-            _sync_runtime_from_state(state, last_error="")
+            save_state_atomic(state)
             return state
 
         if state.pid is None:
             state.status = InstanceStatus.STOPPED
             state.health = HealthStatus.UNKNOWN
-            save_state(state)
-            _sync_runtime_from_state(state, last_error="")
+            save_state_atomic(state)
             return state
 
         # Update state to stopping
         state.status = InstanceStatus.STOPPING
-        save_state(state)
-        _sync_runtime_from_state(state)
+        save_state_atomic(state)
 
-        # Kill the process
-        kill_process_tree(state.pid, timeout=0 if force else timeout)
+        # Get port for HTTP shutdown attempt
+        port = None
+        if runtime is not None:
+            port = runtime.port
+
+        # Kill the process with graceful shutdown
+        kill_process_tree(state.pid, timeout=0 if force else timeout, port=port)
 
         # Update state
         stopped_pid = state.pid
@@ -655,8 +855,7 @@ def stop_instance(name: str, force: bool = False, timeout: float = 10.0) -> Inst
         state.status = InstanceStatus.STOPPED
         state.health = HealthStatus.UNKNOWN
         state.error_message = ""
-        save_state(state)
-        _sync_runtime_from_state(state, last_error="")
+        save_state_atomic(state)
         log_event(
             event_type="stopped",
             message=f"Instance stopped (PID: {stopped_pid}, force: {force})",
@@ -686,12 +885,12 @@ def restart_instance(
 ) -> InstanceState:
     """
     Restart a llama-server instance.
-    
+
     Args:
         name: Instance name to restart
         force: Force kill without graceful shutdown
         wait_for_ready: Wait for readiness after restart completes
-        
+
     Returns:
         Updated instance state
     """
@@ -721,8 +920,7 @@ def restart_instance(
     else:
         state = start_instance(name, wait_for_ready=wait_for_ready, config_override=config_override)
     state.restart_count = restart_count
-    save_state(state)
-    _sync_runtime_from_state(state)
+    save_state_atomic(state)
     log_event(
         event_type="restarted",
         message=f"Instance restarted (count: {restart_count})",
@@ -736,7 +934,7 @@ def restart_instance(
 def get_instance_status(name: str) -> InstanceState:
     """
     Get current status of an instance.
-    
+
     Returns a corrected state (checks for stale PIDs).
     """
     state = load_state(name)
@@ -752,7 +950,7 @@ def get_instance_status(name: str) -> InstanceState:
 def list_instances() -> dict[str, InstanceState]:
     """
     List all instances with their current status.
-    
+
     Returns:
         Dictionary of instance name -> state
     """

@@ -35,6 +35,7 @@ KNOWN_PARAMETER_PATHS: tuple[str, ...] = (
     "server.port",
     "server.timeout",
     "server.parallel",
+    "server.disable_fit",
     "gpu.backend",
     "gpu.device_id",
     "gpu.layers",
@@ -56,6 +57,8 @@ KNOWN_PARAMETER_PATHS: tuple[str, ...] = (
     "healthcheck.backoff_base",
     "healthcheck.backoff_max",
     "healthcheck.backoff_jitter",
+    "healthcheck.execution_mode",
+    "healthcheck.allowlist_directory",
     "restart_policy.enabled",
     "restart_policy.max_retries",
     "restart_policy.backoff_multiplier",
@@ -82,6 +85,7 @@ DEFAULT_STATIC_PARAMETER_PATHS: tuple[str, ...] = (
     "server.port",
     "server.timeout",
     "server.parallel",
+    "server.disable_fit",
     "gpu.backend",
     "gpu.device_id",
     "gpu.layers",
@@ -110,6 +114,8 @@ DEFAULT_DYNAMIC_PARAMETER_PATHS: tuple[str, ...] = (
     "healthcheck.backoff_base",
     "healthcheck.backoff_max",
     "healthcheck.backoff_jitter",
+    "healthcheck.execution_mode",
+    "healthcheck.allowlist_directory",
     "restart_policy.enabled",
     "restart_policy.max_retries",
     "restart_policy.backoff_multiplier",
@@ -280,6 +286,10 @@ class ServerConfig(BaseModel):
     port: int = Field(default=8001, ge=1024, le=65535, description="Server port")
     timeout: int = Field(default=600, ge=0, description="Request timeout in seconds")
     parallel: int = Field(default=1, ge=1, le=64, description="Parallel request slots")
+    disable_fit: bool = Field(
+        default=True,
+        description="Disable llama.cpp -fit flag. Some versions require it, others do not.",
+    )
 
     @field_validator("host")
     @classmethod
@@ -340,6 +350,16 @@ class HealthcheckConfig(BaseModel):
         description="Custom script to execute (for custom probe). Use {host} and {port} placeholders"
     )
 
+    # Probe security settings (T1-4)
+    execution_mode: Literal["disabled", "restricted", "sandboxed"] = Field(
+        default="disabled",
+        description="Execution mode for custom probes: disabled (default), restricted, or sandboxed"
+    )
+    allowlist_directory: Optional[str] = Field(
+        default=None,
+        description="Directory path where custom probe scripts are allowed to reside"
+    )
+
     # Timing configuration
     interval: int = Field(default=10, ge=1, le=3600, description="Check interval in seconds")
     timeout: int = Field(default=5, ge=1, le=60, description="Request timeout in seconds")
@@ -371,6 +391,8 @@ class HealthcheckConfig(BaseModel):
             "timeout": float(self.timeout),
             "retries": self.retries,
             "retry_delay": self.retry_delay,
+            "execution_mode": self.execution_mode,
+            "allowlist_directory": self.allowlist_directory,
         }
 
 

@@ -1235,17 +1235,20 @@ def binary_install(
     variant: Annotated[
         str, typer.Option("--variant", "-var", help="Binary variant (e.g., win-vulkan-x64)")
     ] = "win-vulkan-x64",
+    insecure: Annotated[
+        bool, typer.Option("--insecure", "-k", help="Disable TLS certificate verification (DANGEROUS)")
+    ] = False,
 ) -> None:
     """
     Install a llama.cpp server binary from GitHub releases.
-    
+
     Downloads and extracts the binary to bins/<uuid>/ directory.
     The binary is registered with a unique UUID for unambiguous identification.
-    
+
     Available variants for Windows:
-        win-cpu-x64, win-vulkan-x64, win-cuda-12.4-x64, 
+        win-cpu-x64, win-vulkan-x64, win-cuda-12.4-x64,
         win-cuda-13.1-x64, win-hip-radeon-x64, win-sycl-x64
-    
+
     Example:
         llama-orch binary install
         llama-orch binary install b7572 --variant win-vulkan-x64
@@ -1263,6 +1266,8 @@ def binary_install(
     console.print("[cyan]Installing llama.cpp binary[/cyan]")
     console.print(f"  Version: {version}")
     console.print(f"  Variant: {variant}")
+    if insecure:
+        console.print("[red]⚠ SECURITY WARNING: TLS verification DISABLED[/red]")
     console.print()
 
     try:
@@ -1275,8 +1280,9 @@ def binary_install(
 
             try:
                 binary = manager.install(
-                    version=version if version != "latest" else None,
+                    version=version,
                     variant=variant,
+                    insecure=insecure,
                 )
                 progress.update(task, description="Installation complete!")
             except Exception as e:

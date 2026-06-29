@@ -18,7 +18,7 @@ import shutil
 import sqlite3
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterator
@@ -249,12 +249,12 @@ def init_db() -> None:
         """)
 
         conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_events_instance 
+            CREATE INDEX IF NOT EXISTS idx_events_instance
             ON events(instance_name, ts DESC)
         """)
 
         conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_events_level 
+            CREATE INDEX IF NOT EXISTS idx_events_level
             ON events(level, ts DESC)
         """)
 
@@ -282,7 +282,7 @@ def init_db() -> None:
         _ensure_column(conn, "health_history", "instance_uid", "TEXT")
 
         conn.execute("""
-            CREATE INDEX IF NOT EXISTS idx_health_history_instance 
+            CREATE INDEX IF NOT EXISTS idx_health_history_instance
             ON health_history(instance_name, checked_at DESC)
         """)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_instances_uid ON instances(instance_uid)")
@@ -376,7 +376,7 @@ def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
         for row in rows:
             conn.execute("""
                 INSERT OR IGNORE INTO runtime (
-                    name, pid, port, status, health, started_at, 
+                    name, pid, port, status, health, started_at,
                     restart_attempts, last_error
                 ) VALUES (?, ?, NULL, ?, ?, ?, ?, ?)
             """, (
@@ -415,7 +415,7 @@ def save_state(state: InstanceState) -> None:
     with get_db_connection() as conn:
         conn.execute("""
             INSERT INTO instances (
-                name, instance_uid, instance_no, display_name, pid, status, health, start_time, 
+                name, instance_uid, instance_no, display_name, pid, status, health, start_time,
                 last_health_check, restart_count, config_hash, error_message, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(name) DO UPDATE SET
@@ -504,8 +504,8 @@ def delete_state(name: str) -> bool:
 
 
 def record_health_check(
-    name: str, 
-    health: HealthStatus, 
+    name: str,
+    health: HealthStatus,
     response_time_ms: float | None = None,
     error_message: str = "",
 ) -> None:
@@ -519,7 +519,7 @@ def record_health_check(
 
         # Also update the main instance state
         conn.execute("""
-            UPDATE instances 
+            UPDATE instances
             SET health = ?, last_health_check = ?, updated_at = ?
             WHERE name = ?
         """, (health.value, time.time(), time.time(), name))
@@ -679,14 +679,14 @@ def log_event(
 ) -> int:
     """
     Log an event to the database.
-    
+
     Args:
         event_type: Type of event (started, stopped, health_change, restart, error)
         message: Human-readable message
         instance_name: Associated instance (optional)
         level: Log level (info, warning, error)
         meta: Additional metadata as dict
-        
+
     Returns:
         Event ID
     """
@@ -716,12 +716,12 @@ def get_recent_events(
 ) -> list[dict]:
     """
     Get recent events from the database.
-    
+
     Args:
         instance_name: Filter by instance (optional)
         level: Filter by log level (optional)
         limit: Maximum number of events to return
-        
+
     Returns:
         List of event dictionaries
     """
@@ -761,10 +761,10 @@ def get_recent_events(
 def cleanup_old_events(retention_days: int = 7) -> int:
     """
     Delete events older than retention period.
-    
+
     Args:
         retention_days: Number of days to keep events
-        
+
     Returns:
         Number of events deleted
     """
@@ -808,6 +808,271 @@ def sync_state_instance_identity(rows: list[dict[str, str]]) -> None:
                 (row["instance_uid"], row["name"]),
             )
         conn.commit()
+
+
+# =============================================================================
+# Atomic Dual-State Operations (T1-1: Canonical Runtime State)
+# =============================================================================
+
+
+class StateSyncError(Exception):
+    """Error during atomic dual-state save."""
+
+    def __init__(self, name: str, message: str, failed_table: str = ""):
+        self.name = name
+        self.message = message
+        self.failed_table = failed_table
+        super().__init__(f"[{name}] State sync error ({failed_table}): {message}")
+
+
+def save_state_atomic(state: InstanceState, runtime: RuntimeState | None = None) -> None:
+    """
+    Atomically save both InstanceState and RuntimeState in a single transaction.
+
+    This prevents state divergence when one save succeeds but the other fails.
+    If runtime is None, only the legacy state table is updated.
+
+    Args:
+        state: InstanceState to persist
+        runtime: RuntimeState to persist (optional; if None, only instances table is updated)
+
+    Raises:
+        StateSyncError: If the transaction fails
+    """
+    instance_uid, instance_no, display_name = _resolve_identity_fields(state.name)
+    now = time.time()
+
+    with get_db_connection() as conn:
+        try:
+            # Save legacy state
+            conn.execute("""
+                INSERT INTO instances (
+                    name, instance_uid, instance_no, display_name, pid, status, health, start_time,
+                    last_health_check, restart_count, config_hash, error_message, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(name) DO UPDATE SET
+                    instance_uid = excluded.instance_uid,
+                    instance_no = excluded.instance_no,
+                    display_name = excluded.display_name,
+                    pid = excluded.pid,
+                    status = excluded.status,
+                    health = excluded.health,
+                    start_time = excluded.start_time,
+                    last_health_check = excluded.last_health_check,
+                    restart_count = excluded.restart_count,
+                    config_hash = excluded.config_hash,
+                    error_message = excluded.error_message,
+                    updated_at = excluded.updated_at
+            """, (
+                state.name,
+                instance_uid,
+                instance_no,
+                display_name,
+                state.pid,
+                state.status.value,
+                state.health.value,
+                state.start_time,
+                state.last_health_check,
+                state.restart_count,
+                state.config_hash,
+                state.error_message,
+                now,
+            ))
+
+            # Save runtime state if provided
+            if runtime is not None:
+                r_uid, r_no, r_display = _resolve_identity_fields(runtime.name)
+                conn.execute("""
+                    INSERT INTO runtime (
+                        name, instance_uid, instance_no, display_name, pid, port, cmdline, binary_version, status, health,
+                        started_at, last_seen_at, last_health_ok_at, restart_attempts,
+                        last_exit_code, last_error
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(name) DO UPDATE SET
+                        instance_uid = excluded.instance_uid,
+                        instance_no = excluded.instance_no,
+                        display_name = excluded.display_name,
+                        pid = excluded.pid,
+                        port = excluded.port,
+                        cmdline = excluded.cmdline,
+                        binary_version = excluded.binary_version,
+                        status = excluded.status,
+                        health = excluded.health,
+                        started_at = excluded.started_at,
+                        last_seen_at = excluded.last_seen_at,
+                        last_health_ok_at = excluded.last_health_ok_at,
+                        restart_attempts = excluded.restart_attempts,
+                        last_exit_code = excluded.last_exit_code,
+                        last_error = excluded.last_error
+                """, (
+                    runtime.name,
+                    r_uid,
+                    r_no,
+                    r_display,
+                    runtime.pid,
+                    runtime.port,
+                    runtime.cmdline,
+                    runtime.binary_version,
+                    runtime.status.value,
+                    runtime.health.value,
+                    runtime.started_at,
+                    runtime.last_seen_at,
+                    runtime.last_health_ok_at,
+                    runtime.restart_attempts,
+                    runtime.last_exit_code,
+                    runtime.last_error,
+                ))
+
+            conn.commit()
+        except sqlite3.Error as e:
+            conn.rollback()
+            failed_table = "runtime" if runtime is not None else "instances"
+            raise StateSyncError(state.name, str(e), failed_table) from e
+
+
+def check_state_divergence(name: str) -> dict | None:
+    """
+    Check if InstanceState and RuntimeState are in sync for an instance.
+
+    Returns a dict with divergence details if found, or None if in sync.
+
+    Returns dict with keys:
+        - name: instance name
+        - state_status: status from instances table
+        - runtime_status: status from runtime table
+        - state_pid: PID from instances table
+        - runtime_pid: PID from runtime table
+        - state_health: health from instances table
+        - runtime_health: health from runtime table
+        - divergent_fields: list of field names that differ
+    """
+    with get_db_connection() as conn:
+        state_row = conn.execute(
+            "SELECT * FROM instances WHERE name = ?", (name,)
+        ).fetchone()
+        runtime_row = conn.execute(
+            "SELECT * FROM runtime WHERE name = ?", (name,)
+        ).fetchone()
+
+        if state_row is None and runtime_row is None:
+            return None
+
+        divergent_fields = []
+
+        # Compare status
+        if state_row and runtime_row:
+            if state_row["status"] != runtime_row["status"]:
+                divergent_fields.append("status")
+            if str(state_row["pid"]) != str(runtime_row["pid"]):
+                divergent_fields.append("pid")
+            if state_row["health"] != runtime_row["health"]:
+                divergent_fields.append("health")
+
+        if divergent_fields:
+            return {
+                "name": name,
+                "state_status": state_row["status"] if state_row else None,
+                "runtime_status": runtime_row["status"] if runtime_row else None,
+                "state_pid": state_row["pid"] if state_row else None,
+                "runtime_pid": runtime_row["pid"] if runtime_row else None,
+                "state_health": state_row["health"] if state_row else None,
+                "runtime_health": runtime_row["health"] if runtime_row else None,
+                "divergent_fields": divergent_fields,
+            }
+
+        return None
+
+
+def reconcile_state(name: str, prefer: str = "runtime") -> dict:
+    """
+    Reconcile divergent state for an instance by writing the preferred source.
+
+    Args:
+        name: Instance name to reconcile
+        prefer: Which source to trust - 'runtime' (V2) or 'state' (legacy)
+
+    Returns:
+        Dict with reconciliation details
+    """
+    divergence = check_state_divergence(name)
+    if divergence is None:
+        return {"name": name, "action": "none", "message": "No divergence found"}
+
+    action = "none"
+    message = "No reconciliation needed"
+
+    with get_db_connection() as conn:
+        if prefer == "runtime":
+            # Copy runtime values to instances table
+            runtime_row = conn.execute(
+                "SELECT * FROM runtime WHERE name = ?", (name,)
+            ).fetchone()
+            if runtime_row:
+                conn.execute("""
+                    UPDATE instances SET
+                        status = ?,
+                        pid = ?,
+                        health = ?
+                    WHERE name = ?
+                """, (
+                    runtime_row["status"],
+                    runtime_row["pid"],
+                    runtime_row["health"],
+                    name,
+                ))
+                action = "synced_to_instances"
+                message = "Instances table synced from runtime table"
+        else:
+            # Copy instances values to runtime table
+            state_row = conn.execute(
+                "SELECT * FROM instances WHERE name = ?", (name,)
+            ).fetchone()
+            if state_row:
+                conn.execute("""
+                    UPDATE runtime SET
+                        status = ?,
+                        pid = ?,
+                        health = ?
+                    WHERE name = ?
+                """, (
+                    state_row["status"],
+                    state_row["pid"],
+                    state_row["health"],
+                    name,
+                ))
+                action = "synced_to_runtime"
+                message = "Runtime table synced from instances table"
+
+        conn.commit()
+
+    return {
+        "name": name,
+        "action": action,
+        "message": message,
+        "previous_divergence": divergence,
+    }
+
+
+def list_divergent_instances() -> list[dict]:
+    """
+    List all instances with divergent state between instances and runtime tables.
+
+    Returns:
+        List of divergence dicts
+    """
+    with get_db_connection() as conn:
+        # Get all instance names from both tables
+        state_names = {row["name"] for row in conn.execute("SELECT name FROM instances").fetchall()}
+        runtime_names = {row["name"] for row in conn.execute("SELECT name FROM runtime").fetchall()}
+        all_names = sorted(state_names | runtime_names)
+
+        divergent = []
+        for name in all_names:
+            result = check_state_divergence(name)
+            if result is not None:
+                divergent.append(result)
+
+        return divergent
 
 
 # Initialize database on module import

@@ -90,7 +90,7 @@ from llama_orchestrator.gui.benchmark_controls import (
     build_benchmark_frame,
     update_benchmark_controls,
 )
-from llama_orchestrator.gui.actions import copy_cli_command, rename_instance, diff_instances
+from llama_orchestrator.gui.actions import copy_cli_command, rename_instance, diff_instances, copy_endpoint_snippet
 from llama_orchestrator.gui.toolbar import build_toolbar, ToolbarCallbacks
 from llama_orchestrator.gui.grid_benchmark_dialog import GridBenchmarkDialog
 from llama_orchestrator.gui.install_dialog import InstallBinaryDialog
@@ -730,6 +730,7 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
         self.gpu_inventory_var = tk.StringVar(value=format_detected_gpu_summary(()))
         self.gpu_aliases = load_gpu_aliases()
         self._detected_gpus: tuple[DetectedGpu, ...] = ()
+        self._selected_gpu_adapter_names: set[str] = set()
         self._queued_benchmark_names: set[str] = set()
         self._benchmark_active_name: str | None = None
         self._benchmark_job_lock = threading.Lock()
@@ -846,6 +847,15 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
         self.context_menu.add_command(label="Clone row", command=self._clone_selected)
         self.context_menu.add_command(label="Rename display name", command=self._rename_display_name)
         self.context_menu.add_command(label="Copy as CLI command", command=self._copy_cli_command)
+
+        self.endpoint_menu = tk.Menu(self.context_menu, tearoff=False)
+        self.endpoint_menu.add_command(label="OpenAI API Base (http://127.0.0.1:port/v1)", command=lambda: self._copy_endpoint("openai_base"))
+        self.endpoint_menu.add_command(label="OpenAI Chat Completions", command=lambda: self._copy_endpoint("openai_chat"))
+        self.endpoint_menu.add_command(label="llama.cpp Completion", command=lambda: self._copy_endpoint("llama_completion"))
+        self.endpoint_menu.add_command(label="Python SDK Snippet", command=lambda: self._copy_endpoint("python_snippet"))
+        self.endpoint_menu.add_command(label="cURL command", command=lambda: self._copy_endpoint("curl_command"))
+        self.context_menu.add_cascade(label="Copy endpoint URL/snippet", menu=self.endpoint_menu)
+
         self.context_menu.add_separator()
         self.context_menu.add_command(label="Export config to VS Code", command=self._export_config_to_vscode)
         self.context_menu.add_separator()
@@ -946,8 +956,18 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
             gpus,
             self.gpu_aliases,
             gpu_alias_button_width=GPU_ALIAS_BUTTON_WIDTH,
+            selected_adapter_names=self._selected_gpu_adapter_names,
             on_edit_alias=self._on_alias_button_edit,
+            on_gpu_select=self._on_gpu_select,
         )
+
+    def _on_gpu_select(self, adapter_name: str) -> None:
+        """Toggle GPU selection when user clicks an alias button."""
+        if adapter_name in self._selected_gpu_adapter_names:
+            self._selected_gpu_adapter_names.discard(adapter_name)
+        else:
+            self._selected_gpu_adapter_names.add(adapter_name)
+        self.refresh()
 
     def _on_gpu_alias_changed(self, adapter_name: str, alias: str) -> None:
         self._post_message(f"Saved GPU alias for {adapter_name}: {alias or 'cleared'}.")
@@ -1099,6 +1119,20 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
                 sort_quantization: object = quantization if quantization != "-" else None
                 sort_architecture: object = architecture if architecture != "-" else None
                 sort_args: object = tuple(config.args)
+
+                # GPU filtering: only show instances that use selected GPUs
+                if self._selected_gpu_adapter_names:
+                    label_to_adapter: dict[str, str] = {}
+                    for g in detected_gpus:
+                        if g.name:
+                            label_to_adapter[g.label] = g.name
+                    instance_adapter_names = {
+                        label_to_adapter[label]
+                        for label in runtime_selection.gpu_labels
+                        if label in label_to_adapter
+                    }
+                    if not instance_adapter_names.intersection(self._selected_gpu_adapter_names):
+                        continue
             except Exception:
                 display_name = name
                 port = "-"
@@ -2035,6 +2069,13 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
             return
         copy_cli_command(name, self._get_cli_command, root=self)
         self._post_message(f"Copied llama.cpp CLI command for {name}.")
+
+    def _copy_endpoint(self, endpoint_type: str) -> None:
+        name = self._selected_instance()
+        if not name:
+            return
+        copy_endpoint_snippet(name, endpoint_type, get_instance_config, root=self)
+        self._post_message(f"Copied {endpoint_type.replace('_', ' ')} snippet for {name}.")
 
     def _confirm_rename(self, name: str, display_name: str) -> bool:
         try:

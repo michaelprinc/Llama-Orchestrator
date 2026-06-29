@@ -7,6 +7,7 @@ Handles fetching release information from ggml-org/llama.cpp.
 from __future__ import annotations
 
 import logging
+import time
 from datetime import datetime
 from typing import Any, Optional
 
@@ -26,6 +27,9 @@ DEFAULT_TIMEOUT = 30.0
 
 # User-Agent header (GitHub recommends setting this)
 USER_AGENT = "llama-orchestrator/0.1.0"
+
+# Release metadata cache TTL (30 minutes)
+RELEASE_CACHE_TTL = 1800.0
 
 
 class GitHubError(Exception):
@@ -62,7 +66,7 @@ class GitHubClient:
     ):
         """
         Initialize GitHub client.
-        
+
         Args:
             timeout: Request timeout in seconds
             token: Optional GitHub personal access token for higher rate limits
@@ -70,6 +74,27 @@ class GitHubClient:
         self.timeout = timeout
         self.token = token
         self._client: Optional[httpx.Client] = None
+        # Release metadata cache: {cache_key: (timestamp, data)}
+        self._release_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+    def clear_cache(self) -> None:
+        """Clear the release metadata cache."""
+        self._release_cache.clear()
+
+    def _cache_get(self, key: str) -> Optional[dict[str, Any]]:
+        """Get a cached release entry if it hasn't expired."""
+        entry = self._release_cache.get(key)
+        if entry is None:
+            return None
+        timestamp, data = entry
+        if time.time() - timestamp > RELEASE_CACHE_TTL:
+            del self._release_cache[key]
+            return None
+        return data
+
+    def _cache_set(self, key: str, data: dict[str, Any]) -> None:
+        """Store a release entry in the cache."""
+        self._release_cache[key] = (time.time(), data)
 
     def _get_headers(self) -> dict[str, str]:
         """Get request headers."""
@@ -130,31 +155,47 @@ class GitHubClient:
     def get_latest_release(self) -> dict[str, Any]:
         """
         Get the latest release information.
-        
+
         Returns:
             Release data including tag_name, assets, etc.
         """
+        cache_key = "latest"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            logger.debug("Release cache HIT (latest)")
+            return cached
+
         url = f"{GITHUB_API_RELEASES_URL}/latest"
-        logger.debug(f"Fetching latest release from {url}")
+        logger.debug("Fetching latest release from %s", url)
 
         response = self.client.get(url)
-        return self._handle_response(response)
+        data = self._handle_response(response)
+        self._cache_set(cache_key, data)
+        return data
 
     def get_release(self, tag: str) -> dict[str, Any]:
         """
         Get release information by tag.
-        
+
         Args:
             tag: Release tag (e.g., 'b7572')
-            
+
         Returns:
             Release data including tag_name, assets, etc.
         """
+        cache_key = f"tag:{tag}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            logger.debug("Release cache HIT (%s)", tag)
+            return cached
+
         url = f"{GITHUB_API_RELEASES_URL}/tags/{tag}"
-        logger.debug(f"Fetching release {tag} from {url}")
+        logger.debug("Fetching release %s from %s", tag, url)
 
         response = self.client.get(url)
-        return self._handle_response(response)
+        data = self._handle_response(response)
+        self._cache_set(cache_key, data)
+        return data
 
     def list_releases(self, per_page: int = 30, page: int = 1) -> list[dict[str, Any]]:
         """
