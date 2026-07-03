@@ -22,6 +22,7 @@ from llama_orchestrator.config import (
     load_all_instances,
     save_config,
 )
+from llama_orchestrator.gui.hf_import_dialog import HuggingFaceImportDialog
 from llama_orchestrator.gui_state import GuiSettings, save_gui_settings
 from llama_orchestrator.health.ports import find_free_port
 from llama_orchestrator.hf_import import (
@@ -150,6 +151,14 @@ def apply_managed_runtime_args(
         cleaned.extend(["--flash-attn", flash_attn])
 
     return cleaned
+
+
+def launch_hugging_face_import_dialog(
+    parent: tk.Misc,
+    on_use: Callable[[ImportedModelSelection], None],
+) -> None:
+    """Open the extracted Hugging Face dialog from the Add model flow."""
+    HuggingFaceImportDialog(parent, on_use=on_use)
 
 
 # --- Dialog classes ---
@@ -285,9 +294,7 @@ class AddModelDialog(tk.Toplevel):
             self.model_var.set(path)
 
     def _open_hf_import_dialog(self) -> None:
-        from llama_orchestrator.gui.app import HuggingFaceImportDialog
-
-        HuggingFaceImportDialog(self, on_use=self._apply_hf_import_selection)
+        launch_hugging_face_import_dialog(self, self._apply_hf_import_selection)
 
     def _apply_hf_import_selection(self, selection: ImportedModelSelection) -> None:
         name, model_path, tags = build_add_model_prefill(selection)

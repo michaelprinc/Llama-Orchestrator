@@ -1,0 +1,42 @@
+{
+  "gguf_metadata": {
+    "architecture": "qwen35",
+    "attention_head_count": 24,
+    "attention_head_count_kv": 4,
+    "basename": "Qwen3.6-27B",
+    "block_count": 65,
+    "chat_template_present": true,
+    "context_length": 262144,
+    "embedding_length": 5120,
+    "file_type": "IQ4_XS",
+    "file_type_value": 30,
+    "name": "Qwen3.6-27B",
+    "nextn_predict_layers": 1,
+    "quantization_version": 2,
+    "rope_freq_base": 10000000.0
+  },
+  "model_card_metadata": {
+    "claimed_architecture": "qwen3",
+    "claimed_chat_template": null,
+    "claimed_context_length": 131072,
+    "claimed_model": "Qwen3.6-27B MTP Quantized to IQ4_XS for 16 GB VRAM GPUs",
+    "claimed_mtp_support": true,
+    "recommended_runtime": "vllm"
+  },
+  "schema_version": "1",
+  "source": {
+    "fetched_at": "2026-07-03T20:27:53Z",
+    "filename": "qwen3.6-27b-mtp-IQ4_XS-Q8nextn.gguf",
+    "provider": "huggingface",
+    "repo_id": "jpetrina/Qwen3.6-27B-MTP-IQ4_XS-pure-GGUF",
+    "revision": "main"
+  },
+  "validation": {
+    "confidence": "medium",
+    "status": "warning",
+    "warnings": [
+      "Model card context length 131072 does not match GGUF context length 262144.",
+      "Model card architecture qwen3 does not match GGUF architecture qwen35."
+    ]
+  }
+}

@@ -17,6 +17,23 @@ def test_next_clone_name_returns_first_available_candidate() -> None:
     assert next_clone_name("model", {"model-clone-1"}) == "model-clone-2"
 
 
+def test_add_model_opens_hugging_face_import_dialog() -> None:
+    """The Add model action should use the dialog's post-refactor module."""
+    from llama_orchestrator.gui.model_dialogs import launch_hugging_face_import_dialog
+
+    with patch(
+        "llama_orchestrator.gui.model_dialogs.HuggingFaceImportDialog"
+    ) as import_dialog:
+        parent = MagicMock()
+        on_use = MagicMock()
+        launch_hugging_face_import_dialog(parent, on_use)
+
+    import_dialog.assert_called_once_with(
+        parent,
+        on_use=on_use,
+    )
+
+
 # ──────────────────────────────────────────────────────────────────────
 # table.py tests
 # ──────────────────────────────────────────────────────────────────────

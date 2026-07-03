@@ -1,0 +1,41 @@
+{
+  "gguf_metadata": {
+    "architecture": "qwen35moe",
+    "attention_head_count": 16,
+    "attention_head_count_kv": 2,
+    "basename": null,
+    "block_count": 41,
+    "chat_template_present": true,
+    "context_length": 262144,
+    "embedding_length": 2048,
+    "file_type": "Q3_K_M",
+    "file_type_value": 12,
+    "name": "Safetensors",
+    "nextn_predict_layers": 1,
+    "quantization_version": 2,
+    "rope_freq_base": 10000000.0
+  },
+  "model_card_metadata": {
+    "claimed_architecture": "qwen3",
+    "claimed_chat_template": null,
+    "claimed_context_length": null,
+    "claimed_model": "Qwen3.6-35B-A3B \u2014 APEX-MTP GGUF",
+    "claimed_mtp_support": true,
+    "recommended_runtime": "llama.cpp"
+  },
+  "schema_version": "1",
+  "source": {
+    "fetched_at": "2026-07-03T21:21:02Z",
+    "filename": "Qwen3.6-35B-A3B-APEX-MTP-I-Mini.gguf",
+    "provider": "huggingface",
+    "repo_id": "mudler/Qwen3.6-35B-A3B-APEX-MTP-GGUF",
+    "revision": "main"
+  },
+  "validation": {
+    "confidence": "medium",
+    "status": "warning",
+    "warnings": [
+      "Model card architecture qwen3 does not match GGUF architecture qwen35moe."
+    ]
+  }
+}
