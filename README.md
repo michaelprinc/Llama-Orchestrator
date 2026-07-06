@@ -5,15 +5,31 @@
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
+---
+
 ## Overview
 
-**llama-orchestrator** is a Python-based control plane for managing multiple llama.cpp server instances. It provides:
+**llama-orchestrator** is a Python-based control plane for managing multiple
+[`llama.cpp`](https://github.com/ggml-org/llama.cpp) server instances on
+Windows. It provides a `docker-compose`-style operator experience — `init`,
+`up`, `down`, `ps`, `logs`, `dashboard`, and `gui` — backed by native
+Windows process management, SQLite state persistence, and a rich desktop GUI.
 
-- 🚀 **Multi-instance support** — Run multiple models on different ports
-- 🔄 **Health monitoring** — Automatic health checks with configurable policies
-- ♻️ **Auto-restart** — Intelligent restart on failure with exponential backoff
-- 📊 **TUI Dashboard** — Live terminal dashboard showing all instances
-- 🪟 **Windows native** — Task Scheduler / NSSM service integration
+### Key Capabilities
+
+| Capability | Description |
+|---|---|
+| 🚀 **Multi-instance orchestration** | Run multiple `llama-server` processes on different ports, each with its own model, GPU binding, and runtime args |
+| 🔄 **Health monitoring** | Configurable HTTP/TCP/custom probes with retry/backoff and jittered restart delays |
+| ♻️ **Auto-restart** | Background daemon with exponential-backoff restart on failure |
+| 📊 **TUI Dashboard** | Live terminal dashboard with recent events panel and instance filtering |
+| 🪟 **Desktop GUI** | Windows Tkinter management panel — model table, tag filtering, batch actions, inline runtime args editing, benchmark controls |
+| 🔧 **Binary management** | Versioned `llama-server` packages under `bins/`, UUID registry, per-instance binary pinning |
+| 🛡️ **Windows service** | NSSM-backed daemon install/uninstall for persistent background operation |
+| 📈 **Benchmark harness** | Quick, serial, grid, and prompt-based benchmark workflows with TTFT / throughput / cache-reuse telemetry |
+| 📝 **Audit logging** | File-based rotating logs, `logs -f` streaming, event log in SQLite |
+
+---
 
 ## Local Version Status
 
@@ -28,35 +44,39 @@ When this workspace also contains older planning notes or upstream package
 copies, treat this directory and its `pyproject.toml` version as authoritative
 unless a newer migration document explicitly supersedes it.
 
+---
+
 ## Current V2 Status
 
 The V2 proposal has been implemented in this local checkout for the core
 orchestration surface:
 
-- Process and state reliability: SQLite V2 schema, runtime state, event log,
+- **Process and state reliability:** SQLite V2 schema, runtime state, event log,
   process validation, per-instance locking, stale-state reconciliation, and
   port collision checks.
-- Daemon and logging reliability: file-based rotating logs, `logs -f`, an
+- **Daemon and logging reliability:** file-based rotating logs, `logs -f`, an
   interruptible daemon loop, cooperative daemon stop, and NSSM-backed Windows
   service install/uninstall commands.
-- Health and restart behavior: configurable HTTP/TCP/custom probes, custom
+- **Health and restart behavior:** configurable HTTP/TCP/custom probes, custom
   health paths, retry/backoff settings, and jittered restart delays.
-- CLI and dashboard UX: standard exit codes, richer `describe` output, recent
+- **CLI and dashboard UX:** standard exit codes, richer `describe` output, recent
   events in the dashboard, and explicit detached/attached start behavior.
-- Desktop GUI and benchmark workflows: model table management, tag filtering,
+- **Desktop GUI and benchmark workflows:** model table management, tag filtering,
   batch actions, inline runtime args editing, quick benchmark history, prompt
   selection, `loading` versus `ready` display semantics, and best-effort VRAM
   reporting.
-- Binary management: versioned `llama-server` packages under `bins/`, a UUID
+- **Binary management:** versioned `llama-server` packages under `bins/`, a UUID
   registry in `bins/registry.json`, per-instance binary pinning, and GUI/CLI
   install/list/info/remove/latest workflows.
 
-Known remaining gaps are operational or follow-up items, not blockers for the
+**Known remaining gaps** are operational or follow-up items, not blockers for the
 local V2 command surface: manual Windows Services UI smoke testing still needs
 to be run on a target host with `nssm.exe` in `PATH`; several binary-management
-convenience commands remain listed as future work in `docs/BINARY_MANAGEMENT.md`;
+convenience commands remain listed as future work in [`docs/BINARY_MANAGEMENT.md`](docs/BINARY_MANAGEMENT.md);
 and GUI column visibility, tag filter, and window geometry are intentionally
 session-local today.
+
+---
 
 ## 2.1.0 Scope Clarifications
 
@@ -75,6 +95,8 @@ session-local today.
   acceptance metrics when available, and best-effort memory or VRAM reporting.
   Dedicated TTFT or cache trend dashboards, MCP gateway integration, and
   llama-swap export are not part of `2.1.0`.
+
+---
 
 ## Quick Start
 
@@ -101,69 +123,165 @@ llama-orch gui
 llama-orch down gpt-oss
 ```
 
+---
+
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                    CONTROL PLANE (Python)                   │
-│  ┌─────────┐    ┌─────────┐    ┌─────────┐                 │
-│  │   CLI   │───▶│ Daemon  │───▶│   TUI   │                 │
-│  └─────────┘    └─────────┘    └─────────┘                 │
-│       │              │              │                       │
-│       └──────────────┼──────────────┘                       │
-│                      ▼                                      │
-│            ┌─────────────────┐                             │
-│            │  State (SQLite) │                             │
-│            └─────────────────┘                             │
-└─────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────────┐
+│                       CONTROL PLANE (Python)                      │
+│                                                                   │
+│  ┌──────────┐   ┌──────────┐   ┌──────────┐   ┌──────────┐     │
+│  │   CLI    │──▶│  Daemon  │──▶│   TUI    │──▶│   GUI    │     │
+│  │ (Typer)  │   │ (Monitor│   │ (Rich/Tk)│   │ (Tkinter)│     │
+│  └──────────┘   └──────────┘   └──────────┘   └──────────┘     │
+│       │              │              │              │              │
+│       └──────────────┼──────────────┼──────────────┘              │
+│                      ▼              ▼                             │
+│            ┌─────────────────┐  ┌─────────────────┐              │
+│            │  State (SQLite) │  │  Logs (Rotating) │              │
+│            │  state.sqlite   │  │  daemon.log      │              │
+│            └─────────────────┘  └─────────────────┘              │
+└───────────────────────────────────────────────────────────────────┘
                        │
-          ┌────────────┼────────────┐
-          ▼            ▼            ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    DATA PLANE (llama.cpp)                   │
-│  ┌─────────┐    ┌─────────┐    ┌─────────┐                 │
-│  │ :8001   │    │ :8002   │    │ :8003   │                 │
-│  │ model-A │    │ model-B │    │ model-C │                 │
-│  └─────────┘    └─────────┘    └─────────┘                 │
-└─────────────────────────────────────────────────────────────┘
+          ┌────────────┼────────────┬──────────────────┐
+          ▼            ▼            ▼                    ▼
+┌───────────────────────────────────────────────────────────────────┐
+│                        DATA PLANE (llama.cpp)                     │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐               │
+│  │ llama-server│  │ llama-server│  │ llama-server│   ...         │
+│  │ :8001 (A)   │  │ :8002 (B)   │  │ :8003 (C)   │               │
+│  │ Vulkan/GPU0 │  │ CUDA/GPU1   │  │ Vulkan/GPU2 │               │
+│  └─────────────┘  └─────────────┘  └─────────────┘               │
+└───────────────────────────────────────────────────────────────────┘
 ```
+
+### Component Map
+
+| Layer | Module | Responsibility |
+|---|---|---|
+| **CLI** | `cli.py` | Typer command routing, subcommands, exit codes |
+| **Engine** | `engine/process.py` | Process lifecycle (start, stop, restart, signal handling) |
+| | `engine/command.py` | `llama-server` command-line builder |
+| | `engine/state.py` | SQLite V2 persistence, runtime state, event log |
+| | `engine/detection.py` | GPU/runtime discovery (vulkaninfo, CUDA) |
+| | `engine/locking.py` | Per-instance file-based locking |
+| | `engine/logging_config.py` | File-based rotating log setup |
+| | `engine/reconciler.py` | Stale-state reconciliation, port collision checks |
+| **Health** | `health/probes.py` | Pluggable HTTP/TCP/custom health probes |
+| | `health/checker.py` | Health check orchestration flow |
+| | `health/monitor.py` | Background health monitor loop |
+| | `health/backoff.py` | Exponential backoff with jitter |
+| | `health/client_pool.py` | Reusable `httpx.Client` pool |
+| **GUI** | `gui/app.py` | Main Tkinter application window |
+| | `gui/table.py` | Treeview model table rendering |
+| | `gui/refresh.py` | Background refresh snapshot controller |
+| | `gui/row_renderer.py` | Per-row diff rendering |
+| | `gui/toolbar.py` | Action toolbar |
+| | `gui/actions.py` | Row action handlers (start, stop, benchmark) |
+| | `gui/benchmark_controls.py` | Benchmark UI controls |
+| | `gui/grid_benchmark_dialog.py` | Grid benchmark dialog |
+| | `gui/kv_cache_dialogs.py` | KV-cache configuration dialogs |
+| | `gui/gpu_inventory.py` | GPU inventory panel |
+| | `gui/activity_log.py` | Activity log panel |
+| | `gui/dialogs.py` | Reusable dialog widgets |
+| | `gui/model_dialogs.py` | Model selection/edit dialogs |
+| | `gui/hf_import_dialog.py` | HuggingFace import dialog |
+| | `gui/metadata_cache.py` | Cached model metadata |
+| | `gui/usability.py` | Keyboard shortcuts, visual indicators |
+| | `gui_state.py` | Persisted table column preferences |
+| **Daemon** | `daemon/_daemon_main.py` | Background daemon entry point |
+| | `daemon/service.py` | NSSM service install/uninstall |
+| | `daemon/win_service.py` | Windows service wrapper |
+| **Binary Mgmt** | `binaries/downloader.py` | GitHub release asset download |
+| | `binaries/manager.py` | Install/list/remove/latest workflows |
+| | `binaries/registry.py` | UUID registry management |
+| | `binaries/github.py` | GitHub release metadata queries |
+| | `binaries/schema.py` | Binary record Pydantic schema |
+| **Config** | `config/schema.py` | Instance config Pydantic schemas |
+| | `config/loader.py` | JSON config loading |
+| | `config/validator.py` | Config validation |
+| | `config/migration.py` | Schema migrations |
+| **Benchmark** | `benchmark.py` | Quick/serial/grid benchmark harness |
+| | `benchmark_grid.py` | Grid benchmark orchestration |
+| **Utilities** | `model_metadata.py` | GGUF metadata extraction |
+| | `memory_fit.py` | Estimated memory fit calculation |
+| | `runtime_args.py` | Runtime argument resolution |
+| | `hf_import.py` | HuggingFace model import |
+| | `diffusion_http_adapter.py` | HTTP adapter for diffusion models |
+| **CLI Helpers** | `cli_describe.py` | Rich describe output |
+| | `cli_exit_codes.py` | Standardized exit code definitions |
+
+---
 
 ## CLI Commands
 
+### Instance Management
+
 | Command | Description |
-|---------|-------------|
-| `llama-orch up <name>` | Start an instance |
+|---|---|
+| `llama-orch up <name>` | Start an instance (detached by default) |
+| `llama-orch up <name> --no-detach` | Start and keep attached to terminal |
 | `llama-orch down <name>` | Stop an instance |
 | `llama-orch restart <name>` | Restart an instance |
-| `llama-orch ps` | List all instances |
+| `llama-orch ps` | List all instances with status |
+
+### Diagnostics
+
+| Command | Description |
+|---|---|
 | `llama-orch health <name>` | Check instance health |
-| `llama-orch logs <name>` | View stdout, stderr, or merged logs |
-| `llama-orch describe <name>` | Show config, runtime, estimated fit, events, and health history |
+| `llama-orch logs <name>` | View stdout/stderr logs |
+| `llama-orch logs <name> --stream both` | Stream merged logs |
+| `llama-orch describe <name>` | Show config, runtime, estimated memory fit, events, health history |
+
+### Dashboard & GUI
+
+| Command | Description |
+|---|---|
 | `llama-orch dashboard` | Live TUI dashboard with recent events panel |
-| `llama-orch gui` | Windows desktop GUI for model management |
-| `llama-orch config validate` | Validate configuration |
+| `llama-orch dashboard --events-for <name>` | Filter events to one instance |
+| `llama-orch gui` | Open Windows desktop GUI |
+
+### Configuration
+
+| Command | Description |
+|---|---|
+| `llama-orch config validate` | Validate a configuration file |
 | `llama-orch config lint` | Validate all discovered instance configs |
-| `llama-orch daemon start` | Start background daemon |
+
+### Daemon Management
+
+| Command | Description |
+|---|---|
+| `llama-orch daemon start` | Start background health monitor daemon |
 | `llama-orch daemon status` | Show daemon status |
 | `llama-orch daemon stop` | Stop background daemon |
-| `llama-orch daemon install` | Install the daemon as a Windows service via NSSM |
-| `llama-orch daemon uninstall` | Remove the Windows service |
+| `llama-orch daemon install` | Install daemon as Windows service via NSSM |
+| `llama-orch daemon uninstall` | Remove Windows service |
+
+### Binary Management
+
+| Command | Description |
+|---|---|
 | `llama-orch binary install [version]` | Install a llama.cpp `llama-server` package from GitHub releases |
 | `llama-orch binary list` | List installed versioned binaries |
 | `llama-orch binary info <uuid>` | Show metadata for an installed binary |
-| `llama-orch binary remove <uuid>` | Remove an installed binary after confirmation |
+| `llama-orch binary remove <uuid>` | Remove an installed binary (prompts for confirmation) |
 | `llama-orch binary latest` | Show the latest available llama.cpp release |
 
-## CLI Notes
+### CLI Exit Codes
 
-- `llama-orch up <name> --no-detach` keeps the server attached to the current terminal.
-- `llama-orch logs <name> --stream both` shows merged stdout and stderr output.
-- `llama-orch describe <name>` now includes an `Estimated Memory Fit` section derived from GGUF metadata, effective llama.cpp flags, and any previously logged device inventory. It is advisory and intentionally separate from measured benchmark memory; multi-slot (`--parallel > 1`) instances are reported conservatively as `unknown` unless the estimate already clearly exceeds dedicated VRAM.
-- `llama-orch dashboard --events-for <name>` filters the recent-events panel to one instance.
-- `llama-orch binary remove <uuid>` prompts before deleting the binary directory; use `--force` only for scripted cleanup.
-- Commands return standard exit codes for automation: `2` usage, `10-19` config, `20-39` instance/process, `50-69` binary/daemon.
+| Range | Meaning |
+|---|---|
+| `2` | Usage / argument errors |
+| `10–19` | Configuration errors |
+| `20–39` | Instance / process errors |
+| `50–69` | Binary / daemon errors |
 
-## Configuration
+---
+
+## Configuration Reference
 
 Instance configs are stored in `instances/<name>/config.json`:
 
@@ -198,6 +316,345 @@ Instance configs are stored in `instances/<name>/config.json`:
   },
   "args": [
     "--no-mmproj",
+    "--no-canvas",
+    "--log-disable"
+  ]
+}
+```
+
+### Configuration Sections
+
+| Section | Fields | Purpose |
+|---|---|---|
+| `binary` | `binary_id`, `version`, `variant`, `source_url`, `sha256` | Pin the `llama-server` binary to a specific version/variant |
+| `model` | `path`, `context_size`, `batch_size`, `threads` | Define the GGUF model and inference parameters |
+| `server` | `host`, `port`, `parallel` | HTTP server binding and parallelism |
+| `gpu` | `backend`, `device_id`, `layers` | GPU backend selection and layer offloading |
+| `env` | key-value pairs | Environment variables passed to the process |
+| `args` | array of strings | Additional `llama-server` CLI flags |
+
+---
+
+## Directory Layout
+
+```
+llama-orchestrator/
+├── src/llama_orchestrator/        # Python source package
+│   ├── cli.py                     # Typer CLI entry point
+│   ├── benchmark.py               # Benchmark harness
+│   ├── benchmark_grid.py          # Grid benchmark orchestration
+│   ├── engine/                    # Process lifecycle & state
+│   ├── health/                    # Health probes & monitor
+│   ├── gui/                       # Tkinter desktop GUI
+│   ├── daemon/                    # Background daemon & Windows service
+│   ├── binaries/                  # Versioned binary management
+│   ├── config/                    # Schema, loader, validator
+│   └── *.py                       # Utilities (metadata, memory fit, HF import)
+├── instances/<name>/              # Instance desired-state configs (JSON)
+├── bins/<uuid>/                   # Installed llama.cpp binary packages
+│   └── registry.json              # UUID → binary metadata registry
+├── state/                         # Runtime state & telemetry
+│   ├── state.sqlite               # SQLite V2 runtime database
+│   ├── benchmark_history.sqlite   # Benchmark result history
+│   ├── benchmark_runs/            # Per-run benchmark artifacts
+│   ├── benchmark_settings.json    # Benchmark settings
+│   ├── daemon.log                 # Daemon rotating log
+│   ├── gpu_aliases.json           # GPU alias mappings
+│   └── gui_settings.json          # GUI column preferences
+├── scripts/                       # PowerShell automation helpers
+├── docs/                          # Implementation plans & checklists
+├── tests/                         # pytest test suite
+├── benchmarks/                    # Benchmark reference data
+├── models/                        # Reference model paths
+├── logs/                          # Additional log output
+├── tmp/                           # Temporary working files
+├── pyproject.toml                 # Project metadata & tool config
+├── requirements.txt               # Python dependencies
+├── uv.lock                        # uv lockfile
+├── REFACTORING_SPEC.md            # Refactoring specification
+└── README.md                      # This file
+```
+
+---
+
+## Binary Management
+
+`llama-orchestrator` manages `llama-server` binaries as versioned local
+artifacts. Each installation receives a UUID and is recorded in
+`bins/registry.json`, so multiple llama.cpp versions and variants can coexist
+without relying on one shared `bin/llama-server.exe`.
+
+### Storage Layout
+
+```
+llama-orchestrator/
+├── bins/
+│   ├── registry.json
+│   └── <uuid>/
+│       ├── llama-server.exe
+│       ├── *.dll
+│       └── version.json
+└── bin/
+    └── llama-server.exe          ← legacy fallback
+```
+
+### Registry Contract
+
+`bins/registry.json` stores:
+
+- `schema_version`
+- `default_binary_id`
+- One record per installed binary with `id`, `version`, `variant`,
+  `download_url`, `sha256`, `installed_at`, `path`, `size_bytes`,
+  `executables`, and optional GitHub release metadata
+
+The UUID in `id` is the primary key. Version and variant are supplementary
+metadata and fallback lookup hints.
+
+### Instance Config Resolution Order
+
+1. `binary.binary_id` resolves through `bins/registry.json`
+2. `binary.version` + `binary.variant` as fallback lookup
+3. `bins/default_binary_id` as default
+4. Legacy `bin/llama-server.exe` as backward-compatible fallback
+
+---
+
+## Health Monitoring
+
+The health subsystem provides pluggable health probes with automatic restart:
+
+| Module | Purpose |
+|---|---|
+| `health/probes.py` | HTTP/TCP/custom probe implementations |
+| `health/checker.py` | Orchestrates check cycles across instances |
+| `health/monitor.py` | Background monitor loop with configurable intervals |
+| `health/backoff.py` | Exponential backoff with jitter for restart delays |
+| `health/client_pool.py` | Reusable `httpx.Client` pool (avoids per-call overhead) |
+
+### Configurable Policies
+
+- HTTP health path override
+- TCP port probing
+- Custom probe commands
+- Retry count and timeout settings
+- Jittered restart delay
+
+---
+
+## Desktop GUI
+
+The Tkinter-based GUI provides a Windows management panel for:
+
+- **Model table** — Treeview with sortable columns showing all instances
+- **Tag filtering** — Filter instances by custom tags
+- **Batch actions** — Start/stop/restart multiple instances at once
+- **Inline runtime args editing** — Edit `llama-server` flags per instance
+- **Benchmark controls** — Quick, serial, and grid benchmark workflows
+- **GPU inventory panel** — Detected GPUs with editable aliases
+- **Activity log** — Real-time action history
+- **Keyboard shortcuts** — `Ctrl+S` (start), `Ctrl+R` (restart), `Ctrl+T` (stop)
+
+### Performance Optimizations (V2)
+
+- **Background refresh** — `RefreshController` runs snapshots on a background thread
+- **Row-level diffing** — Only changed columns are updated in the Treeview
+- **Debounced GPU inventory** — Cached for 60s, rebuilt only on change
+- **Health client pooling** — Single `httpx.Client` shared across checks
+
+---
+
+## Benchmarking
+
+### Workflow Types
+
+| Type | Description |
+|---|---|
+| **Quick** | Single-prompt benchmark for fast throughput measurement |
+| **Serial** | Sequential prompt execution for latency profiling |
+| **Grid** | Multi-parameter grid search across temperature, top-p, context sizes |
+| **Prompt** | Custom prompt selection with user-defined inputs |
+
+### Telemetry Metrics
+
+- **TTFT** (Time to First Token)
+- **Generation throughput** (tokens/second)
+- **End-to-end throughput**
+- **Cache reuse** ratios
+- **Speculative/draft acceptance** rates
+- **Best-effort VRAM/memory** reporting
+
+---
+
+## Daemon & Service
+
+The background daemon provides:
+
+- **Health monitor loop** — Checks all running instances at configurable intervals
+- **Auto-restart** — Exponential backoff on failure detection
+- **Cooperative stop** — Graceful shutdown on interrupt
+- **File-based rotating logs** — `daemon.log` with log rotation
+
+### Windows Service Integration
+
+```powershell
+# Install as Windows service
+llama-orch daemon install
+
+# Uninstall Windows service
+llama-orch daemon uninstall
+```
+
+Requires `nssm.exe` in `PATH`.
+
+---
+
+## PowerShell Automation
+
+Scripts in `scripts/` provide Windows automation:
+
+| Script | Purpose |
+|---|---|
+| `Install-AutostartTask.ps1` | Create Windows Task Scheduler autostart entries |
+| `install-service.ps1` | NSSM service installation helper |
+| `llama.ps1` | Legacy llama.cpp wrapper |
+| `Start-Autostart.ps1` | Trigger autostart on session login |
+
+---
+
+## Testing
+
+```powershell
+# Run all tests
+pytest
+
+# Run with coverage
+pytest --cov=llama_orchestrator --cov-report=term-missing
+
+# Run specific test file
+pytest tests/test_engine.py -v
+```
+
+Test configuration in `pyproject.toml`:
+
+```toml
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-v --cov=llama_orchestrator --cov-report=term-missing"
+```
+
+---
+
+## Development Tools
+
+| Tool | Configuration |
+|---|---|
+| **Ruff** | `line-length = 100`, selects `E,F,I,N,W,UP,B,C4,SIM` |
+| **mypy** | Strict mode, Python 3.11, `pydantic.mypy` plugin |
+| **pytest** | Auto asyncio, coverage reporting |
+
+---
+
+## Documentation
+
+| File | Purpose |
+|---|---|
+| `REFACTORING_SPEC.md` | Refactoring specification with workstream breakdown |
+| `docs/BINARY_MANAGEMENT.md` | Binary management guide |
+| `docs/*.md` | Implementation plans, checklists, specs |
+
+---
+
+## Dependencies
+
+### Core
+
+```
+pydantic>=2.5          # Data validation schemas
+typer[all]>=0.9       # CLI framework
+rich>=13.7             # Terminal rendering
+httpx>=0.25            # HTTP client (health probes, benchmark)
+psutil>=5.9            # Process monitoring
+aiosqlite>=0.19        # Async SQLite
+huggingface_hub>=0.32  # HuggingFace model import
+keyring>=25.6          # Credential storage
+```
+
+### Development
+
+```
+pytest>=7.4            # Test framework
+pytest-asyncio>=0.21   # Async test support
+pytest-cov>=4.1        # Coverage reporting
+ruff>=0.1              # Linter
+mypy>=1.7              # Type checking
+```
+
+---
+
+## Exit Code Reference
+
+| Code Range | Meaning | Examples |
+|---|---|---|
+| `2` | Usage / argument errors | Missing required args |
+| `10–19` | Configuration errors | Invalid JSON, missing model path |
+| `20–39` | Instance / process errors | Port collision, process start failure |
+| `50–69` | Binary / daemon errors | Binary download failure, service install error |
+
+---
+
+## Quick Reference Diagram
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                         Operator Workflow                       │
+│                                                                 │
+│  1. llama-orch init <name> --model <path> --port <port>       │
+│     └─► Creates instances/<name>/config.json                   │
+│                                                                 │
+│  2. llama-orch up <name>                                      │
+│     └─► Resolves binary from bins/registry.json               │
+│     └─► Spawns llama-server process on configured port         │
+│     └─► Registers state in state.sqlite                        │
+│     └─► Health monitor begins probing                         │
+│                                                                 │
+│  3. llama-orch ps / dashboard / gui                           │
+│     └─► Reads runtime state + live health probes              │
+│                                                                 │
+│  4. llama-orch down <name>                                    │
+│     └─► Graceful process termination                          │
+│     └─► Updates state.sqlite                                  │
+│                                                                 │
+│  5. llama-orch binary install <version>                       │
+│     └─► Downloads from GitHub releases                        │
+│     └─► Extracts to bins/<uuid>/                              │
+│     └─► Updates registry.json                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Related Projects
+
+| Project | Relationship |
+|---|---|
+| `infra-local/codex-local-delegation-mcp/` | MCP delegation layer that may consume orchestrator HTTP APIs |
+| `infra-local/llm-eval-lab/` | LLM evaluation lab that consumes benchmark outputs |
+| `agent-platforms/openclaw-docker/` | Agent platform that may orchestrate llama-orchestrator instances |
+| `website_michaelprinc/` | WordPress site that may serve model endpoints from orchestrator |
+
+---
+
+## License
+
+MIT License — see LICENSE file.
+
+---
+
+**Version:** 2.1.0  
+**Last Updated:** 2026-07-06  
+**Author:** MichaelPrinc
     "--reasoning", "off",
     "--flash-attn", "auto"
   ],
