@@ -81,6 +81,22 @@ def cuda_config() -> InstanceConfig:
     )
 
 
+@pytest.fixture
+def hip_config() -> InstanceConfig:
+    """Create a HIP/ROCm instance configuration."""
+    return InstanceConfig(
+        name="hip-instance",
+        model=ModelConfig(
+            path=Path("models/test-model.gguf"),
+        ),
+        gpu=GpuConfig(
+            backend="hip",
+            device_id=1,
+            layers=64,
+        ),
+    )
+
+
 # Environment Variable Tests
 class TestBuildEnv:
     """Tests for build_env function."""
@@ -99,12 +115,20 @@ class TestBuildEnv:
         assert "CUDA_VISIBLE_DEVICES" in env
         assert env["CUDA_VISIBLE_DEVICES"] == "1"
 
+    def test_hip_env_vars(self, hip_config):
+        """Test HIP/ROCm environment variables are set."""
+        env = build_env(hip_config)
+
+        assert "HIP_VISIBLE_DEVICES" in env
+        assert env["HIP_VISIBLE_DEVICES"] == "1"
+
     def test_cpu_no_gpu_env(self, cpu_config):
         """Test CPU backend has no GPU-specific env vars."""
         env = build_env(cpu_config)
         
         assert "GGML_VULKAN_DEVICE" not in env
         assert "CUDA_VISIBLE_DEVICES" not in env
+        assert "HIP_VISIBLE_DEVICES" not in env
 
 
 # State Management Tests

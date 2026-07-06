@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 import psutil
+from llama_orchestrator.runtime_args import parse_args_list
 
 from llama_orchestrator.config.loader import (
     get_logs_dir,
@@ -25,6 +26,23 @@ from llama_orchestrator.config.loader import (
 
 if TYPE_CHECKING:
     from llama_orchestrator.config.schema import InstanceConfig
+
+
+_BINARY_VARIANT_BACKEND = {
+    "win-cpu-x64": "cpu",
+    "win-cpu-arm64": "cpu",
+    "win-vulkan-x64": "vulkan",
+    "win-cuda-12.4-x64": "cuda",
+    "win-cuda-13.1-x64": "cuda",
+    "win-hip-radeon-x64": "hip",
+}
+
+_BACKEND_DEVICE_PREFIX = {
+    "vulkan": "Vulkan",
+    "cuda": "CUDA",
+    "hip": "ROCm",
+    "metal": "Metal",
+}
 
 
 @dataclass
@@ -251,6 +269,71 @@ def validate_gpu_config(config: InstanceConfig) -> ValidationResult:
     return result
 
 
+def validate_binary_backend_alignment(config: InstanceConfig) -> ValidationResult:
+    """Validate that the selected binary variant matches the configured backend."""
+    result = ValidationResult()
+
+    binary = config.binary
+    if binary is None:
+        return result
+
+    expected_backend = _BINARY_VARIANT_BACKEND.get(binary.variant)
+    if expected_backend is None or config.gpu.backend == expected_backend:
+        return result
+
+    result.add(ValidationIssue(
+        instance=config.name,
+        field="binary.variant",
+        severity="error",
+        message=(
+            f"Binary variant '{binary.variant}' targets backend '{expected_backend}' "
+            f"but gpu.backend is '{config.gpu.backend}'"
+        ),
+        suggestion=f"Use gpu.backend='{expected_backend}' or switch to a matching binary variant"
+    ))
+    return result
+
+
+def validate_runtime_arg_alignment(config: InstanceConfig) -> ValidationResult:
+    """Validate backend-sensitive runtime args such as --device."""
+    result = ValidationResult()
+
+    parsed = parse_args_list(config.args)
+    device_arg = parsed.get("--device")
+    if device_arg is None:
+        return result
+
+    expected_prefix = _BACKEND_DEVICE_PREFIX.get(config.gpu.backend)
+    if expected_prefix is None:
+        return result
+
+    expected_label = f"{expected_prefix}{config.gpu.device_id}"
+    if device_arg == expected_label:
+        return result
+
+    if not device_arg.startswith(expected_prefix):
+        result.add(ValidationIssue(
+            instance=config.name,
+            field="args",
+            severity="error",
+            message=(
+                f"--device {device_arg} is incompatible with gpu.backend '{config.gpu.backend}' "
+                f"(expected prefix '{expected_prefix}')"
+            ),
+            suggestion=f"Use '--device {expected_label}' or remove the explicit --device override"
+        ))
+        return result
+
+    result.add(ValidationIssue(
+        instance=config.name,
+        field="args",
+        severity="warning",
+        message=f"gpu.device_id={config.gpu.device_id} but args contain --device {device_arg}",
+        suggestion=f"Use '--device {expected_label}' or sync gpu.device_id with the explicit override"
+    ))
+    return result
+
+
 def validate_host_exposure(config: InstanceConfig) -> ValidationResult:
     """Warn when the model server binds to all interfaces."""
     result = ValidationResult()
@@ -288,6 +371,8 @@ def validate_instance(config: InstanceConfig, check_runtime: bool = True) -> Val
 
     # Check GPU config
     result.merge(validate_gpu_config(config))
+    result.merge(validate_binary_backend_alignment(config))
+    result.merge(validate_runtime_arg_alignment(config))
 
     # Warn about wide network exposure
     result.merge(validate_host_exposure(config))

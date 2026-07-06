@@ -1,0 +1,42 @@
+{
+  "gguf_metadata": {
+    "architecture": "qwen35",
+    "attention_head_count": 8,
+    "attention_head_count_kv": 2,
+    "basename": "Qwen3.5-2B",
+    "block_count": 24,
+    "chat_template_present": true,
+    "context_length": 262144,
+    "embedding_length": 2048,
+    "file_type": "IQ4_NL",
+    "file_type_value": 25,
+    "name": "Qwen3.5-2B",
+    "nextn_predict_layers": null,
+    "quantization_version": 2,
+    "rope_freq_base": 10000000.0
+  },
+  "model_card_metadata": {
+    "claimed_architecture": "qwen3",
+    "claimed_chat_template": true,
+    "claimed_context_length": 262144,
+    "claimed_model": "Qwen3.5-2B",
+    "claimed_mtp_support": true,
+    "recommended_runtime": "vllm"
+  },
+  "schema_version": "1",
+  "source": {
+    "fetched_at": "2026-07-04T10:04:11Z",
+    "filename": "Qwen3.5-2B-IQ4_NL.gguf",
+    "provider": "huggingface",
+    "repo_id": "unsloth/Qwen3.5-2B-GGUF",
+    "revision": "main"
+  },
+  "validation": {
+    "confidence": "medium",
+    "status": "warning",
+    "warnings": [
+      "Model card architecture qwen3 does not match GGUF architecture qwen35.",
+      "MTP/NextN is claimed in the model card but not present in GGUF metadata."
+    ]
+  }
+}

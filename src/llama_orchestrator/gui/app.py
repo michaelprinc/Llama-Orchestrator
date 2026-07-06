@@ -19,8 +19,10 @@ import tkinter as tk
 import unicodedata
 from collections.abc import Callable, Sequence
 from dataclasses import replace
+from datetime import datetime, timezone
 from pathlib import Path
 from tkinter import filedialog, messagebox, scrolledtext, simpledialog, ttk
+from uuid import uuid4
 
 from llama_orchestrator.benchmark import (
     DEFAULT_ENDPOINT,
@@ -231,6 +233,33 @@ def resolve_instance_config_dir(config: InstanceConfig, project_root: Path) -> P
 def instance_alias_exists(name: str) -> bool:
     """Check whether an immutable instance alias is already present."""
     return any(existing_name == name for existing_name, _ in discover_instances())
+
+
+def _utc_now_iso() -> str:
+    """Return a stable UTC timestamp for persisted clone metadata."""
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def build_cloned_instance_config(
+    config: InstanceConfig,
+    new_name: str,
+    *,
+    display_name: str | None = None,
+) -> InstanceConfig:
+    """Create a clone with fresh identity and no save-back link to the source file."""
+    clone_display_name = (display_name or "").strip() or config.display_name or new_name
+    clone = config.model_copy(
+        deep=True,
+        update={
+            "name": new_name,
+            "instance_uid": str(uuid4()),
+            "instance_no": None,
+            "display_name": clone_display_name,
+            "created_at": _utc_now_iso(),
+        },
+    )
+    clone.set_source_path(None)
+    return clone
 
 
 def update_instance_display_name(name: str, display_name: str) -> InstanceConfig:
@@ -2018,7 +2047,7 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
                 port_range=(preferred_port, 65535),
                 host=config.server.host,
             )
-            clone = config.model_copy(deep=True, update={"name": new_name})
+            clone = build_cloned_instance_config(config, new_name, display_name=requested.strip())
             clone.server.port = suggested_port or preferred_port
             save_config(clone)
         except Exception as exc:

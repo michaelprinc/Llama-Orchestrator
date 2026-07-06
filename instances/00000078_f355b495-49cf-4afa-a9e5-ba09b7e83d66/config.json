@@ -10,7 +10,7 @@
     "binary": {
         "binary_id": null,
         "version": "latest",
-        "variant": "win-vulkan-x64",
+        "variant": "win-hip-radeon-x64",
         "source_url": null,
         "sha256": null
     },

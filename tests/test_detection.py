@@ -85,6 +85,22 @@ def test_describe_effective_runtime_keeps_draft_gpu_visible_without_replacing_pr
     assert selection.primary_device_id == 2
 
 
+def test_describe_effective_runtime_uses_rocm_env_override_when_no_explicit_device_flag_exists() -> None:
+    """HIP_VISIBLE_DEVICES should drive ROCm label rendering for the HIP backend."""
+    config = _make_config(
+        gpu=GpuConfig(backend="hip", device_id=0, layers=30),
+        env={"HIP_VISIBLE_DEVICES": "1"},
+    )
+
+    selection = describe_effective_runtime(config)
+
+    assert selection.gpu_active is True
+    assert selection.gpu_labels == ("ROCm1",)
+    assert selection.gpu_display == "ROCm1"
+    assert selection.primary_gpu_label == "ROCm1"
+    assert selection.primary_device_id == 1
+
+
 def test_parse_detected_gpus_reads_inventory_and_active_device_names() -> None:
     """Vulkan startup logs should expose both indexed labels and adapter names."""
     text = "\n".join(
@@ -101,6 +117,20 @@ def test_parse_detected_gpus_reads_inventory_and_active_device_names() -> None:
     assert detected[0].name == "AMD Radeon(TM) Graphics"
     assert detected[1].label == "Vulkan1"
     assert detected[1].name == "AMD Radeon RX 6800"
+
+
+def test_parse_detected_gpus_reads_rocm_labels() -> None:
+    """ROCm startup logs should map backend device labels and adapter names."""
+    text = "\n".join(
+        [
+            "0.00 I   - ROCm0 : AMD Radeon RX 7900 XTX (24560 MiB, 24510 MiB free)",
+            "llama_model_load_from_file_impl: using device ROCm0 (AMD Radeon RX 7900 XTX) (unknown id) - 24510 MiB free",
+        ]
+    )
+
+    detected = parse_detected_gpus(text)
+
+    assert detected == [DetectedGpu(label="ROCm0", name="AMD Radeon RX 7900 XTX")]
 
 
 def test_parse_vulkaninfo_summary_reads_current_vulkan_labels() -> None:

@@ -26,6 +26,7 @@ from llama_orchestrator.gui.app import (  # noqa: F401
     LlamaOrchestratorGui,
     apply_managed_runtime_args,
     benchmark_shared_ram_warning,
+    build_cloned_instance_config,
     derive_display_status_and_health,
     discover_instances,
     format_benchmark_memory,
@@ -150,6 +151,7 @@ __all__ = sorted(
         # Utilities
         "apply_managed_runtime_args",
         "benchmark_shared_ram_warning",
+        "build_cloned_instance_config",
         "derive_display_status_and_health",
         "format_benchmark_memory",
         "format_benchmark_message",

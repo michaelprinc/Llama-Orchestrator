@@ -2,6 +2,7 @@
 
 **Date:** 2026-06-24
 **Status:** ✅ Completed
+**Test Baseline:** 562 passed, 0 failed (increased from 530 → 562 with 32 new probe security tests in test_v2_probes.py)
 
 ## Summary
 

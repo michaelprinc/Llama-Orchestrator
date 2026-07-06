@@ -110,6 +110,8 @@ def build_env(config: InstanceConfig) -> dict[str, str]:
         env["GGML_VULKAN_DEVICE"] = str(config.gpu.device_id)
     elif config.gpu.backend == "cuda":
         env["CUDA_VISIBLE_DEVICES"] = str(config.gpu.device_id)
+    elif config.gpu.backend == "hip":
+        env["HIP_VISIBLE_DEVICES"] = str(config.gpu.device_id)
 
     # Merge custom env vars from config
     env.update(config.env)

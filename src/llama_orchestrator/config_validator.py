@@ -15,6 +15,25 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
+from llama_orchestrator.runtime_args import parse_args_list
+
+
+_BINARY_VARIANT_BACKEND = {
+    "win-cpu-x64": "cpu",
+    "win-cpu-arm64": "cpu",
+    "win-vulkan-x64": "vulkan",
+    "win-cuda-12.4-x64": "cuda",
+    "win-cuda-13.1-x64": "cuda",
+    "win-hip-radeon-x64": "hip",
+}
+
+_BACKEND_DEVICE_PREFIX = {
+    "vulkan": "Vulkan",
+    "cuda": "CUDA",
+    "hip": "ROCm",
+    "metal": "Metal",
+}
+
 
 class Severity(Enum):
     """Validation severity levels."""
@@ -33,6 +52,7 @@ class ValidationResultCode(Enum):
     PARALLEL_CONFLICT = "PARALLEL_CONFLICT"
     DUPLICATE_ARGS = "DUPLICATE_ARGS"
     BACKEND_UNAVAILABLE = "BACKEND_UNAVAILABLE"
+    BINARY_BACKEND_MISMATCH = "BINARY_BACKEND_MISMATCH"
     RESTART_REQUIRED = "RESTART_REQUIRED"
     ARGS_CONFLICT = "ARGS_CONFLICT"
     VALID = "VALID"
@@ -88,6 +108,7 @@ class ConfigValidator:
         results.extend(self._check_parallel_conflict(config))
         results.extend(self._check_duplicate_args(config))
         results.extend(self._check_backend_available(config))
+        results.extend(self._check_binary_backend_alignment(config))
         results.extend(self._check_args_conflicts(config))
 
         return results
@@ -180,24 +201,35 @@ class ConfigValidator:
         args = config.get("args", [])
 
         if device_id is not None and args:
-            # Parse args to find --device
-            from llama_orchestrator.runtime_args import parse_args_list
             parsed = parse_args_list(args)
             device_arg = parsed.get("--device")
 
             if device_arg is not None:
-                try:
-                    expected_label = f"Vulkan{device_id}"
-                    if device_arg != expected_label:
-                        return [ValidationResult(
-                            severity=Severity.WARNING,
-                            code=ValidationResultCode.GPU_DEVICE_CONFLICT,
-                            message=f"gpu.device_id={device_id} but args contain --device {device_arg}",
-                            suggested_fix="sync_gpu_from_args",
-                            field="gpu.device_id",
-                        )]
-                except (ValueError, TypeError):
-                    pass
+                backend = gpu_config.get("backend", "cpu")
+                expected_prefix = _BACKEND_DEVICE_PREFIX.get(str(backend).lower())
+                if expected_prefix is None:
+                    return []
+                expected_label = f"{expected_prefix}{device_id}"
+                if device_arg == expected_label:
+                    return []
+                if not str(device_arg).startswith(expected_prefix):
+                    return [ValidationResult(
+                        severity=Severity.ERROR,
+                        code=ValidationResultCode.GPU_DEVICE_CONFLICT,
+                        message=(
+                            f"--device {device_arg} is incompatible with gpu.backend '{backend}' "
+                            f"(expected prefix '{expected_prefix}')"
+                        ),
+                        suggested_fix="sync_gpu_from_args",
+                        field="args",
+                    )]
+                return [ValidationResult(
+                    severity=Severity.WARNING,
+                    code=ValidationResultCode.GPU_DEVICE_CONFLICT,
+                    message=f"gpu.device_id={device_id} but args contain --device {device_arg}",
+                    suggested_fix="sync_gpu_from_args",
+                    field="gpu.device_id",
+                )]
 
         return []
 
@@ -248,7 +280,7 @@ class ConfigValidator:
 
         if backend and backend != "auto":
             # Check if backend is supported
-            supported_backends = {"vulkan", "cuda", "rocm", "cpu"}
+            supported_backends = {"vulkan", "cuda", "hip", "metal", "cpu"}
             if backend not in supported_backends:
                 return [ValidationResult(
                     severity=Severity.WARNING,
@@ -258,6 +290,25 @@ class ConfigValidator:
                     field="gpu.backend",
                 )]
 
+        return []
+
+    def _check_binary_backend_alignment(self, config: dict[str, Any]) -> list[ValidationResult]:
+        """Check that binary variant and gpu.backend target the same runtime."""
+        binary = config.get("binary") or {}
+        variant = binary.get("variant")
+        backend = config.get("gpu", {}).get("backend")
+        expected_backend = _BINARY_VARIANT_BACKEND.get(variant)
+        if variant and expected_backend and backend and backend != expected_backend:
+            return [ValidationResult(
+                severity=Severity.ERROR,
+                code=ValidationResultCode.BINARY_BACKEND_MISMATCH,
+                message=(
+                    f"Binary variant '{variant}' targets backend '{expected_backend}' "
+                    f"but gpu.backend is '{backend}'"
+                ),
+                suggested_fix="align_binary_and_backend",
+                field="binary.variant",
+            )]
         return []
 
     def _check_args_conflicts(self, config: dict[str, Any]) -> list[ValidationResult]:

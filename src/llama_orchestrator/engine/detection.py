@@ -19,18 +19,19 @@ BYTES_PER_GB = 1024 ** 3
 _BACKEND_PREFIXES = {
     "vulkan": "Vulkan",
     "cuda": "CUDA",
-    "hip": "HIP",
+    "hip": "ROCm",
     "metal": "Metal",
 }
 _DEVICE_ENV_VARS = {
     "vulkan": ("GGML_VULKAN_DEVICE",),
+    "hip": ("HIP_VISIBLE_DEVICES",),
 }
 _INVENTORY_PATTERN = re.compile(
-    r"\b(?P<label>(?:Vulkan|CUDA|HIP|Metal)\d+)\s*:\s*(?P<name>.+?)\s*\((?:\d+(?:\.\d+)?)\s*(?:MiB|MB|GiB|GB)",
+    r"\b(?P<label>(?:Vulkan|CUDA|HIP|ROCm|Metal)\d+)\s*:\s*(?P<name>.+?)\s*\((?:\d+(?:\.\d+)?)\s*(?:MiB|MB|GiB|GB)",
     re.IGNORECASE,
 )
 _ACTIVE_DEVICE_PATTERN = re.compile(
-    r"using device\s+(?P<label>(?:Vulkan|CUDA|HIP|Metal)\d+)\s*\((?P<name>.+?)\)",
+    r"using device\s+(?P<label>(?:Vulkan|CUDA|HIP|ROCm|Metal)\d+)\s*\((?P<name>.+?)\)",
     re.IGNORECASE,
 )
 _LABEL_PATTERN = re.compile(r"^(?P<prefix>[A-Za-z]+)(?P<index>\d+)$")
@@ -335,6 +336,8 @@ def _normalize_gpu_label(label: str) -> str:
         prefix = "CUDA"
     if prefix.upper() == "HIP":
         prefix = "HIP"
+    if prefix.upper() == "ROCM":
+        prefix = "ROCm"
     return f"{prefix}{int(match.group('index'))}"
 
 

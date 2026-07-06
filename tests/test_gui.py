@@ -24,6 +24,7 @@ from llama_orchestrator.gui import (
     LlamaOrchestratorGui,
     apply_managed_runtime_args,
     benchmark_shared_ram_warning,
+    build_cloned_instance_config,
     derive_display_status_and_health,
     format_benchmark_memory,
     format_benchmark_message,
@@ -174,6 +175,25 @@ def test_clone_name_suggestion_slugifies_invalid_source(monkeypatch) -> None:
         gui._next_clone_name("qwen3-6-35b-a3b-mtp-gguf-iq4_xs_Byteshape")
         == "qwen3-6-35b-a3b-mtp-gguf-iq4_xs_byteshape_clone"
     )
+
+
+def test_build_cloned_instance_config_resets_identity_and_source_path() -> None:
+    """Clone row should create a new config file instead of mutating the source instance."""
+    source = InstanceConfig(
+        name="source",
+        display_name="Source Model",
+        model=ModelConfig(path=Path("source.gguf")),
+        server={"port": 8084},
+    )
+    source.set_source_path(Path("instances/00000082_demo/config.json"))
+
+    clone = build_cloned_instance_config(source, "source_clone", display_name="Source Clone")
+
+    assert clone.name == "source_clone"
+    assert clone.display_name == "Source Clone"
+    assert clone.instance_uid != source.instance_uid
+    assert clone.instance_no is None
+    assert clone.source_path is None
 
 
 def test_suggest_add_model_port_excludes_configured_ports(monkeypatch) -> None:
