@@ -4,6 +4,7 @@
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![Status: Beta 2.1.0](https://img.shields.io/badge/status-beta%202.1.0-orange.svg)](https://github.com/MichaelPrinc/llama-orchestrator)
 
 ---
 
@@ -168,6 +169,9 @@ llama-orch down gpt-oss
 | | `engine/locking.py` | Per-instance file-based locking |
 | | `engine/logging_config.py` | File-based rotating log setup |
 | | `engine/reconciler.py` | Stale-state reconciliation, port collision checks |
+| | `engine/detach.py` | Detached/attached start behavior |
+| | `engine/metadata.py` | Instance metadata management |
+| | `engine/validator.py` | Engine-level validation |
 | **Health** | `health/probes.py` | Pluggable HTTP/TCP/custom health probes |
 | | `health/checker.py` | Health check orchestration flow |
 | | `health/monitor.py` | Background health monitor loop |
