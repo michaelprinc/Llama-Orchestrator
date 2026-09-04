@@ -1,0 +1,44 @@
+{
+  "gguf_metadata": {
+    "architecture": "qwen35",
+    "attention_head_count": 24,
+    "attention_head_count_kv": 4,
+    "basename": "Qwen3.8-27B",
+    "block_count": 65,
+    "chat_template_present": true,
+    "context_length": 262144,
+    "embedding_length": 5120,
+    "file_type": "Q4_K_M",
+    "file_type_value": 15,
+    "name": "Qwen3.8-27B",
+    "nextn_predict_layers": 1,
+    "quantization_version": 2,
+    "rope_freq_base": 10000000.0
+  },
+  "model_card_metadata": {
+    "claimed_architecture": "qwen3",
+    "claimed_chat_template": null,
+    "claimed_context_length": 112640,
+    "claimed_model": "Qwen3.8-27B IQ4_XS \u91cf\u5316\u6a21\u578b\uff08\u9002\u914d 16GB \u663e\u5b58\uff09",
+    "claimed_mtp_support": false,
+    "recommended_runtime": null
+  },
+  "schema_version": "1",
+  "source": {
+    "fetched_at": "2026-08-28T19:43:20Z",
+    "filename": "Qwen3.8-27B-IQ4_XS_4BPW.gguf",
+    "provider": "huggingface",
+    "repo_id": "Bucoid/Qwen3.8-27B-IQ4-XS-MTP-16GB-VRAM-GGUF",
+    "revision": "main"
+  },
+  "validation": {
+    "confidence": "medium",
+    "status": "warning",
+    "warnings": [
+      "Filename quantization IQ4_XS_4BPW does not match GGUF file_type Q4_K_M.",
+      "Model card context length 112640 does not match GGUF context length 262144.",
+      "Model card architecture qwen3 does not match GGUF architecture qwen35.",
+      "GGUF metadata reports NextN layers although the model card says MTP is absent."
+    ]
+  }
+}

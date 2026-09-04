@@ -1,0 +1,42 @@
+{
+  "gguf_metadata": {
+    "architecture": "qwen35",
+    "attention_head_count": 24,
+    "attention_head_count_kv": 4,
+    "basename": "Qwen3.8-27B",
+    "block_count": 65,
+    "chat_template_present": true,
+    "context_length": 262144,
+    "embedding_length": 5120,
+    "file_type": "Q3_K_L",
+    "file_type_value": 13,
+    "name": "Qwen3.8-27B",
+    "nextn_predict_layers": 1,
+    "quantization_version": 2,
+    "rope_freq_base": 10000000.0
+  },
+  "model_card_metadata": {
+    "claimed_architecture": "qwen3",
+    "claimed_chat_template": null,
+    "claimed_context_length": null,
+    "claimed_model": "Read our How to [Run Qwen3.8-27B Guide!](https://unsloth.ai/docs/models/qwen3.8)",
+    "claimed_mtp_support": true,
+    "recommended_runtime": null
+  },
+  "schema_version": "1",
+  "source": {
+    "fetched_at": "2026-08-28T18:37:16Z",
+    "filename": "Qwen3.8-27B-UD-Q3_K_XL.gguf",
+    "provider": "huggingface",
+    "repo_id": "unsloth/Qwen3.8-27B-GGUF",
+    "revision": "main"
+  },
+  "validation": {
+    "confidence": "medium",
+    "status": "warning",
+    "warnings": [
+      "Filename quantization Q3_K_XL does not match GGUF file_type Q3_K_L.",
+      "Model card architecture qwen3 does not match GGUF architecture qwen35."
+    ]
+  }
+}

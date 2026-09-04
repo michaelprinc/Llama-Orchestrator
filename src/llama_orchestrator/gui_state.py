@@ -32,6 +32,11 @@ class GuiSettings:
     visible_columns: tuple[str, ...]
     sort_order: tuple[SortSpec, ...] = ()
     add_model_min_port: int = 8001
+    live_metrics_enabled: bool = False
+    live_metrics_poll_interval_seconds: float = 1.0
+    live_metrics_request_timeout_seconds: float = 1.0
+    live_metrics_history_capacity: int = 60
+    live_metrics_max_parallel_polls: int = 4
 
 
 def get_gui_settings_path() -> Path:
@@ -46,7 +51,11 @@ def default_gui_settings(valid_columns: tuple[str, ...] | list[str]) -> GuiSetti
     return GuiSettings(visible_columns=tuple(valid_columns))
 
 
-def load_gui_settings(valid_columns: tuple[str, ...] | list[str]) -> GuiSettings:
+def load_gui_settings(
+    valid_columns: tuple[str, ...] | list[str],
+    *,
+    auto_add_columns: tuple[str, ...] | list[str] = (),
+) -> GuiSettings:
     """Load persisted GUI settings, clamping to known columns only."""
 
     columns = tuple(valid_columns)
@@ -61,9 +70,38 @@ def load_gui_settings(valid_columns: tuple[str, ...] | list[str]) -> GuiSettings
         return defaults
 
     return GuiSettings(
-        visible_columns=_coerce_visible_columns(data.get("visible_columns"), columns),
+        visible_columns=_coerce_visible_columns(
+            data.get("visible_columns"),
+            columns,
+            auto_add_columns=auto_add_columns,
+        ),
         sort_order=_coerce_sort_order(data.get("sort_order"), columns),
         add_model_min_port=_coerce_port(data.get("add_model_min_port"), defaults.add_model_min_port),
+        live_metrics_enabled=_coerce_bool(data.get("live_metrics_enabled"), defaults.live_metrics_enabled),
+        live_metrics_poll_interval_seconds=_coerce_float(
+            data.get("live_metrics_poll_interval_seconds"),
+            defaults.live_metrics_poll_interval_seconds,
+            minimum=0.5,
+            maximum=60.0,
+        ),
+        live_metrics_request_timeout_seconds=_coerce_float(
+            data.get("live_metrics_request_timeout_seconds"),
+            defaults.live_metrics_request_timeout_seconds,
+            minimum=0.1,
+            maximum=10.0,
+        ),
+        live_metrics_history_capacity=_coerce_int(
+            data.get("live_metrics_history_capacity"),
+            defaults.live_metrics_history_capacity,
+            minimum=10,
+            maximum=600,
+        ),
+        live_metrics_max_parallel_polls=_coerce_int(
+            data.get("live_metrics_max_parallel_polls"),
+            defaults.live_metrics_max_parallel_polls,
+            minimum=1,
+            maximum=8,
+        ),
     )
 
 
@@ -81,6 +119,11 @@ def save_gui_settings(settings: GuiSettings) -> Path:
                     for spec in settings.sort_order
                 ],
                 "add_model_min_port": settings.add_model_min_port,
+                "live_metrics_enabled": settings.live_metrics_enabled,
+                "live_metrics_poll_interval_seconds": settings.live_metrics_poll_interval_seconds,
+                "live_metrics_request_timeout_seconds": settings.live_metrics_request_timeout_seconds,
+                "live_metrics_history_capacity": settings.live_metrics_history_capacity,
+                "live_metrics_max_parallel_polls": settings.live_metrics_max_parallel_polls,
             },
             indent=2,
         ),
@@ -152,7 +195,12 @@ def stable_sort_rows(
     return ordered
 
 
-def _coerce_visible_columns(value: Any, valid_columns: tuple[str, ...]) -> tuple[str, ...]:
+def _coerce_visible_columns(
+    value: Any,
+    valid_columns: tuple[str, ...],
+    *,
+    auto_add_columns: tuple[str, ...] | list[str] = (),
+) -> tuple[str, ...]:
     if not isinstance(value, list):
         return valid_columns
 
@@ -164,6 +212,13 @@ def _coerce_visible_columns(value: Any, valid_columns: tuple[str, ...]) -> tuple
             continue
         visible.append(column)
         seen.add(column)
+    # Add explicitly opted-in columns introduced by an application upgrade
+    # while preserving the user's existing visibility choices.
+    for column in auto_add_columns:
+        if column not in valid_columns:
+            continue
+        if column not in seen:
+            visible.append(column)
     return tuple(visible) or valid_columns
 
 
@@ -195,6 +250,34 @@ def _coerce_port(value: Any, default: int) -> int:
     if 1024 <= port <= 65535:
         return port
     return default
+
+
+def _coerce_bool(value: Any, default: bool) -> bool:
+    if isinstance(value, bool):
+        return value
+    return default
+
+
+def _coerce_float(value: Any, default: float, *, minimum: float, maximum: float) -> float:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(numeric) or not minimum <= numeric <= maximum:
+        return default
+    return numeric
+
+
+def _coerce_int(value: Any, default: int, *, minimum: int, maximum: int) -> int:
+    if isinstance(value, bool):
+        return default
+    try:
+        numeric = int(value)
+    except (TypeError, ValueError):
+        return default
+    if not minimum <= numeric <= maximum:
+        return default
+    return numeric
 
 
 def _is_blank_sort_value(value: Any) -> bool:

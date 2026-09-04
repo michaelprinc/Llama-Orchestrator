@@ -488,6 +488,26 @@ The Tkinter-based GUI provides a Windows management panel for:
 - **Speculative/draft acceptance** rates
 - **Best-effort VRAM/memory** reporting
 
+### Live Metrics (Optional)
+
+The clearly labelled **Live metrics** menu in the GUI controls a global,
+disabled-by-default monitor for every currently running managed model.  It uses
+the server's local `GET /metrics` endpoint and shows **Server Prefill TPS
+(live)** and **Server Decode TPS (live)** from cumulative counter deltas.
+
+- Start an instance with `--metrics`; otherwise its row says that the endpoint
+  is unavailable and explains the prerequisite. The GUI never adds the flag or
+  restarts an instance automatically.
+- The menu's **Polling settings** are global: interval (0.5–60 seconds), request
+  timeout (0.1–10 seconds), bounded in-memory history (10–600 samples), and
+  bounded concurrent local polls (1–8). No high-frequency samples, prompt text,
+  generated text, or secrets are persisted.
+- The results are **server-wide**. A `shared server-wide` label means multiple
+  slots may contribute, so the value must not be interpreted as one client's
+  request rate.
+- When disabled, the feature creates no monitor worker, timer, HTTP request, or
+  in-memory history. Closing the GUI stops the monitor before the window closes.
+
 ---
 
 ## Daemon & Service

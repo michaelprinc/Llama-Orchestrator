@@ -60,6 +60,73 @@ def test_gui_settings_clamps_invalid_add_model_min_port(tmp_path, monkeypatch) -
     assert loaded.add_model_min_port == 8001
 
 
+def test_gui_settings_roundtrips_global_live_metrics_options(tmp_path, monkeypatch) -> None:
+    """Live monitoring is global and preserves its bounded administration settings."""
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    monkeypatch.setattr("llama_orchestrator.gui_state.get_state_dir", lambda: state_dir)
+
+    settings = GuiSettings(
+        visible_columns=("name",),
+        live_metrics_enabled=True,
+        live_metrics_poll_interval_seconds=2.5,
+        live_metrics_request_timeout_seconds=1.5,
+        live_metrics_history_capacity=120,
+        live_metrics_max_parallel_polls=3,
+    )
+
+    save_gui_settings(settings)
+
+    assert load_gui_settings(["name"]) == settings
+
+
+def test_gui_settings_rejects_invalid_global_live_metrics_options(tmp_path, monkeypatch) -> None:
+    """Malformed saved values cannot create an aggressive monitor on startup."""
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    monkeypatch.setattr("llama_orchestrator.gui_state.get_state_dir", lambda: state_dir)
+    (state_dir / "gui_settings.json").write_text(
+        """{
+            "visible_columns": ["name"],
+            "live_metrics_enabled": "yes",
+            "live_metrics_poll_interval_seconds": 0.01,
+            "live_metrics_request_timeout_seconds": 99,
+            "live_metrics_history_capacity": 1,
+            "live_metrics_max_parallel_polls": 99
+        }""",
+        encoding="utf-8",
+    )
+
+    loaded = load_gui_settings(["name"])
+
+    assert loaded.live_metrics_enabled is False
+    assert loaded.live_metrics_poll_interval_seconds == 1.0
+    assert loaded.live_metrics_request_timeout_seconds == 1.0
+    assert loaded.live_metrics_history_capacity == 60
+    assert loaded.live_metrics_max_parallel_polls == 4
+
+
+def test_gui_settings_adds_columns_introduced_by_an_upgrade(tmp_path, monkeypatch) -> None:
+    """New display columns should appear without discarding existing choices."""
+
+    state_dir = tmp_path / "state"
+    state_dir.mkdir()
+    monkeypatch.setattr("llama_orchestrator.gui_state.get_state_dir", lambda: state_dir)
+    (state_dir / "gui_settings.json").write_text(
+        '{"visible_columns":["name","tps"]}',
+        encoding="utf-8",
+    )
+
+    loaded = load_gui_settings(
+        ["name", "tps", "prefill_tps", "latency"],
+        auto_add_columns=("prefill_tps",),
+    )
+
+    assert loaded.visible_columns == ("name", "tps", "prefill_tps")
+
+
 def test_cycle_sort_order_promotes_previous_primary_to_secondary() -> None:
     """A new clicked column becomes primary and keeps the old primary as secondary."""
 

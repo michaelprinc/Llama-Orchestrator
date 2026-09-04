@@ -22,8 +22,13 @@ WindowsVariant = Literal[
     "win-vulkan-x64",
     "win-cuda-12.4-x64",
     "win-cuda-13.1-x64",
+    "win-cuda-13.3-x64",
+    "win-cuda-13.4-arm64",
     "win-hip-radeon-x64",
+    "win-rocm-7.14-x64",
     "win-sycl-x64",
+    "win-opencl-adreno-arm64",
+    "win-openvino-2026.3.1-x64",
 ]
 
 # All supported variants (extensible for future Linux/macOS support)
@@ -47,9 +52,10 @@ class BinaryConfig(BaseModel):
         default=None,
         description="llama.cpp version tag (e.g., 'b7572', 'latest'). Used when binary_id is None"
     )
-    variant: SupportedVariant = Field(
+    variant: str = Field(
         default="win-vulkan-x64",
-        description="Platform/GPU variant. Used when binary_id is None"
+        min_length=1,
+        description="Platform/GPU variant. May identify a locally built package."
     )
     source_url: Optional[HttpUrl] = Field(
         default=None,

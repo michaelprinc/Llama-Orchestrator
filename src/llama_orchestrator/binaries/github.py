@@ -215,14 +215,64 @@ class GitHubClient:
         response = self.client.get(url, params=params)
         return self._handle_response(response)
 
-    def resolve_latest_version(self) -> str:
+    @staticmethod
+    def _asset_url_from_release(
+        release: dict[str, Any], variant: str
+    ) -> Optional[str]:
+        """Return the exact archive URL for ``variant`` in one release."""
+        tag = release["tag_name"]
+        extension = ".zip" if variant.startswith("win-") else ".tar.gz"
+        expected_name = f"llama-{tag}-bin-{variant}{extension}"
+        return next(
+            (
+                asset["browser_download_url"]
+                for asset in release.get("assets", [])
+                if asset.get("name") == expected_name
+            ),
+            None,
+        )
+
+    def get_latest_binary_release(
+        self, variant: Optional[str] = None
+    ) -> dict[str, Any]:
+        """Return the newest release that includes a downloadable binary.
+
+        GitHub's ``/releases/latest`` endpoint can point to a semantic release
+        without prebuilt archives.  The Orchestrator installs the rolling
+        llama.cpp binary builds, so it must instead select the first published
+        release whose assets contain a binary, optionally for one backend.
         """
-        Get the latest release version tag.
+        cache_key = f"latest-binary:{variant or 'any'}"
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+
+        for release in self.list_releases(per_page=100):
+            # llama.cpp's rolling binary builds may be marked as prereleases.
+            # They are still the current published backend packages; only
+            # drafts are unavailable to download.
+            if release.get("draft"):
+                continue
+            if variant is not None:
+                if self._asset_url_from_release(release, variant) is None:
+                    continue
+            elif not any("-bin-" in asset.get("name", "") for asset in release.get("assets", [])):
+                continue
+
+            self._cache_set(cache_key, release)
+            return release
+
+        qualifier = f" for backend '{variant}'" if variant else ""
+        raise GitHubError(f"No downloadable llama.cpp binary release found{qualifier}")
+
+    def resolve_latest_version(self, variant: Optional[str] = None) -> str:
+        """
+        Get the newest version tag that has a downloadable binary archive.
         
         Returns:
             Version tag string (e.g., 'b7572')
         """
-        release = self.get_latest_release()
+        release = self.get_latest_binary_release(variant)
         return release["tag_name"]
 
     def get_release_info(self, tag: str) -> GitHubReleaseInfo:
@@ -236,7 +286,7 @@ class GitHubClient:
             GitHubReleaseInfo model
         """
         if tag == "latest":
-            release = self.get_latest_release()
+            release = self.get_latest_binary_release()
         else:
             release = self.get_release(tag)
 
@@ -269,23 +319,11 @@ class GitHubClient:
             Direct download URL or None if asset not found
         """
         if tag == "latest":
-            release = self.get_latest_release()
-            tag = release["tag_name"]
+            release = self.get_latest_binary_release(variant)
         else:
             release = self.get_release(tag)
 
-        # Build expected filename
-        extension = ".zip" if variant.startswith("win-") else ".tar.gz"
-        expected_name = f"llama-{tag}-bin-{variant}{extension}"
-
-        # Search in assets
-        for asset in release.get("assets", []):
-            if asset["name"] == expected_name:
-                return asset["browser_download_url"]
-
-        # Fall back to constructed URL
-        logger.warning(f"Asset {expected_name} not found in release, using constructed URL")
-        return build_download_url(tag, variant)
+        return self._asset_url_from_release(release, variant)
 
     def check_release_exists(self, tag: str) -> bool:
         """
@@ -316,7 +354,7 @@ class GitHubClient:
             List of variant names that have assets
         """
         if tag == "latest":
-            release = self.get_latest_release()
+            release = self.get_latest_binary_release()
         else:
             release = self.get_release(tag)
 
@@ -353,7 +391,9 @@ def get_download_url(version: str, variant: SupportedVariant) -> str:
         Download URL
     """
     with GitHubClient() as client:
-        if version == "latest":
-            version = client.resolve_latest_version()
         url = client.get_asset_url(version, variant)
-        return url or build_download_url(version, variant)
+        if url is not None:
+            return url
+        if version == "latest":
+            raise GitHubError(f"No latest download available for backend '{variant}'")
+        return build_download_url(version, variant)

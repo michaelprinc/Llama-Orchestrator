@@ -178,10 +178,37 @@ def _resolve_primary_gpu_labels(
     return (fallback,) if fallback is not None else ()
 
 
-def describe_effective_runtime(config: InstanceConfig) -> EffectiveRuntimeSelection:
-    """Resolve the effective CPU/GPU selection without mutating runtime behavior."""
+def _build_configured_display_command(config: InstanceConfig) -> list[str]:
+    """Build only the flags needed for GUI display when a package is unavailable."""
+    command = ["llama-server.exe", "--threads", str(config.model.threads)]
+    if config.gpu.backend != "cpu":
+        command.extend(["--n-gpu-layers", str(config.gpu.layers)])
+    if config.server.parallel > 1:
+        command.extend(["--parallel", str(config.server.parallel)])
+    if config.server.disable_fit:
+        command.extend(["-fit", "off"])
+    command.extend(config.args)
+    return command
+
+
+def describe_effective_runtime(
+    config: InstanceConfig,
+    *,
+    tolerate_unresolved_binary: bool = False,
+) -> EffectiveRuntimeSelection:
+    """Resolve GPU display metadata without mutating runtime behavior.
+
+    ``tolerate_unresolved_binary`` is for inventory-only UI paths. It never
+    makes a missing package runnable; it merely allows the GUI to show the
+    configured GPU selection and the package error elsewhere in the row.
+    """
     backend = config.gpu.backend.lower()
-    command = build_command(config)
+    try:
+        command = build_command(config)
+    except Exception:
+        if not tolerate_unresolved_binary:
+            raise
+        command = _build_configured_display_command(config)
     env = build_env(config)
 
     threads = _parse_last_flag_int(command, "--threads", "-t")
@@ -306,7 +333,7 @@ def collect_detected_gpu_inventory(configs: Iterable[InstanceConfig]) -> list[De
     }
 
     for config in configs:
-        selection = describe_effective_runtime(config)
+        selection = describe_effective_runtime(config, tolerate_unresolved_binary=True)
         if not selection.gpu_active:
             continue
 

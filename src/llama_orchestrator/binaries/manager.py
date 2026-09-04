@@ -7,6 +7,8 @@ UUID is the primary identifier for all operations.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
 import shutil
 from pathlib import Path
@@ -31,7 +33,6 @@ from llama_orchestrator.binaries.schema import (
     BinaryConfig,
     BinaryVersion,
     SupportedVariant,
-    build_download_url,
 )
 
 logger = logging.getLogger(__name__)
@@ -67,6 +68,82 @@ class BinaryInUseError(BinaryManagerError):
 
 # Progress callback type
 ProgressCallback = Callable[[int, Optional[int]], None]
+
+
+def _package_matches_build(package_dir: Path, build_dir: Path) -> bool:
+    """Return whether a package manifest points at the selected build tree."""
+    manifest_path = package_dir / "manifest.json"
+    if not manifest_path.is_file() or not (package_dir / "llama-server.exe").is_file():
+        return False
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    declared_build_bin = manifest.get("buildBinDir")
+    if not isinstance(declared_build_bin, str) or not declared_build_bin.strip():
+        return False
+    try:
+        return Path(declared_build_bin).expanduser().resolve() == (build_dir / "bin").resolve()
+    except OSError:
+        return False
+
+
+def resolve_local_package_directory(package_dir: Path) -> Path:
+    """Resolve a selected package or build directory to a runnable package root.
+
+    The local ROCm workflow keeps CMake outputs in
+    ``artifacts/build/<build-id>/bin`` but writes the matching, self-contained
+    runtime bundle to ``artifacts/package/<build-id>``.  Registering the raw
+    ``bin`` folder loses the ROCm DLL set, so a selected build root (or its
+    ``bin`` child) is redirected to the matching packaged bundle.
+    """
+    selected = Path(package_dir).expanduser().resolve()
+    if not selected.is_dir():
+        raise BinaryManagerError(f"Local package directory does not exist: {selected}")
+
+    build_dir: Path | None = None
+    if (selected / "bin" / "llama-server.exe").is_file():
+        build_dir = selected
+    elif (
+        selected.name.casefold() == "bin"
+        and (selected / "llama-server.exe").is_file()
+        and selected.parent.parent.name.casefold() == "build"
+    ):
+        build_dir = selected.parent
+
+    if build_dir is not None:
+        package_root = build_dir.parent.parent / "package"
+        package_dir = package_root / build_dir.name
+        if (package_dir / "llama-server.exe").is_file():
+            return package_dir.resolve()
+
+        # Package version IDs may intentionally differ from CMake build IDs.
+        # Use the immutable manifest's buildBinDir link instead of guessing a
+        # renamed directory, and fail closed if the link is ambiguous.
+        linked_packages = []
+        if package_root.is_dir():
+            for candidate in package_root.iterdir():
+                if candidate.is_dir() and _package_matches_build(candidate, build_dir):
+                    linked_packages.append(candidate.resolve())
+        if len(linked_packages) == 1:
+            return linked_packages[0]
+        if len(linked_packages) > 1:
+            names = ", ".join(str(path) for path in linked_packages)
+            raise BinaryManagerError(
+                "Multiple packaged runtimes claim the selected build output. "
+                f"Resolve the duplicate manifest links before importing: {names}"
+            )
+        raise BinaryManagerError(
+            "The selected build output is not a runnable package. "
+            f"Expected its matching packaged runtime at: {package_dir}, or a package "
+            "whose manifest.json buildBinDir points to the selected build. "
+            "Run Package-RocmRuntime.ps1 first, then select this build folder again "
+            "or select the generated package folder."
+        )
+
+    if (selected / "llama-server.exe").is_file():
+        return selected
+    raise BinaryManagerError(f"llama-server.exe not found in local package: {selected}")
 
 
 class BinaryManager:
@@ -131,21 +208,28 @@ class BinaryManager:
         if insecure:
             logger.warning("TLS verification DISABLED for binary download")
 
-        # Resolve 'latest' to actual version
+        # Resolve the newest release that has this backend's actual archive.
+        # GitHub's /releases/latest may refer to a source-only semantic release.
         actual_version = version
-        if version == "latest":
+        download_url = source_url
+        if source_url is None:
             try:
                 with GitHubClient() as client:
-                    actual_version = client.resolve_latest_version()
-                logger.info(f"Resolved 'latest' to version {actual_version}")
+                    if version == "latest":
+                        actual_version = client.resolve_latest_version(variant)
+                        logger.info(
+                            "Resolved 'latest' to binary release %s for %s",
+                            actual_version,
+                            variant,
+                        )
+                    download_url = client.get_asset_url(actual_version, variant)
             except GitHubError as e:
-                raise BinaryManagerError(f"Failed to resolve latest version: {e}") from e
+                raise BinaryManagerError(f"Failed to locate binary download: {e}") from e
 
-        # Build download URL
-        if source_url:
-            download_url = source_url
-        else:
-            download_url = build_download_url(actual_version, variant)
+            if download_url is None:
+                raise BinaryManagerError(
+                    f"llama.cpp {actual_version} does not publish a '{variant}' archive"
+                )
 
         logger.info(f"Download URL: {download_url}")
 
@@ -199,6 +283,54 @@ class BinaryManager:
             if binary_dir.exists():
                 shutil.rmtree(binary_dir, ignore_errors=True)
             raise BinaryManagerError(f"Installation failed: {e}", cause=e) from e
+
+    def register_local_package(
+        self,
+        package_dir: Path,
+        *,
+        version: str,
+        variant: str,
+        source_url: str | None = None,
+    ) -> BinaryVersion:
+        """Copy a complete local server package into the UUID-managed catalog.
+
+        A package is copied as a unit so ``llama-server.exe`` always launches
+        beside the DLLs it was built and packaged with.  The stored checksum is
+        the imported server executable checksum; callers can retain a richer
+        build manifest in the source package when available.
+        """
+        source = resolve_local_package_directory(package_dir)
+        if not version.strip() or not variant.strip():
+            raise BinaryManagerError("Local package version and variant must not be blank")
+
+        try:
+            source.relative_to(self.bins_dir.resolve())
+        except ValueError:
+            pass
+        else:
+            raise BinaryManagerError("Register the original package, not a directory already under bins/")
+
+        binary_id = uuid4()
+        destination = self.bins_dir / str(binary_id)
+        try:
+            self.bins_dir.mkdir(parents=True, exist_ok=True)
+            shutil.copytree(source, destination)
+            binary = BinaryVersion(
+                id=binary_id,
+                version=version.strip(),
+                variant=variant.strip(),
+                download_url=source_url or f"local://{source.name}",
+                sha256=hashlib.sha256((destination / "llama-server.exe").read_bytes()).hexdigest(),
+                path=Path(str(binary_id)),
+                size_bytes=get_directory_size(destination),
+                executables=find_executables(destination),
+            )
+            self.registry.add(binary)
+            return binary
+        except (OSError, RegistryError) as exc:
+            if destination.exists():
+                shutil.rmtree(destination, ignore_errors=True)
+            raise BinaryManagerError(f"Local package registration failed: {exc}", cause=exc) from exc
 
     def uninstall(self, binary_id: UUID, force: bool = False) -> BinaryVersion:
         """
@@ -301,7 +433,21 @@ class BinaryManager:
         Returns:
             Path to llama-server.exe
         """
-        # Try new bins/ structure first
+        # An explicit UUID is a reproducibility pin: never substitute another
+        # package when it is missing or incomplete.
+        if config is not None and config.binary_id is not None:
+            binary = self.registry.get_by_id(config.binary_id)
+            if binary is None:
+                raise BinaryNotFoundError(str(config.binary_id))
+            server_path = self.bins_dir / str(binary.id) / "llama-server.exe"
+            if not server_path.is_file():
+                raise BinaryManagerError(
+                    f"Registered binary {config.binary_id} is incomplete: {server_path} is missing"
+                )
+            return server_path
+
+        # Version/variant and default lookup retain compatibility for legacy
+        # configurations that intentionally have no immutable UUID pin.
         if config is not None:
             binary = self.resolve(config)
             if binary is not None:
@@ -353,7 +499,7 @@ class BinaryManager:
 
         try:
             with GitHubClient() as client:
-                latest = client.resolve_latest_version()
+                latest = client.resolve_latest_version(binary.variant)
 
             # Compare version numbers (assumes b{number} format)
             current_num = int(binary.version.lstrip("b"))

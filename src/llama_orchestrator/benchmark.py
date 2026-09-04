@@ -1427,7 +1427,7 @@ def write_benchmark_artifact(
         ("Elapsed ms", _format_optional_metric(result.elapsed_ms)),
         ("Prompt tokens", _format_optional_metric(result.prompt_tokens)),
         ("Prompt eval ms", _format_optional_metric(result.prompt_ms)),
-        ("Prompt eval tokens/sec", _format_optional_metric(result.prompt_tokens_per_second)),
+        ("Prefill tokens/sec", _format_optional_metric(result.prompt_tokens_per_second)),
         ("Cached prompt tokens", _format_optional_metric(result.tokens_cached)),
         ("Cache hit rate", _format_optional_percent(result.cache_hit_rate)),
         ("Error", result.error or "-"),

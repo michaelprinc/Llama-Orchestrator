@@ -22,7 +22,7 @@
     },
     "server": {
         "host": "127.0.0.1",
-        "port": 8038,
+        "port": 8085,
         "timeout": 600,
         "parallel": 1
     },

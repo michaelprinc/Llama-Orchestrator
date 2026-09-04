@@ -58,6 +58,11 @@ from llama_orchestrator.binaries.schema import (
     build_cudart_url,
     build_download_url,
 )
+from llama_orchestrator.binaries.switching import (
+    BinarySwitchError,
+    resolve_binary_selector,
+    switch_instance_binary,
+)
 
 __all__ = [
     # Schema models
@@ -103,4 +108,8 @@ __all__ = [
     "BinaryNotFoundError",
     "BinaryInUseError",
     "get_binary_manager",
+    # Instance switching
+    "BinarySwitchError",
+    "resolve_binary_selector",
+    "switch_instance_binary",
 ]

@@ -1,0 +1,44 @@
+{
+  "gguf_metadata": {
+    "architecture": null,
+    "attention_head_count": null,
+    "attention_head_count_kv": null,
+    "basename": null,
+    "block_count": null,
+    "chat_template_present": false,
+    "context_length": null,
+    "embedding_length": null,
+    "file_type": "IQ3_XXS",
+    "file_type_value": null,
+    "name": null,
+    "nextn_predict_layers": null,
+    "quantization_version": null,
+    "rope_freq_base": null
+  },
+  "model_card_metadata": {
+    "claimed_architecture": "qwen3",
+    "claimed_chat_template": null,
+    "claimed_context_length": 524,
+    "claimed_model": "Read our How to [Run Qwen3.8-Flash-Next Guide!](https://unsloth.ai/docs/models/qwen3.8-next)",
+    "claimed_mtp_support": true,
+    "recommended_runtime": "llama.cpp"
+  },
+  "schema_version": "1",
+  "source": {
+    "fetched_at": "2026-09-02T17:35:00Z",
+    "filename": "UD-IQ3_XXS/Qwen3.8-Flash-Next-UD-IQ3_XXS-00002-of-00003.gguf",
+    "provider": "huggingface",
+    "repo_id": "unsloth/Qwen3.8-Flash-Next-GGUF",
+    "revision": "main"
+  },
+  "validation": {
+    "confidence": "medium",
+    "status": "warning",
+    "warnings": [
+      "GGUF metadata is missing general.architecture.",
+      "GGUF metadata is missing the architecture context length.",
+      "GGUF metadata does not include tokenizer.chat_template.",
+      "MTP/NextN is claimed in the model card but not present in GGUF metadata."
+    ]
+  }
+}

@@ -170,6 +170,30 @@ class TestDownloadFile:
             with pytest.raises(DownloadError):
                 download_file(url, dest)
 
+    def test_download_file_reports_streaming_http_error_without_reading_body(
+        self, tmp_path: Path
+    ) -> None:
+        """HTTP status errors from a stream must not access unread response text."""
+        url = "https://example.com/missing.zip"
+        dest = tmp_path / "missing.zip"
+        request = httpx.Request("GET", url)
+        response = httpx.Response(
+            404,
+            request=request,
+            stream=httpx.ByteStream(b"not found"),
+        )
+
+        with patch("httpx.Client") as mock_client_class:
+            mock_client = MagicMock()
+            mock_client_class.return_value = mock_client
+            mock_client.__enter__ = MagicMock(return_value=mock_client)
+            mock_client.__exit__ = MagicMock(return_value=False)
+            mock_client.stream.return_value.__enter__ = MagicMock(return_value=response)
+            mock_client.stream.return_value.__exit__ = MagicMock(return_value=False)
+
+            with pytest.raises(DownloadError, match=r"HTTP error 404.*missing\.zip"):
+                download_file(url, dest)
+
     def test_download_file_request_error(self, tmp_path: Path) -> None:
         """download_file should raise DownloadError on network error."""
         url = "https://example.com/test.zip"
@@ -282,6 +306,37 @@ class TestDownloadAndExtract:
 
 class TestGitHubClientCache:
     """Tests for GitHubClient release metadata caching."""
+
+    def test_latest_binary_release_skips_source_only_release(self) -> None:
+        """Latest installs must select a release that contains the backend asset."""
+        client = GitHubClient()
+        source_only_release = {"tag_name": "v0.3.0", "assets": []}
+        binary_release = {
+            "tag_name": "b10679",
+            "assets": [
+                {
+                    "name": "llama-b10679-bin-win-vulkan-x64.zip",
+                    "browser_download_url": "https://example.com/b10679-vulkan.zip",
+                }
+            ],
+        }
+
+        with patch.object(
+            client,
+            "list_releases",
+            return_value=[source_only_release, binary_release],
+        ):
+            assert client.resolve_latest_version("win-vulkan-x64") == "b10679"
+            assert (
+                client.get_asset_url("latest", "win-vulkan-x64")
+                == "https://example.com/b10679-vulkan.zip"
+            )
+
+    def test_get_asset_url_returns_none_when_backend_is_not_published(self) -> None:
+        """Callers can reject a missing backend instead of downloading a guessed URL."""
+        client = GitHubClient()
+        with patch.object(client, "get_release", return_value={"tag_name": "b10679", "assets": []}):
+            assert client.get_asset_url("b10679", "win-vulkan-x64") is None
 
     def test_cache_hit_returns_cached_data(self) -> None:
         """GitHubClient should return cached data on cache hit."""
@@ -445,6 +500,7 @@ class TestBinaryManagerInsecure:
             # Mock the context manager for GitHubClient
             mock_client = MagicMock()
             mock_client.resolve_latest_version.return_value = "b7573"
+            mock_client.get_asset_url.return_value = "https://example.com/b7573-cpu.zip"
             mock_client.get_release_info.return_value = None  # Return None to avoid Pydantic issues
             mock_github.return_value.__enter__ = MagicMock(return_value=mock_client)
             mock_github.return_value.__exit__ = MagicMock(return_value=False)
@@ -455,7 +511,8 @@ class TestBinaryManagerInsecure:
             )
 
             # Verify GitHubClient was called to resolve latest
-            mock_client.resolve_latest_version.assert_called_once()
+            mock_client.resolve_latest_version.assert_called_once_with("win-cpu-x64")
+            mock_client.get_asset_url.assert_any_call("b7573", "win-cpu-x64")
 
 
 # =============================================================================

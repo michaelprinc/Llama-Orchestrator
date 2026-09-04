@@ -1,0 +1,41 @@
+{
+  "gguf_metadata": {
+    "architecture": "qwen35",
+    "attention_head_count": 24,
+    "attention_head_count_kv": 4,
+    "basename": "Qwen3.8",
+    "block_count": 65,
+    "chat_template_present": true,
+    "context_length": 262144,
+    "embedding_length": 5120,
+    "file_type": "IQ4_XS",
+    "file_type_value": 30,
+    "name": "Qwen3.8 27B",
+    "nextn_predict_layers": 1,
+    "quantization_version": 2,
+    "rope_freq_base": 10000000.0
+  },
+  "model_card_metadata": {
+    "claimed_architecture": "qwen3",
+    "claimed_chat_template": true,
+    "claimed_context_length": null,
+    "claimed_model": "Llamacpp imatrix Quantizations of Qwen3.8-27B by Qwen",
+    "claimed_mtp_support": true,
+    "recommended_runtime": "llama.cpp"
+  },
+  "schema_version": "1",
+  "source": {
+    "fetched_at": "2026-08-15T07:27:17Z",
+    "filename": "Qwen3.8-27B-IQ4_XS.gguf",
+    "provider": "huggingface",
+    "repo_id": "bartowski/Qwen3.8-27B-GGUF",
+    "revision": "main"
+  },
+  "validation": {
+    "confidence": "medium",
+    "status": "warning",
+    "warnings": [
+      "Model card architecture qwen3 does not match GGUF architecture qwen35."
+    ]
+  }
+}

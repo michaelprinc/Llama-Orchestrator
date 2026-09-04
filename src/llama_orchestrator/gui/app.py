@@ -41,6 +41,7 @@ from llama_orchestrator.benchmark_grid import (
     run_grid_for_instance,
     write_grid_summary_artifact,
 )
+from llama_orchestrator.binaries import BinaryManager, switch_instance_binary
 from llama_orchestrator.config import (
     BinaryConfig,
     InstanceConfig,
@@ -96,8 +97,16 @@ from llama_orchestrator.gui.actions import copy_cli_command, rename_instance, di
 from llama_orchestrator.gui.toolbar import build_toolbar, ToolbarCallbacks
 from llama_orchestrator.gui.grid_benchmark_dialog import GridBenchmarkDialog
 from llama_orchestrator.gui.install_dialog import InstallBinaryDialog
+from llama_orchestrator.gui.live_metrics_window import (
+    LiveMetricsDetailWindow,
+)
 from llama_orchestrator.gui.model_dialogs import AddModelDialog
 from llama_orchestrator.gui.refresh import RenderDiffMixin
+from llama_orchestrator.gui.version_browser import (
+    LocalPackageImport,
+    SwitchServerDialog,
+    VersionBrowserDialog,
+)
 from llama_orchestrator.gui.usability import (
     configure_status_tags,
     create_progress_bar,
@@ -115,6 +124,12 @@ from llama_orchestrator.health import check_instance_health
 from llama_orchestrator.health.ports import find_free_port, suggest_port_for_instance
 from llama_orchestrator.hf_import import (
     DownloadProgress,
+)
+from llama_orchestrator.live_metrics import (
+    LiveMetricSnapshot,
+    LiveMetricsMonitor,
+    LiveMetricsOptions,
+    MetricTarget,
 )
 
 # Optional timing instrumentation for performance profiling.
@@ -152,6 +167,7 @@ ALL_COLUMNS = (
     "cpu",
     "tags",
     "tps",
+    "prefill_tps",
     "latency",
     "vram",
     "prompt",
@@ -173,7 +189,8 @@ COLUMN_HEADINGS = {
     "gpu": "GPU",
     "cpu": "CPU",
     "tags": "Tags",
-    "tps": "TPS",
+    "tps": "Decode TPS",
+    "prefill_tps": "Prefill TPS",
     "latency": "Latency ms",
     "vram": "Memory MB",
     "prompt": "Prompt file",
@@ -196,6 +213,7 @@ COLUMN_WIDTHS = {
     "cpu": 60,
     "tags": 150,
     "tps": 80,
+    "prefill_tps": 95,
     "latency": 90,
     "vram": 260,
     "prompt": 140,
@@ -280,10 +298,12 @@ def format_serial_benchmark_progress(result: BenchmarkResult) -> str:
     """Summarize a serial benchmark result for the activity log."""
     if result.status != "ok":
         return result.error or "unknown error"
-    return (
-        f"TPS={format_metric(result.tokens_per_second)}, "
-        f"latency={format_metric(result.latency_ms, 0)} ms"
+    prefill = (
+        f", prefill TPS={format_metric(result.prompt_tokens_per_second)}"
+        if result.prompt_tokens_per_second is not None
+        else ""
     )
+    return f"TPS={format_metric(result.tokens_per_second)}{prefill}, latency={format_metric(result.latency_ms, 0)} ms"
 
 
 def run_serial_benchmark_queue(
@@ -461,6 +481,14 @@ def format_metric(value: float | None, digits: int = 1) -> str:
     return f"{value:.{digits}f}"
 
 
+def ensure_live_metrics_argument(args: Sequence[str], *, enabled: bool) -> list[str]:
+    """Return effective runtime arguments with llama.cpp metrics enabled once."""
+
+    if not enabled or "--metrics" in args:
+        return list(args)
+    return [*args, "--metrics"]
+
+
 def format_model_size_gb(value: float | None) -> str:
     """Format optional GGUF file size using the GUI's base-1024 GB convention."""
     if value is None:
@@ -615,9 +643,14 @@ def format_benchmark_message(result: BenchmarkResult) -> str:
             message = f"{message} Artifact: {result.artifact_file}."
         return message
     warning = benchmark_shared_ram_warning(result)
+    prefill = (
+        f", prefill {format_metric(result.prompt_tokens_per_second)} TPS"
+        if result.prompt_tokens_per_second is not None
+        else ""
+    )
     message = (
         f"Benchmark {result.instance_name} using {result.prompt_file}: "
-        f"{format_metric(result.tokens_per_second)} TPS, "
+        f"decode {format_metric(result.tokens_per_second)} TPS{prefill}, "
         f"TTFT {format_metric(result.latency_ms, 0)} ms, "
         f"{format_benchmark_memory(result)}."
     )
@@ -740,12 +773,16 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
         self.minsize(960, 560)
 
         self.project_root = get_project_root()
-        self._messages: queue.Queue[str] = queue.Queue()
+        self._messages: queue.Queue[object] = queue.Queue()
+        self._version_browser: VersionBrowserDialog | None = None
         self._selected_name: str | None = None
         self._selected_names: tuple[str, ...] = ()
         self._focused_name: str | None = None
         self.benchmark_settings = load_benchmark_settings(self.project_root)
-        self.gui_settings: GuiSettings = load_gui_settings(ALL_COLUMNS)
+        self.gui_settings: GuiSettings = load_gui_settings(
+            ALL_COLUMNS,
+            auto_add_columns=("prefill_tps",),
+        )
         if "queue" not in self.gui_settings.visible_columns:
             self.gui_settings = replace(
                 self.gui_settings,
@@ -756,6 +793,7 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
         self.tag_filter_var = tk.StringVar(value="All tags")
         self.prompt_var = tk.StringVar(value=self.benchmark_settings.prompt_file.name)
         self.show_gpu_inventory_var = tk.BooleanVar(value=True)
+        self.live_metrics_enabled_var = tk.BooleanVar(value=self.gui_settings.live_metrics_enabled)
         self.gpu_inventory_var = tk.StringVar(value=format_detected_gpu_summary(()))
         self.gpu_aliases = load_gpu_aliases()
         self._detected_gpus: tuple[DetectedGpu, ...] = ()
@@ -774,6 +812,11 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
         self.stop_serial_benchmark_button: ttk.Button | None = None
         self.grid_benchmark_button: ttk.Button | None = None
         self.stop_grid_benchmark_button: ttk.Button | None = None
+        self._live_metrics_monitor: LiveMetricsMonitor | None = None
+        self._live_metrics_targets: tuple[MetricTarget, ...] = ()
+        self._live_metrics_snapshots: dict[str, LiveMetricSnapshot] = {}
+        self._live_metrics_row_values: dict[str, tuple[str, ...]] = {}
+        self._live_metrics_detail_window: LiveMetricsDetailWindow | None = None
 
         # Mixin state variables
         self._row_map: dict[str, TableRow] = {}
@@ -797,9 +840,12 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
         register_shortcuts(self, bindings)
 
         self._schedule_message_pump()
+        if self.live_metrics_enabled_var.get():
+            self._toggle_live_metrics()
         self.refresh()
         self.after(500, self._check_vulkan_binary)
         self.after(self.refresh_interval_ms, self._auto_refresh)
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
 
     def _build_widgets(self) -> None:
         self.columnconfigure(0, weight=1)
@@ -812,6 +858,8 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
             on_add_model=self._open_add_dialog,
             on_apply_args=self._apply_default_args,
             on_install_llama_server=self._open_binary_dialog,
+            on_browse_llama_servers=self._open_version_browser,
+            on_import_llama_server=self._open_local_binary_importer,
             on_start=lambda: self._run_selected("start"),
             on_stop=lambda: self._run_selected("stop"),
             on_restart=lambda: self._run_selected("restart"),
@@ -825,6 +873,9 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
             on_start_visible=lambda: self._run_batch("start"),
             on_stop_visible=lambda: self._run_batch("stop"),
             on_restart_visible=lambda: self._run_batch("restart"),
+            on_toggle_live_metrics=self._toggle_live_metrics,
+            on_configure_live_metrics=self._configure_live_metrics,
+            on_restart_running_models_with_metrics=self._restart_running_models_with_metrics,
         )
         self._toolbar_widgets = build_toolbar(
             self,
@@ -836,6 +887,7 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
             show_gpu_inventory_var=self.show_gpu_inventory_var,
             prompt_var=self.prompt_var,
             daemon_var=self.daemon_var,
+            live_metrics_enabled_var=self.live_metrics_enabled_var,
         )
         self._toolbar_widgets.toolbar.grid(row=0, column=0, sticky="ew")
 
@@ -874,6 +926,9 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
         self.context_menu.add_command(label=GRID_BENCHMARK_LABEL, command=self._run_grid_benchmark)
         self.context_menu.add_command(label="Toggle benchmark queue", command=self._toggle_selected_queue_rows)
         self.context_menu.add_command(label="Clone row", command=self._clone_selected)
+        self.context_menu.add_command(
+            label="Switch llama-server version...", command=self._switch_binary_selected
+        )
         self.context_menu.add_command(label="Rename display name", command=self._rename_display_name)
         self.context_menu.add_command(label="Copy as CLI command", command=self._copy_cli_command)
 
@@ -916,6 +971,9 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
         params_button.pack(side=tk.LEFT, padx=(4, 6))
         self._refresh_benchmark_params_menu()
         ttk.Button(detail_bar, text="Clone row", command=self._clone_selected).pack(side=tk.LEFT, padx=6)
+        ttk.Button(
+            detail_bar, text="Switch server", command=self._switch_binary_selected
+        ).pack(side=tk.LEFT)
         ttk.Button(detail_bar, text="Rename", command=self._rename_display_name).pack(side=tk.LEFT)
         ttk.Button(detail_bar, text="Diff selected", command=self._diff_selected).pack(side=tk.LEFT)
         ttk.Button(detail_bar, text="Copy CLI", command=self._copy_cli_command).pack(side=tk.LEFT, padx=6)
@@ -934,10 +992,346 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
         # Create a footer frame at the bottom for progress/status widgets
         self.footer = ttk.Frame(self)
         self.footer.grid(row=2, column=0, sticky="ew", padx=10, pady=(0, 5))
+        self._build_live_metrics_widgets()
 
     def _auto_refresh(self) -> None:
         self.refresh()
         self.after(self.refresh_interval_ms, self._auto_refresh)
+
+    def _build_live_metrics_widgets(self) -> None:
+        """Create a compact, always-visible global live-metrics surface."""
+
+        self.live_metrics_frame = ttk.LabelFrame(self.footer, text="Live metrics — disabled")
+        self.live_metrics_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=(4, 0))
+        self.live_metrics_status_var = tk.StringVar(
+            value="Disabled globally — no monitoring requests or background workers are running."
+        )
+        ttk.Label(self.live_metrics_frame, textvariable=self.live_metrics_status_var).pack(
+            side=tk.TOP, anchor="w", padx=6, pady=(3, 1)
+        )
+        columns = ("model", "status", "prefill", "decode", "last_prompt")
+        self.live_metrics_tree = ttk.Treeview(
+            self.live_metrics_frame,
+            columns=columns,
+            show="headings",
+            height=4,
+            selectmode="browse",
+        )
+        headings = {
+            "model": "Model",
+            "status": "Metrics state",
+            "prefill": "Prefill now",
+            "decode": "Decode now",
+            "last_prompt": "Last prompt prefill",
+        }
+        widths = {"model": 300, "status": 120, "prefill": 150, "decode": 150, "last_prompt": 180}
+        for column in columns:
+            self.live_metrics_tree.heading(column, text=headings[column])
+            self.live_metrics_tree.column(column, width=widths[column], anchor=tk.W)
+        self.live_metrics_tree.pack(side=tk.TOP, fill=tk.X, padx=6, pady=(1, 4))
+        self.live_metrics_tree.bind("<ButtonRelease-1>", self._on_live_metrics_click)
+        self.live_metrics_tree.bind("<Return>", self._open_selected_live_metrics_details)
+
+    def _live_metrics_options(self) -> LiveMetricsOptions:
+        """Translate persisted global preferences into a bounded monitor contract."""
+
+        return LiveMetricsOptions(
+            enabled=self.live_metrics_enabled_var.get(),
+            poll_interval_seconds=self.gui_settings.live_metrics_poll_interval_seconds,
+            request_timeout_seconds=self.gui_settings.live_metrics_request_timeout_seconds,
+            history_capacity=self.gui_settings.live_metrics_history_capacity,
+            max_parallel_polls=self.gui_settings.live_metrics_max_parallel_polls,
+        ).normalized()
+
+    def _toggle_live_metrics(self) -> None:
+        """Globally start or stop monitoring of every currently running model."""
+
+        enabled = self.live_metrics_enabled_var.get()
+        self.gui_settings = replace(self.gui_settings, live_metrics_enabled=enabled)
+        save_gui_settings(self.gui_settings)
+        self._stop_live_metrics_monitor()
+        self._live_metrics_snapshots.clear()
+        self._live_metrics_targets = ()
+        if not enabled:
+            self._destroy_live_metrics_details()
+            self._render_live_metrics()
+            self._post_message("Live metrics disabled globally; background polling stopped.")
+            return
+
+        self._live_metrics_monitor = LiveMetricsMonitor(
+            self._live_metrics_options(),
+            self._publish_live_metric_snapshots,
+        )
+        self._live_metrics_monitor.start()
+        self._refresh_live_metrics_targets()
+        self._render_live_metrics()
+        self._post_message("Live metrics enabled globally for every running model.")
+
+    def _restart_running_models_with_metrics(self) -> None:
+        """Explicitly restart eligible servers to activate ``--metrics``.
+
+        A process already running without that llama.cpp switch cannot expose
+        its metrics endpoint retroactively, and a restart interrupts requests.
+        """
+
+        if not self.live_metrics_enabled_var.get():
+            messagebox.showinfo(
+                "Live metrics disabled",
+                "Enable live metrics globally first. Future starts and restarts will then include metrics automatically.",
+                parent=self,
+            )
+            return
+        states = list_instances()
+        configs = load_all_instances()
+        names = tuple(
+            name
+            for name, config in configs.items()
+            if states.get(name) is not None
+            and states[name].status == InstanceStatus.RUNNING
+            and config.env.get("LLAMA_ORCH_RUNTIME") != "diffusion-gemma"
+        )
+        if not names:
+            messagebox.showinfo(
+                "No running llama.cpp models",
+                "There are no running llama.cpp models to restart with live metrics enabled.",
+                parent=self,
+            )
+            return
+        if not messagebox.askyesno(
+            "Restart running models with metrics",
+            f"Restart {len(names)} running model(s) with live metrics enabled?\n\n"
+            "This interrupts active requests. Saved model settings will not change.",
+            parent=self,
+        ):
+            return
+
+        def action() -> str:
+            for name in names:
+                self._restart_instance_with_live_metrics(name)
+            return f"Restarted {len(names)} running model(s) with live metrics enabled."
+
+        self._run_background("restart running models with live metrics", action)
+
+    def _configure_live_metrics(self) -> None:
+        """Edit globally shared polling limits without changing any server instance."""
+
+        current = self._live_metrics_options()
+        interval = simpledialog.askfloat(
+            "Live metrics polling",
+            "Polling interval in seconds (0.5–60):",
+            parent=self,
+            initialvalue=current.poll_interval_seconds,
+            minvalue=0.5,
+            maxvalue=60.0,
+        )
+        if interval is None:
+            return
+        timeout = simpledialog.askfloat(
+            "Live metrics timeout",
+            "Per-server metrics timeout in seconds (0.1–10):",
+            parent=self,
+            initialvalue=current.request_timeout_seconds,
+            minvalue=0.1,
+            maxvalue=10.0,
+        )
+        if timeout is None:
+            return
+        history = simpledialog.askinteger(
+            "Live metrics history",
+            "In-memory samples per running model (10–600):",
+            parent=self,
+            initialvalue=current.history_capacity,
+            minvalue=10,
+            maxvalue=600,
+        )
+        if history is None:
+            return
+        parallel_polls = simpledialog.askinteger(
+            "Live metrics capacity",
+            "Maximum concurrent local polls (1–8):",
+            parent=self,
+            initialvalue=current.max_parallel_polls,
+            minvalue=1,
+            maxvalue=8,
+        )
+        if parallel_polls is None:
+            return
+
+        self.gui_settings = replace(
+            self.gui_settings,
+            live_metrics_poll_interval_seconds=interval,
+            live_metrics_request_timeout_seconds=timeout,
+            live_metrics_history_capacity=history,
+            live_metrics_max_parallel_polls=parallel_polls,
+        )
+        save_gui_settings(self.gui_settings)
+        was_enabled = self.live_metrics_enabled_var.get()
+        if was_enabled:
+            self._toggle_live_metrics()
+        self._post_message(
+            "Live metrics polling settings saved globally "
+            f"(every {interval:g}s, timeout {timeout:g}s, {parallel_polls} parallel polls)."
+        )
+
+    def _refresh_live_metrics_targets(
+        self,
+        states: dict[str, InstanceState] | None = None,
+        configs: dict[str, InstanceConfig] | None = None,
+    ) -> None:
+        """Monitor every running configured model while global monitoring is enabled."""
+
+        monitor = self._live_metrics_monitor
+        if monitor is None:
+            return
+        states = states if states is not None else list_instances()
+        configs = configs if configs is not None else load_all_instances()
+        targets = tuple(
+            MetricTarget(
+                name=name,
+                url=f"http://{config.server.host}:{config.server.port}/metrics",
+                configured_parallelism=max(1, config.server.parallel),
+            )
+            for name, config in configs.items()
+            if states.get(name) is not None and states[name].status == InstanceStatus.RUNNING
+        )
+        self._live_metrics_targets = tuple(sorted(targets, key=lambda target: target.name))
+        monitored_names = {target.name for target in self._live_metrics_targets}
+        self._live_metrics_snapshots = {
+            name: snapshot
+            for name, snapshot in self._live_metrics_snapshots.items()
+            if name in monitored_names
+        }
+        detail = self._live_metrics_detail_window
+        if detail is not None and detail.model_name not in monitored_names:
+            self._destroy_live_metrics_details()
+        monitor.update_targets(self._live_metrics_targets)
+        self._render_live_metrics()
+
+    def _publish_live_metric_snapshots(self, snapshots: tuple[LiveMetricSnapshot, ...]) -> None:
+        """Cross the worker-to-Tk boundary through the existing message queue."""
+
+        self._messages.put(("__LIVE_METRICS__", snapshots))
+
+    def _render_live_metrics(self) -> None:
+        """Render changed rows only; sampling never blocks the GUI thread."""
+
+        if not self.live_metrics_enabled_var.get():
+            self.live_metrics_frame.configure(text="Live metrics — disabled")
+            self.live_metrics_status_var.set(
+                "Disabled globally — no monitoring requests or background workers are running."
+            )
+            self._replace_live_metrics_rows(())
+            return
+        self.live_metrics_frame.configure(text="Live metrics — enabled globally")
+        if not self._live_metrics_targets:
+            self.live_metrics_status_var.set("Enabled globally — waiting for a managed model to be running.")
+            self._replace_live_metrics_rows(())
+            return
+        self.live_metrics_status_var.set(
+            "Click a model name for 1-minute, 10-minute, and whole-phase details. Values are server-wide."
+        )
+        rows: list[tuple[str, tuple[str, ...]]] = []
+        for target in self._live_metrics_targets:
+            snapshot = self._live_metrics_snapshots.get(target.name)
+            if snapshot is None:
+                values = (target.name, "warming up", "—", "—", "—")
+            else:
+                last_prompt = (
+                    "analyzing…"
+                    if snapshot.prompt_in_progress
+                    else format_metric(snapshot.last_prompt_tokens_per_second)
+                )
+                values = (
+                    target.name,
+                    snapshot.status.replace("_", " "),
+                    format_metric(snapshot.prefill_tokens_per_second),
+                    format_metric(snapshot.decode_tokens_per_second),
+                    last_prompt,
+                )
+            rows.append((target.name, values))
+        self._replace_live_metrics_rows(tuple(rows))
+        self._refresh_live_metrics_details()
+
+    def _on_live_metrics_click(self, event: tk.Event) -> None:
+        """Open details only when the model-name cell is clicked."""
+
+        if self.live_metrics_tree.identify_column(event.x) != "#1":
+            return
+        name = self.live_metrics_tree.identify_row(event.y)
+        if not name:
+            return
+        self.live_metrics_tree.selection_set(name)
+        self._open_live_metrics_details(name)
+
+    def _open_selected_live_metrics_details(self, _event: tk.Event | None = None) -> None:
+        selection = self.live_metrics_tree.selection()
+        if selection:
+            self._open_live_metrics_details(selection[0])
+
+    def _open_live_metrics_details(self, name: str) -> None:
+        snapshot = self._live_metrics_snapshots.get(name)
+        if snapshot is None:
+            self.bell()
+            return
+        window = self._live_metrics_detail_window
+        if window is not None and window.winfo_exists() and window.model_name == name:
+            window.update_snapshot(snapshot)
+            window.lift()
+            return
+        self._destroy_live_metrics_details()
+        window = LiveMetricsDetailWindow(
+            self,
+            name,
+            on_close=self._release_live_metrics_details,
+        )
+        self._live_metrics_detail_window = window
+        window.update_snapshot(snapshot)
+        window.lift()
+
+    def _refresh_live_metrics_details(self) -> None:
+        window = self._live_metrics_detail_window
+        if window is None or not window.winfo_exists():
+            return
+        snapshot = self._live_metrics_snapshots.get(window.model_name)
+        if snapshot is not None:
+            window.update_snapshot(snapshot)
+
+    def _release_live_metrics_details(self) -> None:
+        self._live_metrics_detail_window = None
+
+    def _destroy_live_metrics_details(self) -> None:
+        window = self._live_metrics_detail_window
+        self._live_metrics_detail_window = None
+        if window is not None and window.winfo_exists():
+            window.destroy()
+
+    def _replace_live_metrics_rows(self, rows: tuple[tuple[str, tuple[str, ...]], ...]) -> None:
+        """Apply a compact row diff so metric updates remain inexpensive."""
+
+        current = {name: values for name, values in rows}
+        for name, values in current.items():
+            if name in self._live_metrics_row_values:
+                if self._live_metrics_row_values[name] != values:
+                    self.live_metrics_tree.item(name, values=values)
+            else:
+                self.live_metrics_tree.insert("", tk.END, iid=name, values=values)
+        for name in tuple(self._live_metrics_row_values):
+            if name not in current:
+                self.live_metrics_tree.delete(name)
+        self._live_metrics_row_values = current
+
+    def _stop_live_metrics_monitor(self) -> None:
+        monitor = self._live_metrics_monitor
+        if monitor is not None:
+            monitor.stop()
+            self._live_metrics_monitor = None
+
+    def _on_close(self) -> None:
+        """Ensure optional monitoring cannot outlive the GUI."""
+
+        self._stop_live_metrics_monitor()
+        self._destroy_live_metrics_details()
+        self.destroy()
 
     def _apply_visible_columns(self, *, persist: bool = True) -> None:
         visible = [column for column in ALL_COLUMNS if self._column_vars[column].get()]
@@ -1028,7 +1422,28 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
             if message == "__REFRESH__":
                 self.refresh()
                 continue
-            self._append_activity(message)
+            if message == "__VERSION_BROWSER_REFRESH__":
+                browser = self._version_browser
+                if browser is not None and browser.winfo_exists():
+                    browser.refresh()
+                continue
+            if (
+                isinstance(message, tuple)
+                and len(message) == 2
+                and message[0] == "__LIVE_METRICS__"
+                and isinstance(message[1], tuple)
+            ):
+                self._live_metrics_snapshots.update(
+                    {
+                        snapshot.name: snapshot
+                        for snapshot in message[1]
+                        if isinstance(snapshot, LiveMetricSnapshot)
+                    }
+                )
+                self._render_live_metrics()
+                continue
+            if isinstance(message, str):
+                self._append_activity(message)
 
     def _append_activity(self, message: str) -> None:
         timestamp = time.strftime("%H:%M:%S")
@@ -1090,6 +1505,7 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
             queued_names=queued_names,
             active_tag=active_tag,
         )
+        self._refresh_live_metrics_targets(states, configs)
         return GuiRefreshSnapshot(
             rows=rows,
             detected_gpus=tuple(detected_gpus),
@@ -1116,7 +1532,9 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
             try:
                 config = configs[name]
                 display_name = config.display_name
-                runtime_selection = describe_effective_runtime(config)
+                runtime_selection = describe_effective_runtime(
+                    config, tolerate_unresolved_binary=True
+                )
                 port = str(config.server.port)
                 backend = config.gpu.backend
                 gpu = format_runtime_gpu_display(
@@ -1196,18 +1614,21 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
             if benchmark and benchmark.status == "ok":
                 total_memory = benchmark.total_gpu_memory_mb or benchmark.vram_mb
                 tps = format_metric(benchmark.tokens_per_second)
+                prefill_tps = format_metric(benchmark.prompt_tokens_per_second)
                 latency = format_metric(benchmark.latency_ms, 0)
                 vram = format_benchmark_memory(benchmark)
                 prompt = benchmark.prompt_file
             elif benchmark:
                 total_memory = benchmark.total_gpu_memory_mb or benchmark.vram_mb
                 tps = "failed"
+                prefill_tps = "-"
                 latency = "-"
                 vram = format_benchmark_memory(benchmark)
                 prompt = benchmark.prompt_file
             else:
                 total_memory = None
                 tps = "-"
+                prefill_tps = "-"
                 latency = "-"
                 vram = "-"
                 prompt = "-"
@@ -1227,6 +1648,7 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
                         cpu,
                         tags,
                         tps,
+                        prefill_tps,
                         latency,
                         vram,
                         prompt,
@@ -1249,6 +1671,11 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
                         "cpu": cpu_active,
                         "tags": sort_tags,
                         "tps": benchmark.tokens_per_second if benchmark and benchmark.status == "ok" else None,
+                        "prefill_tps": (
+                            benchmark.prompt_tokens_per_second
+                            if benchmark and benchmark.status == "ok"
+                            else None
+                        ),
                         "latency": benchmark.latency_ms if benchmark and benchmark.status == "ok" else None,
                         "vram": total_memory,
                         "prompt": benchmark.prompt_file if benchmark else None,
@@ -1471,6 +1898,42 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
         self._post_message(f"{label} started.")
         threading.Thread(target=worker, daemon=True).start()
 
+    def _live_metrics_runtime_config(self, config: InstanceConfig) -> InstanceConfig:
+        """Create a non-persistent server override when global metrics are on."""
+
+        if (
+            not self.live_metrics_enabled_var.get()
+            or config.env.get("LLAMA_ORCH_RUNTIME") == "diffusion-gemma"
+        ):
+            return config
+        effective_args = ensure_live_metrics_argument(config.args, enabled=True)
+        if effective_args == config.args:
+            return config
+        return config.model_copy(update={"args": effective_args})
+
+    def _start_instance_with_live_metrics(self, name: str) -> InstanceState:
+        """Start a model with metrics only when the global option requires it."""
+
+        config = get_instance_config(name)
+        runtime_config = self._live_metrics_runtime_config(config)
+        if runtime_config is config:
+            return start_instance(name)
+        return start_instance(name, config_override=runtime_config)
+
+    def _restart_instance_with_live_metrics(
+        self,
+        name: str,
+        *,
+        config_override: InstanceConfig | None = None,
+    ) -> InstanceState:
+        """Restart a model with a session-only live-metrics command override."""
+
+        config = config_override if config_override is not None else get_instance_config(name)
+        runtime_config = self._live_metrics_runtime_config(config)
+        if config_override is None and runtime_config is config:
+            return restart_instance(name)
+        return restart_instance(name, config_override=runtime_config)
+
     def _run_selected(self, action_name: str) -> None:
         name = self._selected_instance()
         if not name:
@@ -1478,13 +1941,13 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
 
         def action() -> str:
             if action_name == "start":
-                state = start_instance(name)
+                state = self._start_instance_with_live_metrics(name)
                 return f"Started {name} (PID {state.pid})."
             if action_name == "stop":
                 stop_instance(name)
                 return f"Stopped {name}."
             if action_name == "restart":
-                state = restart_instance(name)
+                state = self._restart_instance_with_live_metrics(name)
                 return f"Restarted {name} (PID {state.pid})."
             if action_name == "health":
                 config = get_instance_config(name)
@@ -1533,7 +1996,7 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
         state = list_instances().get(name)
         if state is not None and state.status == InstanceStatus.RUNNING:
             return False
-        start_instance(name)
+        self._start_instance_with_live_metrics(name)
         return True
 
     def _handle_benchmark_exception(self, name: str, exc: Exception) -> None:
@@ -1574,11 +2037,11 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
             completed: list[str] = []
             for name in names:
                 if action_name == "start":
-                    start_instance(name)
+                    self._start_instance_with_live_metrics(name)
                 elif action_name == "stop":
                     stop_instance(name)
                 elif action_name == "restart":
-                    restart_instance(name)
+                    self._restart_instance_with_live_metrics(name)
                 else:
                     raise ValueError(f"Unknown batch action: {action_name}")
                 completed.append(name)
@@ -1702,7 +2165,10 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
                             runtime_config: InstanceConfig,
                             current_name: str = name,
                         ) -> None:
-                            restart_instance(current_name, config_override=runtime_config)
+                            self._restart_instance_with_live_metrics(
+                                current_name,
+                                config_override=runtime_config,
+                            )
 
                         sweep = run_grid_for_instance(
                             original_config,
@@ -1726,7 +2192,10 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
                         self._set_active_benchmark_name(None)
                         if plan_requires_restart(plan):
                             if was_running:
-                                restart_instance(name, config_override=original_config)
+                                self._restart_instance_with_live_metrics(
+                                    name,
+                                    config_override=original_config,
+                                )
                             else:
                                 stop_instance(name)
                         elif started_by_grid:
@@ -2009,11 +2478,57 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
         if state and state.status == InstanceStatus.RUNNING:
             self._run_background(
                 f"restart {name}",
-                lambda: f"Restarted {name} after runtime args edit (PID {restart_instance(name).pid}).",
+                lambda: (
+                    f"Restarted {name} after runtime args edit "
+                    f"(PID {self._restart_instance_with_live_metrics(name).pid})."
+                ),
             )
         else:
             self._post_message(f"Saved runtime args for {name}.")
             self.refresh()
+
+    def _switch_binary_selected(self) -> None:
+        """Open a scrollable package picker for the selected instance."""
+        name = self._selected_instance()
+        if not name:
+            return
+        manager = BinaryManager(get_project_root())
+        packages = manager.list_installed()
+        if not packages:
+            messagebox.showinfo(
+                "No registered packages",
+                "Install a release or register a complete local package first.",
+                parent=self,
+            )
+            return
+
+        config = get_instance_config(name)
+        selected_binary_id = str(config.binary.binary_id) if config.binary and config.binary.binary_id else None
+        SwitchServerDialog(
+            self,
+            binaries=packages,
+            package_path=lambda binary: manager.bins_dir / str(binary.id),
+            selected_binary_id=selected_binary_id,
+            on_confirm=lambda selector: self._confirm_binary_switch(name, selector),
+        )
+
+    def _confirm_binary_switch(self, name: str, selector: str) -> None:
+        """Confirm restart semantics after the user has selected a package."""
+        state = list_instances().get(name)
+        restart = state is not None and state.status == InstanceStatus.RUNNING
+        if restart and not messagebox.askyesno(
+            "Restart required",
+            "This instance is running. Switch its static server package and restart it now?",
+            parent=self,
+        ):
+            return
+
+        def action() -> str:
+            binary, restarted = switch_instance_binary(name, selector, restart=restart)
+            suffix = " and restarted" if restarted else " (will apply on next start)"
+            return f"Switched {name} to {binary.version} [{binary.variant}]{suffix}."
+
+        self._run_background(f"switch llama-server for {name}", action)
 
     def _clone_selected(self) -> None:
         source = self._selected_instance()
@@ -2314,11 +2829,53 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
 
     def _on_model_saved(self, config: InstanceConfig) -> None:
         self._post_message(f"Configured model instance {config.name}.")
-        self.gui_settings = load_gui_settings(ALL_COLUMNS)
+        self.gui_settings = load_gui_settings(
+            ALL_COLUMNS,
+            auto_add_columns=("prefill_tps",),
+        )
         self.refresh()
 
     def _open_binary_dialog(self) -> None:
         InstallBinaryDialog(self, on_install=self._install_binary)
+
+    def _open_version_browser(self) -> None:
+        browser = self._version_browser
+        if browser is not None and browser.winfo_exists():
+            browser.lift()
+            browser.focus_set()
+            return
+
+        manager = BinaryManager(self.project_root)
+        self._version_browser = VersionBrowserDialog(
+            self,
+            list_binaries=manager.list_installed,
+            package_path=lambda binary: manager.bins_dir / str(binary.id),
+            on_import=self._import_local_binary_package,
+            managed_bins_dir=manager.bins_dir,
+        )
+
+    def _open_local_binary_importer(self) -> None:
+        """Open the visible import action with the version browser as its owner."""
+        self._open_version_browser()
+        browser = self._version_browser
+        if browser is not None and browser.winfo_exists():
+            browser.open_importer()
+
+    def _import_local_binary_package(self, request: LocalPackageImport) -> None:
+        def action() -> str:
+            binary = BinaryManager(self.project_root).register_local_package(
+                request.package_dir,
+                version=request.version,
+                variant=request.variant,
+                source_url=request.source_url,
+            )
+            self._post_message("__VERSION_BROWSER_REFRESH__")
+            return (
+                f"Imported local llama-server {binary.version} ({binary.variant}) "
+                f"as {binary.id}."
+            )
+
+        self._run_background("import local llama-server package", action)
 
     def _check_vulkan_binary(self) -> None:
         try:

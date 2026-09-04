@@ -818,6 +818,44 @@ def init(
 # =============================================================================
 
 
+@config_app.command("set-binary")
+def config_set_binary(
+    instance: Annotated[str, typer.Argument(help="Instance name, number, or UUID")],
+    binary: Annotated[str, typer.Argument(help="Registered binary UUID or unambiguous prefix")],
+    restart: Annotated[
+        bool, typer.Option("--restart", help="Restart a running instance to apply its static binary change")
+    ] = False,
+) -> None:
+    """Pin an instance to a registered llama-server package.
+
+    This changes only ``binary.*``. A running server must be restarted
+    explicitly, preventing a config change from being mistaken for a live
+    server-version change.
+    """
+    from rich.panel import Panel
+
+    from llama_orchestrator.binaries import switch_instance_binary
+
+    try:
+        selected, restarted = switch_instance_binary(instance, binary, restart=restart)
+    except Exception as exc:
+        console.print(Panel(str(exc), title="Binary switch not applied", border_style="red"))
+        _raise_exit(ExitCode.BINARY_NOT_FOUND)
+
+    detail = "The instance was restarted with the selected package." if restarted else (
+        "The instance is stopped; the selected package will be used on its next start."
+    )
+    console.print(Panel(
+        f"[green]Binary pin updated.[/green]\n\n"
+        f"UUID:    [cyan]{selected.id}[/cyan]\n"
+        f"Version: {selected.version}\n"
+        f"Variant: {selected.variant}\n\n"
+        f"{detail}",
+        title="Instance Binary Switched",
+        border_style="green",
+    ))
+
+
 @config_app.command("validate")
 def config_validate(
     path: Annotated[
@@ -1229,6 +1267,46 @@ def daemon_uninstall(
 # =============================================================================
 
 
+@binary_app.command("register")
+def binary_register(
+    package_dir: Annotated[Path, typer.Argument(help="Directory containing llama-server.exe and matching DLLs")],
+    version: Annotated[str, typer.Option("--version", help="Immutable build/package identifier")],
+    variant: Annotated[str, typer.Option("--variant", help="Backend/build variant label")],
+    source_url: Annotated[
+        Optional[str], typer.Option("--source-url", help="Optional provenance URL or local identifier")
+    ] = None,
+) -> None:
+    """Import a complete locally built or downloaded llama-server package.
+
+    The source directory is copied intact into a new UUID directory under
+    ``bins/``. Never import individual EXEs or DLLs from different packages.
+    """
+    from rich.panel import Panel
+
+    from llama_orchestrator.binaries import BinaryManager
+    from llama_orchestrator.config import get_project_root
+
+    try:
+        binary = BinaryManager(get_project_root()).register_local_package(
+            package_dir, version=version, variant=variant, source_url=source_url
+        )
+    except Exception as exc:
+        console.print(Panel(str(exc), title="Local package import failed", border_style="red"))
+        _raise_exit(ExitCode.BINARY_INSTALL_FAILED)
+
+    console.print(Panel(
+        f"[green]Local package registered.[/green]\n\n"
+        f"UUID:    [cyan]{binary.id}[/cyan]\n"
+        f"Version: {binary.version}\n"
+        f"Variant: {binary.variant}\n"
+        f"SHA256:  {binary.sha256}\n\n"
+        f"Switch an instance with:\n"
+        f"llama-orch config set-binary <instance> {binary.id}",
+        title="Binary Registered",
+        border_style="green",
+    ))
+
+
 @binary_app.command("install")
 def binary_install(
     version: Annotated[str, typer.Argument(help="Version to install (e.g., b7572 or 'latest')")] = "latest",
@@ -1247,12 +1325,13 @@ def binary_install(
 
     Available variants for Windows:
         win-cpu-x64, win-vulkan-x64, win-cuda-12.4-x64,
-        win-cuda-13.1-x64, win-hip-radeon-x64, win-sycl-x64
+        win-cuda-13.3-x64, win-rocm-7.14-x64, win-sycl-x64,
+        win-openvino-2026.3.1-x64
 
     Example:
         llama-orch binary install
         llama-orch binary install b7572 --variant win-vulkan-x64
-        llama-orch binary install latest --variant win-cuda-12.4-x64
+        llama-orch binary install latest --variant win-cuda-13.3-x64
     """
     from rich.panel import Panel
     from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -1501,28 +1580,28 @@ def binary_latest(
     
     Example:
         llama-orch binary latest
-        llama-orch binary latest --variant win-cuda-12.4-x64
+        llama-orch binary latest --variant win-cuda-13.3-x64
     """
     from rich.panel import Panel
 
     from llama_orchestrator.binaries import GitHubClient
-    from llama_orchestrator.binaries.schema import build_download_url
-
     console.print("[cyan]Fetching latest release from GitHub...[/cyan]")
 
     try:
-        client = GitHubClient()
-        release = client.get_latest_release()
-        download_url = build_download_url(release.version, variant)
+        with GitHubClient() as client:
+            release = client.get_latest_binary_release(variant)
+            download_url = client.get_asset_url(release["tag_name"], variant)
+        if download_url is None:
+            raise RuntimeError(f"No archive published for backend '{variant}'")
 
         console.print(Panel(
             f"[green]Latest llama.cpp release:[/green]\n\n"
-            f"  Version:      [cyan]{release.version}[/cyan]\n"
-            f"  Published:    {release.published_at.strftime('%Y-%m-%d %H:%M')}\n"
+            f"  Version:      [cyan]{release['tag_name']}[/cyan]\n"
+            f"  Published:    {release.get('published_at', 'unknown')}\n"
             f"  Variant:      {variant}\n"
             f"  Download URL: {download_url}\n\n"
             f"[dim]Install with:[/dim]\n"
-            f"  llama-orch binary install {release.version} --variant {variant}",
+            f"  llama-orch binary install {release['tag_name']} --variant {variant}",
             title="Latest Release",
             border_style="cyan"
         ))

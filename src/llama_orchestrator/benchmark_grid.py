@@ -1144,6 +1144,8 @@ def _metrics_from_benchmark_result(result: BenchmarkResult) -> dict[str, Any]:
         "shared_ram_mb": result.shared_ram_mb,
         "total_gpu_memory_mb": result.total_gpu_memory_mb,
         "prompt_tokens": result.prompt_tokens,
+        "prompt_ms": result.prompt_ms,
+        "prompt_tokens_per_second": result.prompt_tokens_per_second,
         "tokens_cached": result.tokens_cached,
         "cache_hit_rate": result.cache_hit_rate,
         "speculative_mode": result.speculative_mode,

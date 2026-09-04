@@ -230,17 +230,10 @@ class BinaryConfig(BaseModel):
         default=None,
         description="llama.cpp version tag (e.g., 'b7572', 'latest'). Used when binary_id is None"
     )
-    variant: Literal[
-        "win-cpu-x64",
-        "win-cpu-arm64",
-        "win-vulkan-x64",
-        "win-cuda-12.4-x64",
-        "win-cuda-13.1-x64",
-        "win-hip-radeon-x64",
-        "win-sycl-x64",
-    ] = Field(
+    variant: str = Field(
         default="win-vulkan-x64",
-        description="Platform/GPU variant. Used when binary_id is None"
+        min_length=1,
+        description="Platform/GPU variant. May identify a locally built ROCm package."
     )
     source_url: Optional[HttpUrl] = Field(
         default=None,

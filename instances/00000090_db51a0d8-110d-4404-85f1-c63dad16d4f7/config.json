@@ -1,0 +1,135 @@
+{
+    "name": "qwen38-27b-b1311-rocm",
+    "schema_version": "2",
+    "instance_uid": "db51a0d8-110d-4404-85f1-c63dad16d4f7",
+    "instance_no": "00000090",
+    "display_name": "qwen38-27b-b1311-rocm",
+    "created_at": "2026-08-16T13:28:06Z",
+    "updated_at": "2026-08-16T13:28:06Z",
+    "sort_order": null,
+  "binary": {
+    "binary_id": "c2a6d0a1-6d8d-4ec5-8a18-89d33af9547b",
+    "version": "community-b1311-gfx103X",
+    "variant": "win-hip-radeon-x64",
+    "source_url": "https://github.com/lemonade-sdk/llamacpp-rocm/releases/download/b1311/llama-b1311-windows-rocm-gfx103X-x64.zip",
+    "sha256": "aefa8dfe236c0bce9b8bbe9b71a23c59af9eaa0d5950ce48ef6ddf502de9e457"
+  },
+    "model": {
+        "path": "models\\bartowski__Qwen3.8-27B-GGUF\\Qwen3.8-27B-IQ4_XS.gguf",
+        "context_size": 40000,
+        "batch_size": 512,
+        "threads": 8
+    },
+    "server": {
+        "host": "127.0.0.1",
+        "port": 8190,
+        "timeout": 600,
+        "parallel": 1,
+        "disable_fit": true
+    },
+  "gpu": {
+    "backend": "hip",
+    "device_id": 0,
+    "layers": 99
+  },
+    "env": {},
+  "args": [
+    "--no-mmproj",
+    "--reasoning",
+    "auto",
+    "--flash-attn",
+    "auto",
+    "--cache-type-k",
+    "q8_0",
+    "--cache-type-v",
+    "q4_0"
+  ],
+    "parameter_mutability": {
+        "static": [
+            "name",
+            "binary.binary_id",
+            "binary.version",
+            "binary.variant",
+            "binary.source_url",
+            "binary.sha256",
+            "model.path",
+            "model.context_size",
+            "model.batch_size",
+            "model.threads",
+            "server.host",
+            "server.port",
+            "server.timeout",
+            "server.parallel",
+            "server.disable_fit",
+            "gpu.backend",
+            "gpu.device_id",
+            "gpu.layers",
+            "env",
+            "args",
+            "logs.stdout",
+            "logs.stderr",
+            "logs.max_size_mb",
+            "logs.rotation"
+        ],
+        "dynamic": [
+            "tags",
+            "model_metadata",
+            "healthcheck.type",
+            "healthcheck.path",
+            "healthcheck.expected_status",
+            "healthcheck.expected_body",
+            "healthcheck.custom_script",
+            "healthcheck.interval",
+            "healthcheck.timeout",
+            "healthcheck.retries",
+            "healthcheck.retry_delay",
+            "healthcheck.start_period",
+            "healthcheck.backoff_enabled",
+            "healthcheck.backoff_base",
+            "healthcheck.backoff_max",
+            "healthcheck.backoff_jitter",
+            "healthcheck.execution_mode",
+            "healthcheck.allowlist_directory",
+            "restart_policy.enabled",
+            "restart_policy.max_retries",
+            "restart_policy.backoff_multiplier",
+            "restart_policy.initial_delay",
+            "restart_policy.max_delay"
+        ]
+    },
+    "model_metadata": null,
+    "tags": [],
+    "healthcheck": {
+        "type": "http",
+        "path": "/health",
+        "expected_status": [
+            200
+        ],
+        "expected_body": null,
+        "custom_script": null,
+        "execution_mode": "disabled",
+        "allowlist_directory": null,
+        "interval": 10,
+        "timeout": 5,
+        "retries": 3,
+        "retry_delay": 1.0,
+        "start_period": 60,
+        "backoff_enabled": true,
+        "backoff_base": 1.0,
+        "backoff_max": 60.0,
+        "backoff_jitter": 0.1
+    },
+    "restart_policy": {
+        "enabled": true,
+        "max_retries": 5,
+        "backoff_multiplier": 2.0,
+        "initial_delay": 1.0,
+        "max_delay": 300.0
+    },
+    "logs": {
+        "stdout": "logs/{name}/stdout.log",
+        "stderr": "logs/{name}/stderr.log",
+        "max_size_mb": 100,
+        "rotation": 5
+    }
+}

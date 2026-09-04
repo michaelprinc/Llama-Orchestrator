@@ -31,8 +31,44 @@ def build_activity_log_frame(
         log_frame, height=height, wrap=tk.WORD, state=tk.DISABLED
     )
     activity.grid(row=1, column=0, sticky="nsew")
+    activity.bind("<Control-c>", lambda _event: copy_activity_selection_and_stop(activity))
+
+    copy_menu = tk.Menu(log_frame, tearoff=False)
+    copy_menu.add_command(label="Copy", command=lambda: copy_activity_selection(activity))
+
+    def show_copy_menu(event: tk.Event) -> str:
+        """Show the activity log's copy menu at the pointer."""
+        copy_menu.tk_popup(event.x_root, event.y_root)
+        return "break"
+
+    activity.bind("<Button-3>", show_copy_menu)
 
     return log_frame, activity, "activity"
+
+
+def copy_activity_selection(activity: tk.Text) -> bool:
+    """Copy the selected activity-log text to the clipboard.
+
+    Returns ``False`` when no text is selected, so an accidental Copy action
+    leaves the clipboard untouched.
+    """
+    try:
+        selected_text = activity.get(tk.SEL_FIRST, tk.SEL_LAST)
+    except tk.TclError:
+        return False
+
+    if not selected_text:
+        return False
+
+    activity.clipboard_clear()
+    activity.clipboard_append(selected_text)
+    return True
+
+
+def copy_activity_selection_and_stop(activity: tk.Text) -> str:
+    """Copy selected activity text without invoking the window-wide shortcut."""
+    copy_activity_selection(activity)
+    return "break"
 
 
 def append_activity(activity: tk.Text, message: str) -> None:

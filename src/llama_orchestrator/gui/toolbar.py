@@ -19,6 +19,8 @@ class ToolbarCallbacks:
     on_add_model: Callable[[], None]
     on_apply_args: Callable[[], None]
     on_install_llama_server: Callable[[], None]
+    on_browse_llama_servers: Callable[[], None]
+    on_import_llama_server: Callable[[], None]
     on_start: Callable[[], None]
     on_stop: Callable[[], None]
     on_restart: Callable[[], None]
@@ -32,6 +34,9 @@ class ToolbarCallbacks:
     on_start_visible: Callable[[], None]
     on_stop_visible: Callable[[], None]
     on_restart_visible: Callable[[], None]
+    on_toggle_live_metrics: Callable[[], None]
+    on_configure_live_metrics: Callable[[], None]
+    on_restart_running_models_with_metrics: Callable[[], None]
 
 
 @dataclass
@@ -55,6 +60,7 @@ def build_toolbar(
     show_gpu_inventory_var: tk.BooleanVar,
     prompt_var: tk.StringVar,
     daemon_var: tk.StringVar,
+    live_metrics_enabled_var: tk.BooleanVar,
 ) -> ToolbarWidgets:
     """Build the complete toolbar frame with all buttons and controls.
 
@@ -90,6 +96,16 @@ def build_toolbar(
         text="Install llama-server",
         command=callbacks.on_install_llama_server,
     ).grid(row=0, column=3, padx=6)
+    ttk.Button(
+        toolbar,
+        text="Server versions",
+        command=callbacks.on_browse_llama_servers,
+    ).grid(row=1, column=0, columnspan=2, sticky="w", padx=(0, 6), pady=(4, 0))
+    ttk.Button(
+        toolbar,
+        text="Import server",
+        command=callbacks.on_import_llama_server,
+    ).grid(row=1, column=2, columnspan=2, sticky="w", padx=6, pady=(4, 0))
     ttk.Button(toolbar, text="Start", command=callbacks.on_start).grid(
         row=0, column=4, padx=6
     )
@@ -128,9 +144,26 @@ def build_toolbar(
     batch_menu.add_command(label="Restart visible", command=callbacks.on_restart_visible)
     batch_button.grid(row=0, column=9, padx=6)
 
+    # --- Global, opt-in live metrics menu ---
+    metrics_button = ttk.Menubutton(toolbar, text="Live metrics")
+    metrics_menu = tk.Menu(metrics_button, tearoff=False)
+    metrics_button["menu"] = metrics_menu
+    metrics_menu.add_checkbutton(
+        label="Enable for all running models",
+        variable=live_metrics_enabled_var,
+        command=callbacks.on_toggle_live_metrics,
+    )
+    metrics_menu.add_command(
+        label="Restart running models with metrics...",
+        command=callbacks.on_restart_running_models_with_metrics,
+    )
+    metrics_menu.add_separator()
+    metrics_menu.add_command(label="Polling settings...", command=callbacks.on_configure_live_metrics)
+    metrics_button.grid(row=0, column=10, padx=6)
+
     # --- Tag filter ---
     ttk.Label(toolbar, text="Tag").grid(
-        row=0, column=10, sticky="e", padx=(12, 4)
+        row=0, column=11, sticky="e", padx=(12, 4)
     )
     tag_combo = ttk.Combobox(
         toolbar,
@@ -139,7 +172,7 @@ def build_toolbar(
         state="readonly",
         width=16,
     )
-    tag_combo.grid(row=0, column=11, sticky="w", padx=(0, 6))
+    tag_combo.grid(row=0, column=12, sticky="w", padx=(0, 6))
     tag_combo.bind("<<ComboboxSelected>>", callbacks.on_tag_filter)
 
     # --- Benchmark prompt ---
@@ -147,9 +180,9 @@ def build_toolbar(
         toolbar,
         text="Edit Benchmark Prompt",
         command=callbacks.on_edit_prompt,
-    ).grid(row=0, column=12, padx=6)
+    ).grid(row=0, column=13, padx=6)
     ttk.Label(toolbar, textvariable=prompt_var).grid(
-        row=0, column=13, sticky="w", padx=(0, 6)
+        row=0, column=14, sticky="w", padx=(0, 6)
     )
 
     # --- GPU inventory checkbox ---
@@ -158,7 +191,7 @@ def build_toolbar(
         text="GPU map",
         variable=show_gpu_inventory_var,
         command=callbacks.on_toggle_gpu_inventory,
-    ).grid(row=0, column=14, padx=(12, 6))
+    ).grid(row=0, column=15, padx=(12, 6))
 
     # --- Daemon status ---
     ttk.Label(toolbar, textvariable=daemon_var).grid(

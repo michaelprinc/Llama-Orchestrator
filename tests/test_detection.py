@@ -1,8 +1,9 @@
 """Tests for runtime CPU/GPU detection helpers."""
 
 from pathlib import Path
+from uuid import uuid4
 
-from llama_orchestrator.config.schema import GpuConfig, InstanceConfig, ModelConfig, ServerConfig
+from llama_orchestrator.config.schema import BinaryConfig, GpuConfig, InstanceConfig, ModelConfig, ServerConfig
 from llama_orchestrator.engine.detection import (
     DetectedGpu,
     collect_detected_gpu_inventory,
@@ -99,6 +100,24 @@ def test_describe_effective_runtime_uses_rocm_env_override_when_no_explicit_devi
     assert selection.gpu_display == "ROCm1"
     assert selection.primary_gpu_label == "ROCm1"
     assert selection.primary_device_id == 1
+
+
+def test_gpu_display_tolerates_a_missing_explicit_binary_pin() -> None:
+    """A stale package must not prevent the GUI from rendering its GPU label."""
+    config = _make_config(
+        binary=BinaryConfig(
+            binary_id=uuid4(),
+            version="missing-rocm-build",
+            variant="win-hip-gfx1030-rocm10-r3",
+        ),
+        gpu=GpuConfig(backend="hip", device_id=0, layers=99),
+    )
+
+    selection = describe_effective_runtime(config, tolerate_unresolved_binary=True)
+
+    assert selection.gpu_active is True
+    assert selection.gpu_labels == ("ROCm0",)
+    assert selection.gpu_layers == 99
 
 
 def test_parse_detected_gpus_reads_inventory_and_active_device_names() -> None:

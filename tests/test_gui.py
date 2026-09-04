@@ -288,6 +288,19 @@ def test_install_binary_gui_copy_uses_llama_server_label() -> None:
     assert "llama-server variant" in VULKAN_BINARY_MISSING_MESSAGE
 
 
+def test_import_server_action_opens_the_browser_importer() -> None:
+    """The main toolbar import action should not require a hidden second-step button."""
+    gui = object.__new__(LlamaOrchestratorGui)
+    with patch("llama_orchestrator.gui.app.VersionBrowserDialog") as browser:
+        gui._version_browser = browser
+        browser.winfo_exists.return_value = True
+        with patch.object(gui, "_open_version_browser") as open_browser:
+            gui._open_local_binary_importer()
+
+        open_browser.assert_called_once_with()
+        browser.open_importer.assert_called_once_with()
+
+
 def test_gui_uses_explicit_benchmark_prompt_edit_label() -> None:
     """The benchmark prompt control should describe the edit action clearly."""
     assert EDIT_BENCHMARK_PROMPT_LABEL == "Edit Benchmark Prompt"
@@ -381,6 +394,7 @@ def test_format_benchmark_memory_includes_total_and_shared_ram_warning() -> None
         prompt_chars=10,
         output_tokens=20,
         tokens_per_second=12.0,
+        prompt_tokens_per_second=200.0,
         latency_ms=80.0,
         elapsed_ms=1400.0,
         vram_mb=16261.3,
@@ -397,6 +411,7 @@ def test_format_benchmark_memory_includes_total_and_shared_ram_warning() -> None
     assert format_benchmark_memory(result) == "16436 total (VRAM 16261, RAM 175) slow"
     assert benchmark_shared_ram_warning(result) == "Shared RAM in use; inference may be slower."
     assert "Shared RAM in use; inference may be slower." in format_benchmark_message(result)
+    assert "decode 12.0 TPS, prefill 200.0 TPS" in format_benchmark_message(result)
     assert "Artifact: logs/demo/benchmarks/run.md." in format_benchmark_message(result)
 
 
@@ -532,6 +547,7 @@ def test_gui_columns_include_gpu_cpu_and_model_size() -> None:
     assert COLUMN_HEADINGS["queue"] == "Queue"
     assert COLUMN_HEADINGS["gpu"] == "GPU"
     assert COLUMN_HEADINGS["cpu"] == "CPU"
+    assert COLUMN_HEADINGS["prefill_tps"] == "Prefill TPS"
     assert COLUMN_HEADINGS["model_size"] == "Model size"
     assert COLUMN_HEADINGS["quantization"] == "Quant"
     assert COLUMN_HEADINGS["architecture"] == "Arch"
@@ -587,13 +603,14 @@ def test_format_serial_benchmark_progress_reports_tps_and_latency() -> None:
         prompt_chars=10,
         output_tokens=20,
         tokens_per_second=72.1,
+        prompt_tokens_per_second=200.0,
         latency_ms=364.0,
         elapsed_ms=1400.0,
         vram_mb=1024.0,
         status="ok",
     )
 
-    assert format_serial_benchmark_progress(result) == "TPS=72.1, latency=364 ms"
+    assert format_serial_benchmark_progress(result) == "TPS=72.1, prefill TPS=200.0, latency=364 ms"
 
 
 def test_format_serial_benchmark_progress_uses_error_for_failed_rows() -> None:

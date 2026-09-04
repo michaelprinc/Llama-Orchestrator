@@ -4,9 +4,13 @@ Covers the three modules fixed in Plan A (Phase 2 GUI refactoring).
 Does NOT modify test_gui.py — runs independently.
 """
 
+import json
 import threading
 import time
+from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
 import pytest
 
@@ -32,6 +36,147 @@ def test_add_model_opens_hugging_face_import_dialog() -> None:
         parent,
         on_use=on_use,
     )
+
+
+def test_version_browser_rows_show_uuid_and_package_readiness(tmp_path: Path) -> None:
+    """The browser must expose an immutable pin and flag broken packages."""
+    from llama_orchestrator.binaries.schema import BinaryVersion
+    from llama_orchestrator.gui.version_browser import build_version_rows
+
+    ready = BinaryVersion(
+        id=uuid4(),
+        version="rocm-r3",
+        variant="win-hip-gfx1030-rocm10-r3",
+        download_url="local://r3",
+        installed_at=datetime(2026, 8, 26, tzinfo=timezone.utc),
+        path=Path("unused"),
+        size_bytes=3 * 1024 * 1024,
+        sha256="a" * 64,
+    )
+    broken = BinaryVersion(
+        id=uuid4(),
+        version="rocm-r2",
+        variant="win-hip-gfx1030-rocm10-r2",
+        download_url="local://r2",
+        installed_at=datetime(2026, 8, 25, tzinfo=timezone.utc),
+        path=Path("unused"),
+    )
+    ready_dir = tmp_path / str(ready.id)
+    ready_dir.mkdir()
+    (ready_dir / "llama-server.exe").write_bytes(b"server")
+
+    rows = build_version_rows([broken, ready], lambda binary: tmp_path / str(binary.id))
+
+    assert rows[0][0] == str(ready.id)
+    assert rows[0][3] == "3.0 MiB"
+    assert rows[0][5] == "Ready"
+    assert rows[1][0] == str(broken.id)
+    assert rows[1][5] == "Missing llama-server.exe"
+
+
+def test_local_package_import_validation_normalizes_safe_source(tmp_path: Path) -> None:
+    """The importer should accept an original complete package folder."""
+    from llama_orchestrator.gui.version_browser import (
+        LocalPackageImport,
+        validate_local_package_import,
+    )
+
+    source = tmp_path / "local-r3"
+    source.mkdir()
+    (source / "llama-server.exe").write_bytes(b"server")
+
+    request = validate_local_package_import(
+        LocalPackageImport(
+            package_dir=source,
+            version="  rocm-r3  ",
+            variant="  win-hip-gfx1030-rocm10-r3  ",
+            source_url="  local://r3  ",
+        ),
+        tmp_path / "project" / "bins",
+    )
+
+    assert request.package_dir == source.resolve()
+    assert request.version == "rocm-r3"
+    assert request.variant == "win-hip-gfx1030-rocm10-r3"
+    assert request.source_url == "local://r3"
+
+
+def test_local_package_import_validation_resolves_build_root_to_package(tmp_path: Path) -> None:
+    """The GUI may select artifacts/build/<id>, not only its bin child."""
+    from llama_orchestrator.gui.version_browser import (
+        LocalPackageImport,
+        validate_local_package_import,
+    )
+
+    build = tmp_path / "artifacts" / "build" / "candidate-r3"
+    build_bin = build / "bin"
+    build_bin.mkdir(parents=True)
+    (build_bin / "llama-server.exe").write_bytes(b"build-server")
+    package = tmp_path / "artifacts" / "package" / "candidate-r3"
+    package.mkdir(parents=True)
+    (package / "llama-server.exe").write_bytes(b"packaged-server")
+
+    request = validate_local_package_import(
+        LocalPackageImport(build, "rocm-r3", "win-hip-gfx1030-rocm10-r3"),
+        tmp_path / "project" / "bins",
+    )
+
+    assert request.package_dir == package.resolve()
+
+
+def test_local_package_import_validation_resolves_manifest_linked_renamed_package(
+    tmp_path: Path,
+) -> None:
+    """A package version ID may differ from its CMake build directory ID."""
+    from llama_orchestrator.gui.version_browser import (
+        LocalPackageImport,
+        validate_local_package_import,
+    )
+
+    build = tmp_path / "artifacts" / "build" / "candidate-r4late"
+    build_bin = build / "bin"
+    build_bin.mkdir(parents=True)
+    (build_bin / "llama-server.exe").write_bytes(b"build-server")
+    package = tmp_path / "artifacts" / "package" / "r4-late-jstamagal-update"
+    package.mkdir(parents=True)
+    (package / "llama-server.exe").write_bytes(b"packaged-server")
+    (package / "manifest.json").write_text(
+        json.dumps({"buildBinDir": str(build_bin)}),
+        encoding="utf-8",
+    )
+
+    request = validate_local_package_import(
+        LocalPackageImport(build, "r4-late-jstamagal-update", "win-hip-gfx1030-rocm10-r4"),
+        tmp_path / "project" / "bins",
+    )
+
+    assert request.package_dir == package.resolve()
+
+
+def test_local_package_import_validation_rejects_missing_or_managed_source(tmp_path: Path) -> None:
+    """The GUI must fail early for common sources that cannot be imported safely."""
+    from llama_orchestrator.gui.version_browser import (
+        LocalPackageImport,
+        validate_local_package_import,
+    )
+
+    bins_dir = tmp_path / "project" / "bins"
+    incomplete = tmp_path / "incomplete"
+    incomplete.mkdir()
+    with pytest.raises(ValueError, match="llama-server.exe"):
+        validate_local_package_import(
+            LocalPackageImport(incomplete, "rocm-r3", "win-hip-gfx1030-rocm10-r3"),
+            bins_dir,
+        )
+
+    managed_source = bins_dir / "already-imported"
+    managed_source.mkdir(parents=True)
+    (managed_source / "llama-server.exe").write_bytes(b"server")
+    with pytest.raises(ValueError, match="already under managed bins"):
+        validate_local_package_import(
+            LocalPackageImport(managed_source, "rocm-r3", "win-hip-gfx1030-rocm10-r3"),
+            bins_dir,
+        )
 
 
 # ──────────────────────────────────────────────────────────────────────

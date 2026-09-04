@@ -205,9 +205,14 @@ def download_file(
                 return dest_path
 
     except httpx.HTTPStatusError as e:
+        # A response returned from ``client.stream()`` has deliberately not
+        # been read yet.  Accessing ``response.text`` here raises
+        # httpx.ResponseNotRead and masks the useful HTTP error (for example a
+        # GitHub 404).  Status metadata is available without consuming the
+        # streamed body.
         raise DownloadError(
-            f"HTTP error {e.response.status_code}: {e.response.text}",
-            cause=e
+            f"HTTP error {e.response.status_code} ({e.response.reason_phrase}) for {url}",
+            cause=e,
         ) from e
     except httpx.RequestError as e:
         raise DownloadError(f"Request failed: {e}", cause=e) from e

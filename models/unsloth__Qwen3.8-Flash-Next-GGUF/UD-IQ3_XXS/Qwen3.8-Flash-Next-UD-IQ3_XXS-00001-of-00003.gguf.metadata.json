@@ -1,0 +1,43 @@
+{
+  "gguf_metadata": {
+    "architecture": "qwen4exp",
+    "attention_head_count": 24,
+    "attention_head_count_kv": 2,
+    "basename": null,
+    "block_count": 48,
+    "chat_template_present": true,
+    "context_length": 262144,
+    "embedding_length": 2560,
+    "file_type": "IQ3_XXS",
+    "file_type_value": 23,
+    "name": "Qwen3.8 Flash Next",
+    "nextn_predict_layers": null,
+    "quantization_version": 2,
+    "rope_freq_base": 10000000.0
+  },
+  "model_card_metadata": {
+    "claimed_architecture": "qwen3",
+    "claimed_chat_template": null,
+    "claimed_context_length": 524,
+    "claimed_model": "Read our How to [Run Qwen3.8-Flash-Next Guide!](https://unsloth.ai/docs/models/qwen3.8-next)",
+    "claimed_mtp_support": true,
+    "recommended_runtime": "llama.cpp"
+  },
+  "schema_version": "1",
+  "source": {
+    "fetched_at": "2026-09-02T17:25:16Z",
+    "filename": "UD-IQ3_XXS/Qwen3.8-Flash-Next-UD-IQ3_XXS-00001-of-00003.gguf",
+    "provider": "huggingface",
+    "repo_id": "unsloth/Qwen3.8-Flash-Next-GGUF",
+    "revision": "main"
+  },
+  "validation": {
+    "confidence": "medium",
+    "status": "warning",
+    "warnings": [
+      "Model card context length 524 does not match GGUF context length 262144.",
+      "Model card architecture qwen3 does not match GGUF architecture qwen4exp.",
+      "MTP/NextN is claimed in the model card but not present in GGUF metadata."
+    ]
+  }
+}

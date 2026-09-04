@@ -28,17 +28,17 @@
     },
     "gpu": {
         "backend": "vulkan",
-        "device_id": 2,
+        "device_id": 0,
         "layers": 999
     },
     "env": {
-        "GGML_VULKAN_DEVICE": "2"
+        "GGML_VULKAN_DEVICE": "0"
     },
     "args": [
         "--parallel",
         "1",
         "--device",
-        "Vulkan2",
+        "Vulkan0",
         "--main-gpu",
         "0",
         "--split-mode",

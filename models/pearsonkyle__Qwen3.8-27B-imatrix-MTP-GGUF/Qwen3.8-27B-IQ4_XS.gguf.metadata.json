@@ -1,0 +1,42 @@
+{
+  "gguf_metadata": {
+    "architecture": "qwen35",
+    "attention_head_count": 24,
+    "attention_head_count_kv": 4,
+    "basename": null,
+    "block_count": 65,
+    "chat_template_present": true,
+    "context_length": 262144,
+    "embedding_length": 5120,
+    "file_type": "IQ4_XS",
+    "file_type_value": 30,
+    "name": "Qwen3.8-27B",
+    "nextn_predict_layers": 1,
+    "quantization_version": 2,
+    "rope_freq_base": 10000000.0
+  },
+  "model_card_metadata": {
+    "claimed_architecture": "qwen3",
+    "claimed_chat_template": true,
+    "claimed_context_length": 8192,
+    "claimed_model": "\ud83d\udcca Unified benchmark & quality table",
+    "claimed_mtp_support": true,
+    "recommended_runtime": "llama.cpp"
+  },
+  "schema_version": "1",
+  "source": {
+    "fetched_at": "2026-08-28T19:03:47Z",
+    "filename": "Qwen3.8-27B-IQ4_XS.gguf",
+    "provider": "huggingface",
+    "repo_id": "pearsonkyle/Qwen3.8-27B-imatrix-MTP-GGUF",
+    "revision": "main"
+  },
+  "validation": {
+    "confidence": "medium",
+    "status": "warning",
+    "warnings": [
+      "Model card context length 8192 does not match GGUF context length 262144.",
+      "Model card architecture qwen3 does not match GGUF architecture qwen35."
+    ]
+  }
+}
