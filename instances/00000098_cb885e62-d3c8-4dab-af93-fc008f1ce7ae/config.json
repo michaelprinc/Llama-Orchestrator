@@ -5,18 +5,18 @@
     "instance_no": "00000098",
     "display_name": "qwen3-8-27b-gguf-iq4_xs_2_reasoning_on_clone_vulkan",
     "created_at": "2026-08-29T07:47:11Z",
-    "updated_at": "2026-09-02T18:30:40Z",
+    "updated_at": "2026-09-05T06:43:18Z",
     "sort_order": null,
     "binary": {
-        "binary_id": "40a1a42c-b81f-4fd4-be28-9ad40ace9e73",
-        "version": "llama.cpp-b10760-rocm10.1.0-nightly-gfx1030-r4-qwen4exp-20260902",
-        "variant": "win-hip-radeon-x64",
+        "binary_id": "3e20ea75-169b-44fb-b78e-9287d6630114",
+        "version": "b10760",
+        "variant": "win-vulkan-x64",
         "source_url": null,
         "sha256": null
     },
     "model": {
         "path": "models\\unsloth__Qwen3.8-27B-GGUF\\Qwen3.8-27B-UD-IQ4_XS.gguf",
-        "context_size": 108500,
+        "context_size": 150000,
         "batch_size": 512,
         "threads": 8
     },
@@ -41,7 +41,7 @@
         "on",
         "--reasoning-preserve",
         "--reasoning-budget",
-        "50000",
+        "30000",
         "--reasoning-budget-message",
         "Stop reasoning and provide the best final answer now.",
         "--chat-template-kwargs",
