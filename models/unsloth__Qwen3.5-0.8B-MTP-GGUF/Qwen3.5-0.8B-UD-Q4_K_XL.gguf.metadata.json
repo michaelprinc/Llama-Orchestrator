@@ -1,0 +1,42 @@
+{
+  "gguf_metadata": {
+    "architecture": "qwen35",
+    "attention_head_count": 8,
+    "attention_head_count_kv": 2,
+    "basename": "Qwen3.5-0.8B",
+    "block_count": 25,
+    "chat_template_present": true,
+    "context_length": 262144,
+    "embedding_length": 1024,
+    "file_type": "Q4_K_M",
+    "file_type_value": 15,
+    "name": "Qwen3.5-0.8B",
+    "nextn_predict_layers": 1,
+    "quantization_version": 2,
+    "rope_freq_base": 10000000.0
+  },
+  "model_card_metadata": {
+    "claimed_architecture": "qwen3",
+    "claimed_chat_template": true,
+    "claimed_context_length": 262144,
+    "claimed_model": "Read our How to [Run Qwen3.5 MTP Guide!](https://unsloth.ai/docs/models/qwen3.5#mtp-guide)",
+    "claimed_mtp_support": true,
+    "recommended_runtime": "llama.cpp"
+  },
+  "schema_version": "1",
+  "source": {
+    "fetched_at": "2026-09-20T20:57:57Z",
+    "filename": "Qwen3.5-0.8B-UD-Q4_K_XL.gguf",
+    "provider": "huggingface",
+    "repo_id": "unsloth/Qwen3.5-0.8B-MTP-GGUF",
+    "revision": "main"
+  },
+  "validation": {
+    "confidence": "medium",
+    "status": "warning",
+    "warnings": [
+      "Filename quantization Q4_K_XL does not match GGUF file_type Q4_K_M.",
+      "Model card architecture qwen3 does not match GGUF architecture qwen35."
+    ]
+  }
+}

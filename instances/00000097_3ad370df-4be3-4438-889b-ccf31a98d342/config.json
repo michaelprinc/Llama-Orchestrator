@@ -5,11 +5,11 @@
     "instance_no": "00000097",
     "display_name": "qwen3-8-27b-gguf-iq4_xs_2_reasoning_on",
     "created_at": "2026-08-29T07:30:50Z",
-    "updated_at": "2026-09-05T06:32:38Z",
+    "updated_at": "2026-09-21T17:55:13Z",
     "sort_order": null,
     "binary": {
-        "binary_id": "7fef13f4-20ec-47a9-805b-5649dbde0581",
-        "version": "llama.cpp-jstamagal-native-r4late-20260903-q5q4-fastmath5",
+        "binary_id": "5ad1af1e-2b9f-4bcd-ac7c-1c69979ad750",
+        "version": "r5a-next-20260920-r1-turbo-c-r2-iq4xs-limit1",
         "variant": "win-hip-radeon-x64",
         "source_url": null,
         "sha256": null
@@ -33,9 +33,8 @@
         "layers": 99
     },
     "env": {
-        "GGML_HIP_POOL_MAX_CACHED_MB": "512",
-        "GGML_HIP_POOL_LOOKAHEAD_PERCENT": "30",
-        
+        "GGML_HIP_POOL_MAX_CACHED_MB": "1024",
+        "GGML_HIP_POOL_LOOKAHEAD_PERCENT": "50",
         "GGML_HIP_RDNA2_AUTO": "1",
         "GGML_HIP_GFX1030_NATIVE": "1",
         "GGML_HIP_GFX1030_Q8_CACHE": "1",
@@ -54,22 +53,22 @@
         "--main-gpu",
         "0",
         "--no-mmproj",
-
         "--reasoning",
         "on",
-        "--reasoning-preserve",
         "--reasoning-budget",
         "30000",
         "--reasoning-budget-message",
         "Stop reasoning and provide the best final answer now.",
         "--chat-template-kwargs",
         "{\"preserve_thinking\":false}",
-
-        "--spec-type", "ngram-mod",
-        "--spec-ngram-mod-n-match", "24",
-        "--spec-ngram-mod-n-min", "48",
-        "--spec-ngram-mod-n-max", "64",
-
+        "--spec-type",
+        "ngram-mod",
+        "--spec-ngram-mod-n-match",
+        "24",
+        "--spec-ngram-mod-n-min",
+        "8",
+        "--spec-ngram-mod-n-max",
+        "64",
         "--temp",
         "1.0",
         "--top-p",
@@ -82,7 +81,6 @@
         "0.3",
         "--repeat-penalty",
         "1.05",
-        
         "--flash-attn",
         "on",
         "--cache-type-k",

@@ -1,0 +1,41 @@
+{
+  "gguf_metadata": {
+    "architecture": "qwen35",
+    "attention_head_count": 24,
+    "attention_head_count_kv": 4,
+    "basename": "Qwen3.8-27B",
+    "block_count": 65,
+    "chat_template_present": true,
+    "context_length": 262144,
+    "embedding_length": 5120,
+    "file_type": "IQ3_S",
+    "file_type_value": 26,
+    "name": "Qwen3.8-27B GSQ-RCO",
+    "nextn_predict_layers": 1,
+    "quantization_version": 2,
+    "rope_freq_base": 10000000.0
+  },
+  "model_card_metadata": {
+    "claimed_architecture": "qwen3",
+    "claimed_chat_template": null,
+    "claimed_context_length": null,
+    "claimed_model": "Qwen3.8-27B &middot; GSQ-RCO GGUFs",
+    "claimed_mtp_support": true,
+    "recommended_runtime": "llama.cpp"
+  },
+  "schema_version": "1",
+  "source": {
+    "fetched_at": "2026-09-17T19:01:49Z",
+    "filename": "Qwen3.8-27B-GSQ-RCO-IQ3_S-mtp.gguf",
+    "provider": "huggingface",
+    "repo_id": "ISTA-DASLab/Qwen3.8-27B-GSQ-RCO-GGUF",
+    "revision": "main"
+  },
+  "validation": {
+    "confidence": "medium",
+    "status": "warning",
+    "warnings": [
+      "Model card architecture qwen3 does not match GGUF architecture qwen35."
+    ]
+  }
+}

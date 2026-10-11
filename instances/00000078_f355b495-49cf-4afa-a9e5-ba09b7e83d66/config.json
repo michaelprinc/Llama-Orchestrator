@@ -5,12 +5,12 @@
     "instance_no": "00000078",
     "display_name": "Qwen3.6 35B A3B MTP GGUF IQ3_S Bytedance",
     "created_at": "2026-06-18T21:10:55Z",
-    "updated_at": "2026-06-18T21:10:56Z",
+    "updated_at": "2026-09-17T18:30:02Z",
     "sort_order": null,
     "binary": {
-        "binary_id": null,
-        "version": "latest",
-        "variant": "win-hip-radeon-x64",
+        "binary_id": "3e20ea75-169b-44fb-b78e-9287d6630114",
+        "version": "b10760",
+        "variant": "win-vulkan-x64",
         "source_url": null,
         "sha256": null
     },
@@ -24,11 +24,12 @@
         "host": "127.0.0.1",
         "port": 8077,
         "timeout": 600,
-        "parallel": 1
+        "parallel": 1,
+        "disable_fit": true
     },
     "gpu": {
         "backend": "vulkan",
-        "device_id": 2,
+        "device_id": 1,
         "layers": 999
     },
     "env": {},
@@ -36,7 +37,7 @@
         "--parallel",
         "1",
         "--device",
-        "Vulkan2",
+        "Vulkan1",
         "--main-gpu",
         "0",
         "--split-mode",
@@ -100,7 +101,8 @@
             "logs.stdout",
             "logs.stderr",
             "logs.max_size_mb",
-            "logs.rotation"
+            "logs.rotation",
+            "server.disable_fit"
         ],
         "dynamic": [
             "tags",
@@ -123,7 +125,9 @@
             "restart_policy.max_retries",
             "restart_policy.backoff_multiplier",
             "restart_policy.initial_delay",
-            "restart_policy.max_delay"
+            "restart_policy.max_delay",
+            "healthcheck.execution_mode",
+            "healthcheck.allowlist_directory"
         ]
     },
     "model_metadata": {
@@ -436,6 +440,8 @@
         ],
         "expected_body": null,
         "custom_script": null,
+        "execution_mode": "disabled",
+        "allowlist_directory": null,
         "interval": 10,
         "timeout": 5,
         "retries": 3,
