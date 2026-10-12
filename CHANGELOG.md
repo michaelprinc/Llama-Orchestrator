@@ -65,6 +65,14 @@ and `LO_IMPLEMENTATION_REPORT_2026-09-07.md`.
   `get_project_root()` directly.
 - pydantic v2 modernization in `binaries/schema.py`: deprecated `class Config` blocks
   removed in favour of explicit `@field_serializer(..., when_used="json")`.
+- Curated argument catalog was missing four flags used by newer tracked instance
+  configs: `--mmproj-device`, `--spec-ngram-mod-n-match`, `--spec-ngram-mod-n-min`
+  and `--spec-ngram-mod-n-max`. All four are value-taking flags and are now declared
+  in `_KNOWN_VALUE_FLAGS`, so the instance-config alignment test passes against the
+  full tracked `instances/` set.
+- `test_lint_read_only_checkout_creates_zero_files` was not hermetic: the lint stage
+  warns when `model.threads` exceeds `os.cpu_count()`, which is true on 2-core CI
+  runners and added an unrelated issue to the result. The test now pins the core count.
 
 ### Removed
 

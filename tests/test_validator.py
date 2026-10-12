@@ -230,6 +230,13 @@ class TestValidateLogDirectory:
             "llama_orchestrator.config.validator.get_project_root",
             lambda: tmp_path
         )
+        # Pin the core count so the lint's "threads exceed CPU cores" warning is
+        # deterministic: CI runners report 2-4 cores, which would add an
+        # unrelated model.threads warning to the result.
+        monkeypatch.setattr(
+            "llama_orchestrator.config.validator.os.cpu_count",
+            lambda: 64
+        )
 
         before = {str(p) for p in tmp_path.rglob("*")}
         # Simulate a read-only checkout (best effort; the rglob diff is authoritative).

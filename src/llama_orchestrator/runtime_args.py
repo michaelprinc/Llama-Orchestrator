@@ -261,7 +261,7 @@ _KNOWN_VALUE_FLAGS: frozenset[str] = frozenset({
     "--slot-save-path", "--timeout",
     # --- model loading ---
     "--model", "--model-draft", "--lora", "--lora-scale", "--lora-init",
-    "--mmproj",
+    "--mmproj", "--mmproj-device",
     # --- GPU / device ---
     "--device", "--device-draft", "--main-gpu", "--gpu-layers",
     "--gpu-layers-draft", "--n-gpu-layers", "--n-gpu-layers-draft",
@@ -284,6 +284,8 @@ _KNOWN_VALUE_FLAGS: frozenset[str] = frozenset({
     # --- speculative decoding ---
     "--spec-type", "--spec-draft-n-max", "--spec-draft-n-min",
     "--spec-draft-p-min", "--spec-draft-type-k", "--spec-draft-type-v",
+    "--spec-ngram-mod-n-match", "--spec-ngram-mod-n-min",
+    "--spec-ngram-mod-n-max",
     "--draft-max", "--draft-min", "--draft-p-min", "--draft-block-size",
     "--mtp-head",
     # --- checkpoints / context checkpoints ---
