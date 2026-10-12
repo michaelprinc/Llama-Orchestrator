@@ -1,3 +1,4 @@
+from datetime import UTC
 from pathlib import Path
 from unittest.mock import patch
 
@@ -9,6 +10,7 @@ from llama_orchestrator.config.schema import (
     ServerConfig,
 )
 from llama_orchestrator.engine.command import build_command, validate_executable
+from llama_orchestrator.naming import DIFFUSION_RUNNER_BASE, executable_name
 
 
 def _config() -> InstanceConfig:
@@ -26,7 +28,7 @@ def test_build_command_uses_diffusion_adapter() -> None:
     with patch("llama_orchestrator.engine.command.get_llama_server_path", return_value=Path("C:/bin/llama-server.exe")):
         command = build_command(_config())
     assert command[1:3] == ["-m", "llama_orchestrator.diffusion_http_adapter"]
-    assert command[command.index("--runner") + 1].endswith("llama-diffusion-gemma-visual-server.exe")
+    assert command[command.index("--runner") + 1] == str(Path("C:/bin") / executable_name(DIFFUSION_RUNNER_BASE))
     assert command[command.index("--max-tokens") + 1] == "100000"
 
 
@@ -39,7 +41,7 @@ def test_build_command_appends_config_args() -> None:
 
 
 def test_validate_executable_checks_diffusion_runner(tmp_path: Path) -> None:
-    runner = tmp_path / "llama-diffusion-gemma-visual-server.exe"
+    runner = tmp_path / executable_name(DIFFUSION_RUNNER_BASE)
     runner.touch()
     with patch("llama_orchestrator.engine.command.get_llama_server_path", return_value=tmp_path / "llama-server.exe"):
         valid, message = validate_executable(_config())
@@ -60,12 +62,13 @@ def test_is_llama_server_process_accepts_diffusion_patterns() -> None:
 
 
 def test_resolve_latest_filters_out_experimental_binaries() -> None:
-    from datetime import datetime, timezone
+    from datetime import datetime
+
     from llama_orchestrator.binaries.manager import get_binary_manager
     from llama_orchestrator.binaries.schema import BinaryVersion
-    
+
     manager = get_binary_manager()
-    
+
     # Mock registry binaries
     standard_bin = BinaryVersion(
         id="00000000-0000-0000-0000-000000000001",
@@ -76,7 +79,7 @@ def test_resolve_latest_filters_out_experimental_binaries() -> None:
         path=Path("bins/1"),
         size_bytes=1000,
         executables=[],
-        installed_at=datetime(2026, 6, 10, tzinfo=timezone.utc),
+        installed_at=datetime(2026, 6, 10, tzinfo=UTC),
     )
     experimental_bin = BinaryVersion(
         id="00000000-0000-0000-0000-000000000002",
@@ -87,12 +90,12 @@ def test_resolve_latest_filters_out_experimental_binaries() -> None:
         path=Path("bins/2"),
         size_bytes=1000,
         executables=[],
-        installed_at=datetime(2026, 6, 13, tzinfo=timezone.utc),  # Installed later!
+        installed_at=datetime(2026, 6, 13, tzinfo=UTC),  # Installed later!
     )
-    
+
     with patch.object(manager.registry, "list_all", return_value=[standard_bin, experimental_bin]):
         resolved = manager.resolve(BinaryConfig(version="latest", variant="win-vulkan-x64"))
-        
+
     assert resolved is not None
     # Must resolve to the standard one, even though the experimental one is newer (installed later)
     assert resolved.id == standard_bin.id

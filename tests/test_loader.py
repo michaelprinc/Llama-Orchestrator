@@ -3,7 +3,6 @@ Tests for configuration loader.
 """
 
 import json
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -14,12 +13,13 @@ from llama_orchestrator.config import (
     ModelConfig,
     load_all_instances,
     load_config,
+    repair_config,
     save_config,
 )
 from llama_orchestrator.config.loader import (
     discover_instances,
-    get_instances_dir,
     get_instance_catalog_db_path,
+    get_instances_dir,
     get_project_root,
     load_config_from_dict,
     resolve_instance_selector,
@@ -28,7 +28,7 @@ from llama_orchestrator.config.loader import (
 
 class TestLoadConfig:
     """Tests for load_config function."""
-    
+
     def test_load_valid_config(self, tmp_path: Path) -> None:
         """Test loading a valid configuration file."""
         config_data = {
@@ -41,50 +41,50 @@ class TestLoadConfig:
                 "port": 8001,
             },
         }
-        
+
         config_file = tmp_path / "config.json"
         with open(config_file, "w") as f:
             json.dump(config_data, f)
-        
+
         config = load_config(config_file)
-        
+
         assert config.name == "test-instance"
         assert config.model.path == Path("models/test.gguf")
         assert config.server.port == 8001
-    
+
     def test_load_missing_file(self, tmp_path: Path) -> None:
         """Test loading a non-existent file."""
         with pytest.raises(ConfigLoadError) as exc_info:
             load_config(tmp_path / "nonexistent.json")
-        
+
         assert "not found" in str(exc_info.value).lower()
-    
+
     def test_load_invalid_json(self, tmp_path: Path) -> None:
         """Test loading an invalid JSON file."""
         config_file = tmp_path / "config.json"
         config_file.write_text("{ invalid json }")
-        
+
         with pytest.raises(ConfigLoadError) as exc_info:
             load_config(config_file)
-        
+
         assert "invalid json" in str(exc_info.value).lower()
-    
+
     def test_load_invalid_schema(self, tmp_path: Path) -> None:
         """Test loading a file that doesn't match the schema."""
         config_data = {
             "name": "test",
             # Missing required "model" field
         }
-        
+
         config_file = tmp_path / "config.json"
         with open(config_file, "w") as f:
             json.dump(config_data, f)
-        
+
         with pytest.raises(ConfigLoadError) as exc_info:
             load_config(config_file)
-        
+
         assert "validation failed" in str(exc_info.value).lower()
-    
+
     def test_load_with_defaults(self, tmp_path: Path) -> None:
         """Test that missing optional fields get default values."""
         config_data = {
@@ -93,13 +93,13 @@ class TestLoadConfig:
                 "path": "test.gguf",
             },
         }
-        
+
         config_file = tmp_path / "config.json"
         with open(config_file, "w") as f:
             json.dump(config_data, f)
-        
+
         config = load_config(config_file)
-        
+
         # Check defaults are applied
         assert config.server.port == 8001
         assert config.server.host == "127.0.0.1"
@@ -109,8 +109,32 @@ class TestLoadConfig:
         assert "server.host" in config.parameter_mutability.static
         assert "healthcheck.interval" in config.parameter_mutability.dynamic
 
-    def test_load_legacy_config_backfills_identity_metadata(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        """Test that legacy configs receive persisted identity metadata on load."""
+    def test_load_legacy_config_is_pure_read(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """R16/D1: load_config never mutates disk — no backfill persistence, no catalog."""
+        monkeypatch.setattr("llama_orchestrator.config.loader.get_project_root", lambda: tmp_path)
+        config_path = tmp_path / "instances" / "legacy-name" / "config.json"
+        config_path.parent.mkdir(parents=True)
+        original = json.dumps({
+            "name": "legacy-name",
+            "model": {"path": "models/test.gguf"},
+        })
+        config_path.write_text(original, encoding="utf-8")
+        mtime_before = config_path.stat().st_mtime_ns
+
+        config = load_config(config_path)
+
+        # Identity defaults are applied in memory only...
+        assert config.instance_no is None  # not allocated by a pure read
+        assert config.display_name == "legacy-name"
+        assert config.schema_version == "2"
+        # ...and the file on disk is byte-identical (no backfill-on-read write)
+        assert config_path.read_text(encoding="utf-8") == original
+        assert config_path.stat().st_mtime_ns == mtime_before
+        # No catalog DB was created as a side effect of the read
+        assert not get_instance_catalog_db_path().exists()
+
+    def test_repair_config_backfills_identity_metadata(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """R16/D1: explicit repair_config persists legacy identity metadata + catalog."""
         monkeypatch.setattr("llama_orchestrator.config.loader.get_project_root", lambda: tmp_path)
         config_path = tmp_path / "instances" / "legacy-name" / "config.json"
         config_path.parent.mkdir(parents=True)
@@ -119,7 +143,7 @@ class TestLoadConfig:
             "model": {"path": "models/test.gguf"},
         }), encoding="utf-8")
 
-        config = load_config(config_path)
+        config = repair_config(config_path)
 
         assert config.instance_no is not None
         assert config.display_name == "legacy-name"
@@ -130,20 +154,41 @@ class TestLoadConfig:
         assert saved["display_name"] == "legacy-name"
         assert get_instance_catalog_db_path().exists()
 
+    def test_discover_instances_normalizes_legacy_configs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Discovery entry points explicitly repair legacy configs before yielding."""
+        monkeypatch.setattr("llama_orchestrator.config.loader.get_project_root", lambda: tmp_path)
+        instances_dir = tmp_path / "instances"
+        for name in ("legacy-a", "legacy-b"):
+            cfg_dir = instances_dir / name
+            cfg_dir.mkdir(parents=True)
+            (cfg_dir / "config.json").write_text(json.dumps({
+                "name": name,
+                "model": {"path": f"models/{name}.gguf"},
+            }), encoding="utf-8")
+
+        discovered = list(discover_instances())
+
+        assert sorted(name for name, _ in discovered) == ["legacy-a", "legacy-b"]
+        for name in ("legacy-a", "legacy-b"):
+            saved = json.loads((instances_dir / name / "config.json").read_text(encoding="utf-8"))
+            assert saved["instance_uid"]
+            assert saved["instance_no"]
+            assert saved["schema_version"] == "2"
+
 
 class TestLoadConfigFromDict:
     """Tests for load_config_from_dict function."""
-    
+
     def test_load_valid_dict(self) -> None:
         """Test loading from a valid dictionary."""
         data = {
             "name": "test",
             "model": {"path": "test.gguf"},
         }
-        
+
         config = load_config_from_dict(data)
         assert config.name == "test"
-    
+
     def test_load_invalid_dict(self) -> None:
         """Test loading from an invalid dictionary."""
         with pytest.raises(ConfigLoadError):
@@ -152,22 +197,22 @@ class TestLoadConfigFromDict:
 
 class TestSaveConfig:
     """Tests for save_config function."""
-    
+
     def test_save_config(self, tmp_path: Path) -> None:
         """Test saving a configuration to a file."""
         config = InstanceConfig(
             name="test",
             model=ModelConfig(path=Path("test.gguf")),
         )
-        
+
         saved_path = save_config(config, tmp_path / "config.json")
-        
+
         assert saved_path.exists()
-        
+
         # Reload and verify
         with open(saved_path) as f:
             data = json.load(f)
-        
+
         assert data["name"] == "test"
         assert data["model"]["path"] == "test.gguf"
         assert "parameter_mutability" in data
@@ -266,25 +311,25 @@ class TestSaveConfig:
 
 class TestDiscoverInstances:
     """Tests for discover_instances function."""
-    
+
     def test_discover_in_empty_dir(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test discovery in empty instances directory."""
         instances_dir = tmp_path / "instances"
         instances_dir.mkdir()
-        
+
         # Mock get_instances_dir to return our temp directory
         monkeypatch.setattr(
             "llama_orchestrator.config.loader.get_instances_dir",
             lambda: instances_dir
         )
-        
+
         result = list(discover_instances())
         assert result == []
-    
+
     def test_discover_with_instances(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Test discovery with configured instances."""
         instances_dir = tmp_path / "instances"
-        
+
         # Create two instances
         for name in ["instance-a", "instance-b"]:
             instance_dir = instances_dir / name
@@ -294,7 +339,7 @@ class TestDiscoverInstances:
                 "name": name,
                 "model": {"path": "test.gguf"},
             }))
-        
+
         monkeypatch.setattr(
             "llama_orchestrator.config.loader.get_instances_dir",
             lambda: instances_dir
@@ -303,9 +348,9 @@ class TestDiscoverInstances:
             "llama_orchestrator.config.loader.get_project_root",
             lambda: tmp_path
         )
-        
+
         result = list(discover_instances())
-        
+
         assert len(result) == 2
         names = [r[0] for r in result]
         assert "instance-a" in names
@@ -330,13 +375,13 @@ class TestDiscoverInstances:
 
 class TestProjectPaths:
     """Tests for path helper functions."""
-    
+
     def test_get_project_root(self) -> None:
         """Test that project root is found correctly."""
         root = get_project_root()
         # Should contain pyproject.toml
         assert (root / "pyproject.toml").exists() or root == Path.cwd()
-    
+
     def test_get_instances_dir(self) -> None:
         """Test getting instances directory."""
         instances_dir = get_instances_dir()
@@ -349,7 +394,7 @@ class TestConfigLoaderCaching:
     def test_config_loader_caching(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Verify load_config cache hits, misses, and invalidation on save."""
         monkeypatch.setattr("llama_orchestrator.config.loader.get_project_root", lambda: tmp_path)
-        
+
         # 1. Create a config file
         config_data = {
             "name": "cache-test",
@@ -362,29 +407,29 @@ class TestConfigLoaderCaching:
         config_path = config_dir / "config.json"
         with open(config_path, "w", encoding="utf-8") as f:
             json.dump(config_data, f)
-            
+
         # Clear the cache first to ensure no cross-test pollution
         from llama_orchestrator.config.loader import _CONFIG_CACHE
         _CONFIG_CACHE.clear()
-        
+
         # 2. First load (cache miss)
         config1 = load_config(config_path)
         assert config1.name == "cache-test"
-        
+
         # Verify it was cached
         assert config_path.resolve() in _CONFIG_CACHE
-        
+
         # 3. Second load (cache hit)
         config2 = load_config(config_path)
         assert config2 is config1  # Exact same object reference!
-        
+
         # 4. Save config (cache invalidation)
         config2.display_name = "New Display Name"
         save_config(config2, config_path)
-        
+
         # Verify it was evicted from cache
         assert config_path.resolve() not in _CONFIG_CACHE
-        
+
         # 5. Third load (cache miss again)
         config3 = load_config(config_path)
         assert config3 is not config1

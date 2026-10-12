@@ -42,7 +42,16 @@ from llama_orchestrator.engine.state import (
     save_runtime,
     save_state,
 )
-from llama_orchestrator.health.checker import HealthCheckResult, HealthCheckStatus
+from llama_orchestrator.health.checker import (
+    HealthCheckResult,
+    HealthCheckStatus,
+    classify_probe_outcome,
+)
+from llama_orchestrator.health.probes import (
+    ERROR_KIND_BODY_MISMATCH,
+    ERROR_KIND_TIMEOUT,
+    ERROR_KIND_UNREACHABLE,
+)
 
 if TYPE_CHECKING:
     pass
@@ -64,6 +73,9 @@ class AsyncProbeResult:
     message: str
     response_time_ms: float
     raw: dict[str, Any] | None = None
+    # Structured failure kind (ERROR_KIND_* from llama_orchestrator.health.probes);
+    # ``None`` means no structured cause was recorded.
+    error_kind: str | None = None
 
 
 @dataclass
@@ -156,6 +168,7 @@ async def _probe_http_async(
                 message=f"Expected body not found: {expected_body}",
                 response_time_ms=elapsed_ms,
                 raw={"text_snippet": resp.text[:200]},
+                error_kind=ERROR_KIND_BODY_MISMATCH,
             )
 
         return AsyncProbeResult(
@@ -168,6 +181,7 @@ async def _probe_http_async(
         )
 
     except TimeoutError:
+        # asyncio.wait_for expiry (builtin TimeoutError / asyncio.TimeoutError)
         elapsed_ms = (time.perf_counter() - start) * 1000
         return AsyncProbeResult(
             name="",
@@ -175,6 +189,21 @@ async def _probe_http_async(
             success=False,
             message=f"Timeout after {timeout}s",
             response_time_ms=elapsed_ms,
+            error_kind=ERROR_KIND_TIMEOUT,
+        )
+
+    except httpx.TimeoutException as exc:
+        # httpx's own timeout types (Read/Connect/Write/Pool) do NOT subclass
+        # the builtin TimeoutError — they must be classified explicitly or a
+        # real read timeout would fall into the generic error branch (R12/F6).
+        elapsed_ms = (time.perf_counter() - start) * 1000
+        return AsyncProbeResult(
+            name="",
+            status_code=None,
+            success=False,
+            message=f"Timeout after {timeout}s: {exc}",
+            response_time_ms=elapsed_ms,
+            error_kind=ERROR_KIND_TIMEOUT,
         )
 
     except httpx.ConnectError as exc:
@@ -185,6 +214,7 @@ async def _probe_http_async(
             success=False,
             message=f"Connection failed: {exc}",
             response_time_ms=elapsed_ms,
+            error_kind=ERROR_KIND_UNREACHABLE,
         )
 
     except httpx.HTTPStatusError as exc:
@@ -243,6 +273,7 @@ async def _probe_async(
                 success=False,
                 message=f"TCP connection failed (error: {result})",
                 response_time_ms=elapsed_ms,
+                error_kind=ERROR_KIND_UNREACHABLE,
             )
         except TimeoutError:
             elapsed_ms = (time.perf_counter() - start) * 1000
@@ -252,6 +283,7 @@ async def _probe_async(
                 success=False,
                 message=f"TCP timeout after {healthcheck.timeout}s",
                 response_time_ms=elapsed_ms,
+                error_kind=ERROR_KIND_TIMEOUT,
             )
         except Exception as exc:
             elapsed_ms = (time.perf_counter() - start) * 1000
@@ -299,15 +331,13 @@ async def check_one_async(
             raw_response=probe_result.raw,
         )
 
-    msg_lower = probe_result.message.lower()
-    if probe_result.status_code == 503:
-        status = HealthCheckStatus.LOADING
-    elif "timeout" in msg_lower:
-        status = HealthCheckStatus.TIMEOUT
-    elif any(t in msg_lower for t in ["connection failed", "refused", "unreachable"]):
-        status = HealthCheckStatus.UNREACHABLE
-    else:
-        status = HealthCheckStatus.ERROR
+    # Structured classification (R12/F6): the probe's error_kind and status
+    # code decide the status — never the message text.
+    status = classify_probe_outcome(
+        probe_result.success,
+        probe_result.status_code,
+        probe_result.error_kind,
+    )
 
     return HealthCheckResult(
         status=status,

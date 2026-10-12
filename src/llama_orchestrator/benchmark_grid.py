@@ -529,7 +529,9 @@ def settings_for_combination(
 ) -> BenchmarkSettings:
     """Apply request parameters to benchmark settings without mutating the base settings."""
     request_names = {spec.name for spec in sampling_parameter_catalog(base_settings)}
-    changes = {
+    # Values span several field types (float/int/str/bool); dataclasses.replace
+    # passes them through unchecked, so Any is the honest value type here.
+    changes: dict[str, Any] = {
         name: value
         for name, value in combination.parameters.items()
         if name in request_names

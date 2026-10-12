@@ -5,14 +5,17 @@ Does NOT modify test_gui.py — runs independently.
 """
 
 import json
+import re
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
+
+from llama_orchestrator.naming import SERVER_BASE, executable_name
 
 
 def test_next_clone_name_returns_first_available_candidate() -> None:
@@ -48,7 +51,7 @@ def test_version_browser_rows_show_uuid_and_package_readiness(tmp_path: Path) ->
         version="rocm-r3",
         variant="win-hip-gfx1030-rocm10-r3",
         download_url="local://r3",
-        installed_at=datetime(2026, 8, 26, tzinfo=timezone.utc),
+        installed_at=datetime(2026, 8, 26, tzinfo=UTC),
         path=Path("unused"),
         size_bytes=3 * 1024 * 1024,
         sha256="a" * 64,
@@ -58,7 +61,7 @@ def test_version_browser_rows_show_uuid_and_package_readiness(tmp_path: Path) ->
         version="rocm-r2",
         variant="win-hip-gfx1030-rocm10-r2",
         download_url="local://r2",
-        installed_at=datetime(2026, 8, 25, tzinfo=timezone.utc),
+        installed_at=datetime(2026, 8, 25, tzinfo=UTC),
         path=Path("unused"),
     )
     ready_dir = tmp_path / str(ready.id)
@@ -71,7 +74,7 @@ def test_version_browser_rows_show_uuid_and_package_readiness(tmp_path: Path) ->
     assert rows[0][3] == "3.0 MiB"
     assert rows[0][5] == "Ready"
     assert rows[1][0] == str(broken.id)
-    assert rows[1][5] == "Missing llama-server.exe"
+    assert rows[1][5] == f"Missing {executable_name(SERVER_BASE)}"
 
 
 def test_local_package_import_validation_normalizes_safe_source(tmp_path: Path) -> None:
@@ -163,7 +166,7 @@ def test_local_package_import_validation_rejects_missing_or_managed_source(tmp_p
     bins_dir = tmp_path / "project" / "bins"
     incomplete = tmp_path / "incomplete"
     incomplete.mkdir()
-    with pytest.raises(ValueError, match="llama-server.exe"):
+    with pytest.raises(ValueError, match=re.escape(executable_name(SERVER_BASE))):
         validate_local_package_import(
             LocalPackageImport(incomplete, "rocm-r3", "win-hip-gfx1030-rocm10-r3"),
             bins_dir,
@@ -206,7 +209,6 @@ class TestTableSortCallback:
         """First click on a column should set the ↑ (SORT_ASC) indicator."""
         from llama_orchestrator.gui.table import (
             SORT_ASC,
-            SORT_DESC,
             _make_sort_callback,
         )
 
@@ -345,8 +347,8 @@ class TestGpuInventory:
 
     def test_alias_button_shown_only_when_gpu_name_known(self):
         """GPU with name -> button rendered; GPU with name=None -> no button."""
-        from llama_orchestrator.gui.gpu_inventory import render_gpu_inventory
         from llama_orchestrator.engine.detection import DetectedGpu
+        from llama_orchestrator.gui.gpu_inventory import render_gpu_inventory
 
         # Create a parent mock with winfo_children returning empty
         parent = MagicMock()
@@ -366,8 +368,8 @@ class TestGpuInventory:
 
     def test_render_clears_existing_widgets(self):
         """Second render call should destroy first render's widgets."""
-        from llama_orchestrator.gui.gpu_inventory import render_gpu_inventory
         from llama_orchestrator.engine.detection import DetectedGpu
+        from llama_orchestrator.gui.gpu_inventory import render_gpu_inventory
 
         # Track widgets created so we can return them on second call
         created_widgets: list = []
@@ -397,14 +399,14 @@ class TestGpuInventory:
             assert len(created_widgets) == 2  # 1 label + 1 button (name is known)
 
             # Second render — should destroy first render's widgets
-            widgets2 = render_gpu_inventory(parent, gpus, {}, 15, selected_adapter_names=set())
+            render_gpu_inventory(parent, gpus, {}, 15, selected_adapter_names=set())
             for w in widgets1:
                 assert w.destroy.called
 
     def test_no_alias_button_when_gpu_name_none(self):
         """GPU with name=None should NOT render an alias button."""
-        from llama_orchestrator.gui.gpu_inventory import render_gpu_inventory
         from llama_orchestrator.engine.detection import DetectedGpu
+        from llama_orchestrator.gui.gpu_inventory import render_gpu_inventory
 
         parent = MagicMock()
         parent.winfo_children.return_value = []
@@ -434,7 +436,7 @@ class TestMetadataCacheThreadSafety:
 
         cache = MetadataCache(max_size=1000)
         errors = []
-        barrier = threading.Barrier(20)
+        threading.Barrier(20)
 
         def writer(thread_id: int):
             try:
@@ -689,8 +691,8 @@ class TestGpuSelection:
 
     def test_button_selected_color_when_selected(self):
         """Selected GPU button should have green background."""
-        from llama_orchestrator.gui.gpu_inventory import render_gpu_inventory
         from llama_orchestrator.engine.detection import DetectedGpu
+        from llama_orchestrator.gui.gpu_inventory import render_gpu_inventory
 
         parent = MagicMock()
         parent.winfo_children.return_value = []
@@ -713,8 +715,8 @@ class TestGpuSelection:
 
     def test_button_unselected_color_when_not_selected(self):
         """Unselected GPU button should have gray background."""
-        from llama_orchestrator.gui.gpu_inventory import render_gpu_inventory
         from llama_orchestrator.engine.detection import DetectedGpu
+        from llama_orchestrator.gui.gpu_inventory import render_gpu_inventory
 
         parent = MagicMock()
         parent.winfo_children.return_value = []
@@ -737,8 +739,8 @@ class TestGpuSelection:
 
     def test_button_text_shows_alias_when_selected(self):
         """Button text should show the alias when GPU is selected."""
-        from llama_orchestrator.gui.gpu_inventory import render_gpu_inventory
         from llama_orchestrator.engine.detection import DetectedGpu
+        from llama_orchestrator.gui.gpu_inventory import render_gpu_inventory
 
         parent = MagicMock()
         parent.winfo_children.return_value = []
@@ -760,8 +762,8 @@ class TestGpuSelection:
 
     def test_on_gpu_select_callback_is_bound(self):
         """Clicking an alias button should call on_gpu_select."""
-        from llama_orchestrator.gui.gpu_inventory import render_gpu_inventory
         from llama_orchestrator.engine.detection import DetectedGpu
+        from llama_orchestrator.gui.gpu_inventory import render_gpu_inventory
 
         parent = MagicMock()
         parent.winfo_children.return_value = []
@@ -790,8 +792,8 @@ class TestGpuSelection:
 
     def test_multiple_gpus_can_be_selected(self):
         """Multiple GPU buttons can be selected simultaneously."""
-        from llama_orchestrator.gui.gpu_inventory import render_gpu_inventory
         from llama_orchestrator.engine.detection import DetectedGpu
+        from llama_orchestrator.gui.gpu_inventory import render_gpu_inventory
 
         parent = MagicMock()
         parent.winfo_children.return_value = []

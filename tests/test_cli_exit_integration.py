@@ -1,7 +1,6 @@
 """CLI integration tests for detach routing, exit codes, and daemon service commands."""
 
 from pathlib import Path
-
 from unittest.mock import MagicMock, patch
 
 from typer.testing import CliRunner
@@ -9,7 +8,6 @@ from typer.testing import CliRunner
 from llama_orchestrator.cli import app
 from llama_orchestrator.cli_exit_codes import ExitCode
 from llama_orchestrator.engine.state import HealthStatus, InstanceState, InstanceStatus
-
 
 runner = CliRunner()
 

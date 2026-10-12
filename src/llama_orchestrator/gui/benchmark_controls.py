@@ -7,8 +7,8 @@ Handles benchmark buttons, queue management, and serial/batch operations.
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk
 from collections.abc import Callable
+from tkinter import ttk
 
 
 def build_benchmark_frame(

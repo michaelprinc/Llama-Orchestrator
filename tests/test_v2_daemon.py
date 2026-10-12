@@ -4,10 +4,10 @@ Tests for daemon service V2.
 Tests event-based loop, graceful shutdown, and reconciliation integration.
 """
 
+import subprocess
+import sys
 import threading
 import time
-
-import pytest
 
 from llama_orchestrator.daemon.service import (
     DEFAULT_CHECK_INTERVAL,
@@ -15,7 +15,6 @@ from llama_orchestrator.daemon.service import (
     DaemonService,
     DaemonStatus,
     get_daemon_status,
-    get_stop_request_file,
     is_daemon_running,
     stop_daemon,
 )
@@ -23,7 +22,7 @@ from llama_orchestrator.daemon.service import (
 
 class TestDaemonService:
     """Tests for DaemonService class."""
-    
+
     def test_daemon_initialization(self):
         """Test daemon service initialization."""
         daemon = DaemonService(
@@ -31,63 +30,63 @@ class TestDaemonService:
             reconcile_interval=30.0,
             shutdown_timeout=15.0,
         )
-        
+
         assert daemon.check_interval == 5.0
         assert daemon.reconcile_interval == 30.0
         assert daemon.shutdown_timeout == 15.0
         assert daemon.is_running is True  # Not stopped yet
-    
+
     def test_daemon_defaults(self):
         """Test daemon service default values."""
         daemon = DaemonService()
-        
+
         assert daemon.check_interval == DEFAULT_CHECK_INTERVAL
         assert daemon.shutdown_timeout == DEFAULT_SHUTDOWN_TIMEOUT
-    
+
     def test_stop_event(self):
         """Test stop event mechanism."""
         daemon = DaemonService()
-        
+
         # Initially not stopped
         assert daemon._stop_event.is_set() is False
-        
+
         # Stop it
         daemon._stop_event.set()
-        
+
         # Now stopped
         assert daemon._stop_event.is_set() is True
         assert daemon.is_running is False
-    
+
     def test_uptime_tracking(self):
         """Test uptime tracking."""
         daemon = DaemonService()
-        
+
         # No start time yet
         assert daemon.uptime == 0.0
-        
+
         # Simulate start
         daemon._start_time = time.time() - 10
-        
+
         # Should show ~10 seconds
         assert 9.5 <= daemon.uptime <= 10.5
-    
+
     def test_shutdown_callback(self):
         """Test shutdown callback registration."""
         daemon = DaemonService()
-        
+
         callback_called = [False]
-        
+
         def on_shutdown():
             callback_called[0] = True
-        
+
         daemon.register_shutdown_callback(on_shutdown)
-        
+
         assert daemon._on_shutdown is not None
 
 
 class TestDaemonStatus:
     """Tests for DaemonStatus."""
-    
+
     def test_daemon_status_dataclass(self):
         """Test DaemonStatus dataclass."""
         status = DaemonStatus(
@@ -98,17 +97,17 @@ class TestDaemonStatus:
             health_checks_performed=50,
             reconciliations_performed=10,
         )
-        
+
         assert status.running is True
         assert status.pid == 12345
         assert status.uptime == 100.5
         assert status.instances_monitored == 3
         assert status.reconciliations_performed == 10
-    
+
     def test_daemon_status_defaults(self):
         """Test DaemonStatus default values."""
         status = DaemonStatus(running=False)
-        
+
         assert status.pid is None
         assert status.uptime is None
         assert status.instances_monitored == 0
@@ -116,18 +115,18 @@ class TestDaemonStatus:
 
 class TestDaemonHelpers:
     """Tests for daemon helper functions."""
-    
+
     def test_is_daemon_running_no_pid_file(self):
         """Test is_daemon_running when no PID file exists."""
         # Clean state should return False
         # (May return True if daemon is actually running in CI)
         result = is_daemon_running()
         assert isinstance(result, bool)
-    
+
     def test_get_daemon_status(self):
         """Test get_daemon_status returns valid status."""
         status = get_daemon_status()
-        
+
         assert isinstance(status, DaemonStatus)
         assert isinstance(status.running, bool)
 
@@ -149,38 +148,104 @@ class TestDaemonHelpers:
         assert stop_daemon() is True
         assert stop_file.exists() is False
 
+    @staticmethod
+    def _dead_pid() -> int:
+        """Spawn a child and wait for it, yielding a guaranteed-dead PID."""
+        child = subprocess.Popen([sys.executable, "-c", "pass"])
+        child.wait()
+        return child.pid
+
+    def test_stop_daemon_dead_pid_returns_true(self, tmp_path, monkeypatch):
+        """R26: daemon dying before the escalation signal must still stop cleanly (True)."""
+        pid_file = tmp_path / "daemon.pid"
+        stop_file = tmp_path / "daemon.stop"
+        pid_file.write_text(str(self._dead_pid()))
+
+        monkeypatch.setattr("llama_orchestrator.daemon.service.get_pid_file", lambda: pid_file)
+        monkeypatch.setattr(
+            "llama_orchestrator.daemon.service.get_stop_request_file", lambda: stop_file
+        )
+        # Liveness still reports alive (stale read); the real os.kill then hits the dead PID.
+        monkeypatch.setattr(
+            "llama_orchestrator.daemon.service.is_daemon_running", lambda: True
+        )
+        monkeypatch.setattr("llama_orchestrator.daemon.service.time.sleep", lambda _s: None)
+
+        assert stop_daemon() is True
+
+    def test_stop_daemon_windows_dead_pid_force_kill_check_false(self, tmp_path, monkeypatch):
+        """R26: on Windows the /F escalation uses check=False + a post-check, not a raise."""
+        pid_file = tmp_path / "daemon.pid"
+        stop_file = tmp_path / "daemon.stop"
+        dead_pid = self._dead_pid()
+        pid_file.write_text(str(dead_pid))
+
+        monkeypatch.setattr("llama_orchestrator.daemon.service.get_pid_file", lambda: pid_file)
+        monkeypatch.setattr(
+            "llama_orchestrator.daemon.service.get_stop_request_file", lambda: stop_file
+        )
+        monkeypatch.setattr(sys, "platform", "win32")
+        monkeypatch.setattr("llama_orchestrator.daemon.service.time.sleep", lambda _s: None)
+
+        # Alive through entry + cooperative loop (50) + first taskkill wait loop (20),
+        # dead at the post-check after taskkill /F (call 72).
+        calls = {"n": 0}
+
+        def fake_running() -> bool:
+            calls["n"] += 1
+            return calls["n"] < 72
+
+        monkeypatch.setattr(
+            "llama_orchestrator.daemon.service.is_daemon_running", fake_running
+        )
+
+        runs: list[tuple[list[str], dict]] = []
+
+        def fake_run(cmd, **kwargs):
+            runs.append((cmd, kwargs))
+            return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+        monkeypatch.setattr("llama_orchestrator.daemon.service.subprocess.run", fake_run)
+
+        assert stop_daemon() is True
+
+        # Escalated force kill was issued with check=False (a dead PID exits non-zero).
+        force_kills = [kw for cmd, kw in runs if "/F" in cmd]
+        assert len(force_kills) == 1
+        assert force_kills[0].get("check") is False
+
 
 class TestEventBasedLoop:
     """Tests for event-based loop mechanism."""
-    
+
     def test_event_wait_timeout(self):
         """Test that Event.wait() respects timeout."""
         event = threading.Event()
-        
+
         start = time.time()
         event.wait(timeout=0.1)
         elapsed = time.time() - start
-        
+
         # Should complete near 0.1 seconds
         assert 0.08 <= elapsed <= 0.3
-    
+
     def test_event_immediate_response(self):
         """Test that Event.wait() responds immediately when set."""
         event = threading.Event()
-        
+
         def set_after_delay():
             time.sleep(0.05)
             event.set()
-        
+
         thread = threading.Thread(target=set_after_delay)
         thread.start()
-        
+
         start = time.time()
         event.wait(timeout=1.0)  # Long timeout
         elapsed = time.time() - start
-        
+
         thread.join()
-        
+
         # Should complete much faster than timeout
         assert elapsed < 0.2
 

@@ -19,7 +19,9 @@ from llama_orchestrator.benchmark_grid import (
 class KvCacheProfileDialog(tk.Toplevel):
     """Dialog for exact KV cache benchmark profile selection."""
 
-    def __init__(self, parent: tk.Misc, selected_profile_ids: Sequence[str]) -> None:
+    # Tk or Toplevel (typeshed has no common nominal base; both satisfy
+    # Toplevel(master) [Misc] and transient(parent) [Wm]).
+    def __init__(self, parent: tk.Tk | tk.Toplevel, selected_profile_ids: Sequence[str]) -> None:
         super().__init__(parent)
         self.title("KV Cache combinations")
         self.resizable(True, True)

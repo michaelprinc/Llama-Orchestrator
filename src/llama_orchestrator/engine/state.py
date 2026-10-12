@@ -17,11 +17,12 @@ import logging
 import shutil
 import sqlite3
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Iterator
+from typing import TYPE_CHECKING, Any
 
 from llama_orchestrator.config import get_state_dir
 
@@ -527,7 +528,7 @@ def record_health_check(
         conn.commit()
 
 
-def get_health_history(name: str, limit: int = 10) -> list[dict]:
+def get_health_history(name: str, limit: int = 10) -> list[dict[str, Any]]:
     """Get recent health check history for an instance."""
     with get_db_connection() as conn:
         rows = conn.execute("""
@@ -675,7 +676,7 @@ def log_event(
     message: str,
     instance_name: str | None = None,
     level: str = "info",
-    meta: dict | None = None,
+    meta: dict[str, Any] | None = None,
 ) -> int:
     """
     Log an event to the database.
@@ -713,7 +714,7 @@ def get_recent_events(
     instance_name: str | None = None,
     level: str | None = None,
     limit: int = 50,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """
     Get recent events from the database.
 
@@ -727,7 +728,7 @@ def get_recent_events(
     """
     with get_db_connection() as conn:
         query = "SELECT * FROM events WHERE 1=1"
-        params: list = []
+        params: list[str | int] = []
 
         if instance_name:
             query += " AND instance_name = ?"
@@ -930,7 +931,7 @@ def save_state_atomic(state: InstanceState, runtime: RuntimeState | None = None)
             raise StateSyncError(state.name, str(e), failed_table) from e
 
 
-def check_state_divergence(name: str) -> dict | None:
+def check_state_divergence(name: str) -> dict[str, Any] | None:
     """
     Check if InstanceState and RuntimeState are in sync for an instance.
 
@@ -983,7 +984,7 @@ def check_state_divergence(name: str) -> dict | None:
         return None
 
 
-def reconcile_state(name: str, prefer: str = "runtime") -> dict:
+def reconcile_state(name: str, prefer: str = "runtime") -> dict[str, Any]:
     """
     Reconcile divergent state for an instance by writing the preferred source.
 
@@ -1053,7 +1054,7 @@ def reconcile_state(name: str, prefer: str = "runtime") -> dict:
     }
 
 
-def list_divergent_instances() -> list[dict]:
+def list_divergent_instances() -> list[dict[str, Any]]:
     """
     List all instances with divergent state between instances and runtime tables.
 
@@ -1075,5 +1076,9 @@ def list_divergent_instances() -> list[dict]:
         return divergent
 
 
-# Initialize database on module import
-init_db()
+# NOTE (R15/D2): the database is NOT initialized at import time.  Importing
+# this module must have no filesystem side effects.  Every entry point
+# (CLI callback, GUI launch, daemon service) calls ``init_db()`` explicitly;
+# it is idempotent (CREATE TABLE IF NOT EXISTS + guarded migration), so
+# repeated calls are safe.  Library consumers that use the state functions
+# directly must call ``init_db()`` once before first use.

@@ -9,8 +9,8 @@ from __future__ import annotations
 
 import logging
 import random
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Callable, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,7 @@ class BackoffConfig:
     jitter: float = 0.1  # 0.0 = no jitter, 1.0 = full jitter
     multiplier: float = 2.0
 
-    def __post_init__(self):
+    def __post_init__(self) -> None:
         """Validate configuration."""
         if not 0 <= self.jitter <= 1:
             raise ValueError("jitter must be between 0 and 1")
@@ -39,19 +39,19 @@ class BackoffConfig:
 class BackoffCalculator:
     """
     Calculates exponential backoff delays with jitter.
-    
+
     The jitter helps prevent thundering herd problems when many
     instances fail and try to reconnect at the same time.
-    
+
     Formula:
         delay = min(base * (multiplier ^ attempt), max_delay)
         jittered_delay = delay * (1 - jitter + random * jitter * 2)
     """
 
-    def __init__(self, config: Optional[BackoffConfig] = None):
+    def __init__(self, config: BackoffConfig | None = None):
         """
         Initialize backoff calculator.
-        
+
         Args:
             config: Backoff configuration, or use defaults
         """
@@ -67,13 +67,13 @@ class BackoffCalculator:
         """Reset attempt counter to zero."""
         self._attempt = 0
 
-    def calculate_delay(self, attempt: Optional[int] = None) -> float:
+    def calculate_delay(self, attempt: int | None = None) -> float:
         """
         Calculate delay for a given attempt.
-        
+
         Args:
             attempt: Attempt number (0-based). If None, uses internal counter.
-            
+
         Returns:
             Delay in seconds with jitter applied
         """
@@ -100,7 +100,7 @@ class BackoffCalculator:
     def next_delay(self) -> float:
         """
         Get delay for next attempt and increment counter.
-        
+
         Returns:
             Delay in seconds for the next attempt
         """
@@ -111,10 +111,10 @@ class BackoffCalculator:
     def get_delay_sequence(self, count: int) -> list[float]:
         """
         Get a sequence of delays for debugging/display.
-        
+
         Args:
             count: Number of delays to calculate
-            
+
         Returns:
             List of delay values (without jitter for reproducibility)
         """
@@ -128,7 +128,7 @@ class BackoffCalculator:
 class RetryHandler:
     """
     Handles retry logic with backoff for health checks.
-    
+
     Provides a clean interface for retrying operations with
     exponential backoff and customizable error handling.
     """
@@ -136,12 +136,12 @@ class RetryHandler:
     def __init__(
         self,
         max_retries: int = 3,
-        backoff: Optional[BackoffCalculator] = None,
-        on_retry: Optional[Callable[[int, Exception, float], None]] = None,
+        backoff: BackoffCalculator | None = None,
+        on_retry: Callable[[int, Exception, float], None] | None = None,
     ):
         """
         Initialize retry handler.
-        
+
         Args:
             max_retries: Maximum number of retry attempts
             backoff: Backoff calculator instance
@@ -162,13 +162,13 @@ class RetryHandler:
         self._consecutive_failures = 0
         self.backoff.reset()
 
-    def record_failure(self, error: Optional[Exception] = None) -> float:
+    def record_failure(self, error: Exception | None = None) -> float:
         """
         Record a failure and get next backoff delay.
-        
+
         Args:
             error: Optional exception that caused the failure
-            
+
         Returns:
             Delay before next retry attempt in seconds
         """
@@ -193,7 +193,7 @@ class RetryHandler:
 class HealthCheckBackoff:
     """
     Specialized backoff for health check monitoring.
-    
+
     Tracks check intervals with increasing delays on failures.
     """
 
@@ -203,40 +203,48 @@ class HealthCheckBackoff:
     jitter: float = 0.1
 
     _failures: int = 0
-    _calculator: Optional[BackoffCalculator] = None
+    _calculator: BackoffCalculator | None = None
 
-    def __post_init__(self):
-        """Initialize calculator."""
-        self._calculator = BackoffCalculator(
-            BackoffConfig(
-                base_delay=self.failure_base,
-                max_delay=self.failure_max,
-                jitter=self.jitter,
+    def _calc(self) -> BackoffCalculator:
+        """Return the backoff calculator, creating it lazily if state was lost.
+
+        R14: the field is typed ``BackoffCalculator | None`` (it can be reset to
+        None by a state-reset path or deserialization); every access goes
+        through this single accessor so callers never see an AttributeError on
+        ``reset()``/``next_delay()``.
+        """
+        if self._calculator is None:
+            self._calculator = BackoffCalculator(
+                BackoffConfig(
+                    base_delay=self.failure_base,
+                    max_delay=self.failure_max,
+                    jitter=self.jitter,
+                )
             )
-        )
+        return self._calculator
 
     def get_next_interval(self, last_success: bool) -> float:
         """
         Get the next check interval based on last result.
-        
+
         Args:
             last_success: Whether the last check was successful
-            
+
         Returns:
             Seconds until next check
         """
         if last_success:
             self._failures = 0
-            self._calculator.reset()
+            self._calc().reset()
             return self.normal_interval
 
         self._failures += 1
-        return self._calculator.next_delay()
+        return self._calc().next_delay()
 
     def reset(self) -> None:
         """Reset to normal interval."""
         self._failures = 0
-        self._calculator.reset()
+        self._calc().reset()
 
     @property
     def is_in_backoff(self) -> bool:
@@ -258,14 +266,14 @@ def calculate_jittered_delay(
 ) -> float:
     """
     Convenience function to calculate a single jittered delay.
-    
+
     Args:
         base: Base delay in seconds
         attempt: Attempt number (0-based)
         max_delay: Maximum delay cap
         multiplier: Exponential multiplier
         jitter: Jitter factor (0-1)
-        
+
     Returns:
         Calculated delay with jitter
     """
@@ -282,11 +290,11 @@ def calculate_jittered_delay(
 def with_jitter(delay: float, jitter_factor: float = 0.1) -> float:
     """
     Add jitter to a delay value.
-    
+
     Args:
         delay: Original delay in seconds
         jitter_factor: Jitter factor (0-1)
-        
+
     Returns:
         Delay with random jitter applied
     """

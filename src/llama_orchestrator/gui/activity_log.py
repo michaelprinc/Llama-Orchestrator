@@ -13,7 +13,7 @@ from tkinter import scrolledtext
 def build_activity_log_frame(
     parent: tk.Widget,
     height: int = 9,
-) -> tuple[tk.Widget, tk.Widget, str]:
+) -> tuple[tk.Frame, scrolledtext.ScrolledText, str]:
     """Build the activity log frame.
 
     Returns:
@@ -99,4 +99,5 @@ def schedule_message_pump(
     """
     if after_id is not None:
         gui_instance.after_cancel(after_id)  # type: ignore[attr-defined]
-    return gui_instance.after(100, gui_instance._pump_messages)  # type: ignore[attr-defined]
+    scheduled: int = gui_instance.after(100, gui_instance._pump_messages)  # type: ignore[attr-defined]
+    return scheduled

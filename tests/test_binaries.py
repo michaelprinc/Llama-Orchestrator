@@ -8,7 +8,7 @@ Tests cover:
 - Download URL construction
 """
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -22,7 +22,6 @@ from llama_orchestrator.binaries.schema import (
     build_cudart_url,
     build_download_url,
 )
-
 
 # =============================================================================
 # Schema Tests
@@ -75,8 +74,8 @@ class TestBinaryVersion:
     def test_binary_version_creation(self):
         """Test creating a BinaryVersion."""
         binary_id = uuid4()
-        now = datetime.now(timezone.utc)
-        
+        now = datetime.now(UTC)
+
         version = BinaryVersion(
             id=binary_id,  # Note: field is 'id', not 'binary_id'
             version="b7572",
@@ -85,7 +84,7 @@ class TestBinaryVersion:
             installed_at=now,
             path=Path("bins") / str(binary_id),
         )
-        
+
         assert version.id == binary_id
         assert version.version == "b7572"
         assert version.variant == "win-vulkan-x64"
@@ -125,38 +124,38 @@ class TestBinaryRegistry:
     def test_registry_with_binaries(self):
         """Test registry with multiple binaries."""
         v1 = BinaryVersion(
-            version="b7572", 
+            version="b7572",
             variant="win-vulkan-x64",
             download_url="https://example.com/v1.zip",
             path=Path("bins/v1"),
         )
         v2 = BinaryVersion(
-            version="b7571", 
+            version="b7571",
             variant="win-cpu-x64",
             download_url="https://example.com/v2.zip",
             path=Path("bins/v2"),
         )
-        
+
         registry = BinaryRegistry(binaries=[v1, v2])
         assert len(registry.binaries) == 2
 
     def test_registry_get_by_id(self):
         """Test finding binary by UUID."""
         v1 = BinaryVersion(
-            version="b7572", 
+            version="b7572",
             variant="win-vulkan-x64",
             download_url="https://example.com/v1.zip",
             path=Path("bins/v1"),
         )
         v2 = BinaryVersion(
-            version="b7571", 
+            version="b7571",
             variant="win-cpu-x64",
             download_url="https://example.com/v2.zip",
             path=Path("bins/v2"),
         )
-        
+
         registry = BinaryRegistry(binaries=[v1, v2])
-        
+
         found = registry.get_by_id(v1.id)
         assert found is not None
         assert found.version == "b7572"
@@ -169,20 +168,20 @@ class TestBinaryRegistry:
     def test_registry_get_by_version(self):
         """Test finding binary by version and variant."""
         v1 = BinaryVersion(
-            version="b7572", 
+            version="b7572",
             variant="win-vulkan-x64",
             download_url="https://example.com/v1.zip",
             path=Path("bins/v1"),
         )
         v2 = BinaryVersion(
-            version="b7571", 
+            version="b7571",
             variant="win-cpu-x64",
             download_url="https://example.com/v2.zip",
             path=Path("bins/v2"),
         )
-        
+
         registry = BinaryRegistry(binaries=[v1, v2])
-        
+
         found = registry.get_by_version("b7572", "win-vulkan-x64")
         assert found is not None
         assert found.id == v1.id
@@ -200,7 +199,7 @@ class TestGitHubReleaseInfo:
         """Test GitHubReleaseInfo creation."""
         info = GitHubReleaseInfo(
             tag_name="b7572",  # Note: field is 'tag_name', not 'version'
-            published_at=datetime.now(timezone.utc),
+            published_at=datetime.now(UTC),
         )
         assert info.tag_name == "b7572"
 
@@ -260,14 +259,14 @@ class TestRegistryFunctions:
     def test_load_empty_registry(self, temp_bins_dir: Path):
         """Test loading registry when file doesn't exist."""
         from llama_orchestrator.binaries.registry import load_registry
-        
+
         registry = load_registry(temp_bins_dir)
         assert registry.binaries == []
 
     def test_save_and_load_registry(self, temp_bins_dir: Path):
         """Test saving and loading registry."""
         from llama_orchestrator.binaries.registry import load_registry, save_registry
-        
+
         # Create a registry with one binary
         version = BinaryVersion(
             version="b7572",
@@ -276,10 +275,10 @@ class TestRegistryFunctions:
             path=Path("bins/test"),
         )
         registry = BinaryRegistry(binaries=[version])
-        
+
         # Save it
         save_registry(temp_bins_dir, registry)
-        
+
         # Load it back
         loaded = load_registry(temp_bins_dir)
         assert len(loaded.binaries) == 1
@@ -288,7 +287,7 @@ class TestRegistryFunctions:
     def test_add_and_remove_binary(self, temp_bins_dir: Path):
         """Test adding and removing a binary from registry using save_registry."""
         from llama_orchestrator.binaries.registry import load_registry, save_registry
-        
+
         # Add a binary by loading, modifying, and saving
         version = BinaryVersion(
             version="b7572",
@@ -299,15 +298,15 @@ class TestRegistryFunctions:
         registry = load_registry(temp_bins_dir)
         registry.binaries.append(version)
         save_registry(temp_bins_dir, registry)
-        
+
         # Verify it was added
         registry = load_registry(temp_bins_dir)
         assert len(registry.binaries) == 1
-        
+
         # Remove it by filtering
         registry.binaries = [b for b in registry.binaries if b.id != version.id]
         save_registry(temp_bins_dir, registry)
-        
+
         # Verify it was removed
         registry = load_registry(temp_bins_dir)
         assert len(registry.binaries) == 0
@@ -315,7 +314,7 @@ class TestRegistryFunctions:
     def test_get_binary_by_id(self, temp_bins_dir: Path):
         """Test getting binary by UUID using registry.get_by_id()."""
         from llama_orchestrator.binaries.registry import load_registry, save_registry
-        
+
         version = BinaryVersion(
             version="b7572",
             variant="win-vulkan-x64",
@@ -324,7 +323,7 @@ class TestRegistryFunctions:
         )
         registry = BinaryRegistry(binaries=[version])
         save_registry(temp_bins_dir, registry)
-        
+
         loaded = load_registry(temp_bins_dir)
         found = loaded.get_by_id(version.id)
         assert found is not None
@@ -333,7 +332,7 @@ class TestRegistryFunctions:
     def test_get_binary_by_version(self, temp_bins_dir: Path):
         """Test getting binary by version and variant using registry.get_by_version()."""
         from llama_orchestrator.binaries.registry import load_registry, save_registry
-        
+
         version = BinaryVersion(
             version="b7572",
             variant="win-vulkan-x64",
@@ -342,7 +341,7 @@ class TestRegistryFunctions:
         )
         registry = BinaryRegistry(binaries=[version])
         save_registry(temp_bins_dir, registry)
-        
+
         loaded = load_registry(temp_bins_dir)
         found = loaded.get_by_version("b7572", "win-vulkan-x64")
         assert found is not None
@@ -360,7 +359,7 @@ class TestConfigBinaryIntegration:
     def test_instance_config_with_binary(self):
         """Test InstanceConfig with binary section."""
         from llama_orchestrator.config.schema import InstanceConfig
-        
+
         binary_id = uuid4()
         config = InstanceConfig(
             name="test-instance",
@@ -371,7 +370,7 @@ class TestConfigBinaryIntegration:
             },
             model={"path": "models/test.gguf"},
         )
-        
+
         assert config.binary is not None
         assert config.binary.binary_id == binary_id
         assert config.binary.version == "b7572"
@@ -379,10 +378,10 @@ class TestConfigBinaryIntegration:
     def test_instance_config_without_binary(self):
         """Test InstanceConfig without binary section (backward compat)."""
         from llama_orchestrator.config.schema import InstanceConfig
-        
+
         config = InstanceConfig(
             name="test-instance",
             model={"path": "models/test.gguf"},
         )
-        
+
         assert config.binary is None

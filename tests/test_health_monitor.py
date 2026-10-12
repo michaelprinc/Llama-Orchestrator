@@ -1,10 +1,15 @@
 """Targeted tests for health monitor wiring."""
 
-from pathlib import Path
 import time
+from pathlib import Path
 from unittest.mock import patch
 
-from llama_orchestrator.config.schema import HealthcheckConfig, InstanceConfig, ModelConfig, RestartPolicy
+from llama_orchestrator.config.schema import (
+    HealthcheckConfig,
+    InstanceConfig,
+    ModelConfig,
+    RestartPolicy,
+)
 from llama_orchestrator.engine.state import HealthStatus, InstanceState, InstanceStatus
 from llama_orchestrator.health.checker import HealthCheckResult, HealthCheckStatus
 from llama_orchestrator.health.monitor import HealthMonitor, InstanceHealthState

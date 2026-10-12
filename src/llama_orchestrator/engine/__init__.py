@@ -11,6 +11,31 @@ from llama_orchestrator.engine.command import (
     resolve_model_path,
     validate_executable,
 )
+from llama_orchestrator.engine.detach import (
+    DetachResult,
+    LogRotator,
+    get_instance_log_dir,
+    get_latest_logs,
+    setup_log_files,
+    start_detached,
+    stop_detached,
+    tail_log,
+)
+from llama_orchestrator.engine.locking import (
+    InstanceLockManager,
+    LockError,
+    LockTimeoutError,
+    get_lock_manager,
+    instance_lock,
+    multi_instance_lock,
+)
+from llama_orchestrator.engine.logging_config import (
+    InstanceLogHandler,
+    LogConfig,
+    cleanup_old_logs,
+    get_instance_log_handler,
+    setup_orchestrator_logging,
+)
 from llama_orchestrator.engine.process import (
     ProcessError,
     get_instance_status,
@@ -20,6 +45,14 @@ from llama_orchestrator.engine.process import (
     restart_instance,
     start_instance,
     stop_instance,
+)
+from llama_orchestrator.engine.reconciler import (
+    ReconcileAction,
+    Reconciler,
+    ReconcileResult,
+    ReconcileSummary,
+    reconcile_all,
+    reconcile_instance,
 )
 from llama_orchestrator.engine.state import (
     HealthStatus,
@@ -49,39 +82,6 @@ from llama_orchestrator.engine.validator import (
     find_orphaned_processes,
     get_process_info,
     validate_process,
-)
-from llama_orchestrator.engine.locking import (
-    LockError,
-    LockTimeoutError,
-    InstanceLockManager,
-    get_lock_manager,
-    instance_lock,
-    multi_instance_lock,
-)
-from llama_orchestrator.engine.detach import (
-    DetachResult,
-    LogRotator,
-    get_instance_log_dir,
-    get_latest_logs,
-    setup_log_files,
-    start_detached,
-    stop_detached,
-    tail_log,
-)
-from llama_orchestrator.engine.logging_config import (
-    InstanceLogHandler,
-    LogConfig,
-    cleanup_old_logs,
-    get_instance_log_handler,
-    setup_orchestrator_logging,
-)
-from llama_orchestrator.engine.reconciler import (
-    ReconcileAction,
-    ReconcileResult,
-    ReconcileSummary,
-    Reconciler,
-    reconcile_all,
-    reconcile_instance,
 )
 
 __all__ = [

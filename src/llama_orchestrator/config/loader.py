@@ -10,15 +10,17 @@ from __future__ import annotations
 import json
 import re
 import sqlite3
+import threading
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from pydantic import ValidationError
 
 from llama_orchestrator.config.schema import InstanceConfig
+from llama_orchestrator.naming import SERVER_BASE, executable_name, locate_executable
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
@@ -30,10 +32,17 @@ CURRENT_SCHEMA_VERSION = "2"
 # Cache for configuration files: Path -> (mtime, size, InstanceConfig)
 _CONFIG_CACHE: dict[Path, tuple[float, int, InstanceConfig]] = {}
 
+# R16/D1: single lock guarding _CONFIG_CACHE and all config file reads/writes.
+# The GUI, health monitor, and CLI share this module-level cache across threads;
+# without the lock a concurrent save could tear a read mid-JSON or lose a cache
+# invalidation. Reads hold the lock only for stat+cache-check+file-read (small,
+# local JSON files); writes hold it for the full persist+evict critical section.
+_CONFIG_LOCK = threading.Lock()
+
 
 def _utc_now_iso() -> str:
     """Return a stable UTC timestamp for persisted config metadata."""
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _format_instance_no(value: int) -> str:
@@ -86,22 +95,22 @@ def get_models_dir() -> Path:
     return models_dir
 
 
-def get_llama_server_path(config: "InstanceConfig | None" = None) -> Path:
+def get_llama_server_path(config: InstanceConfig | None = None) -> Path:
     """
     Get the path to llama-server executable.
-    
+
     Resolution order:
     1. If config has binary.binary_id, lookup by UUID in registry
     2. If config has binary.version+variant, lookup by those
     3. Use default binary from registry
-    4. Fall back to legacy bin/llama-server.exe
-    
+    4. Fall back to the legacy bin/ directory
+
     Args:
         config: Optional InstanceConfig for binary resolution
-        
+
     Returns:
-        Path to llama-server.exe
-        
+        Path to the llama-server executable (platform-native name)
+
     Raises:
         FileNotFoundError: If no valid binary found
     """
@@ -127,12 +136,13 @@ def get_llama_server_path(config: "InstanceConfig | None" = None) -> Path:
     except Exception:
         pass  # Fall through to legacy
 
-    # Fall back to legacy bin/
-    legacy_path = get_bin_dir() / "llama-server.exe"
-    if legacy_path.exists():
+    # Fall back to legacy bin/ (platform-native name first, then the
+    # Windows-named file of a package created on another platform).
+    legacy_path = locate_executable(get_bin_dir(), SERVER_BASE)
+    if legacy_path is not None:
         return legacy_path
 
-    raise FileNotFoundError("No llama-server.exe found in bins/ or legacy bin/")
+    raise FileNotFoundError(f"No {executable_name(SERVER_BASE)} found in bins/ or legacy bin/")
 
 
 def get_state_dir() -> Path:
@@ -231,11 +241,42 @@ def _allocate_instance_no() -> str:
     return _format_instance_no(allocated)
 
 
-def _write_config_file(path: Path, data: dict) -> None:
+def _write_config_file(path: Path, data: dict[str, Any]) -> None:
     """Persist config data with consistent formatting."""
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4, ensure_ascii=False)
+
+
+def _persist_config_file(config: InstanceConfig, path: Path) -> None:
+    """Persist a config file under the module lock (R16/D1).
+
+    Holds the lock across write + cache eviction + catalog sync so concurrent
+    saves can never tear each other's files, lose an invalidation, or interleave
+    catalog mutations.
+    """
+    with _CONFIG_LOCK:
+        _write_config_file(path, config.model_dump(mode="json"))
+        _CONFIG_CACHE.pop(path, None)
+        if _is_managed_instance_config_path(path):
+            _sync_instance_catalog(config, path)
+
+
+def _validate_instance_data(path: Path, data: dict[str, Any]) -> InstanceConfig:
+    """Validate raw JSON data into an InstanceConfig with a friendly error."""
+    try:
+        return InstanceConfig.model_validate(data)
+    except ValidationError as e:
+        # Format validation errors nicely
+        errors = []
+        for err in e.errors():
+            loc = ".".join(str(x) for x in err["loc"])
+            msg = err["msg"]
+            errors.append(f"  - {loc}: {msg}")
+        error_str = "\n".join(errors)
+        raise ConfigLoadError(
+            path, f"Validation failed:\n{error_str}", e
+        ) from e
 
 
 def _is_managed_instance_config_path(path: Path) -> bool:
@@ -299,7 +340,7 @@ def _repair_duplicate_instance_numbers() -> None:
     by_number: dict[str, list[tuple[Path, InstanceConfig]]] = {}
     for config_path in _iter_config_paths():
         try:
-            config = load_config(config_path, sync_catalog=False)
+            config = load_config(config_path)
         except ConfigLoadError:
             continue
         instance_no = config.instance_no
@@ -332,44 +373,31 @@ def _repair_duplicate_instance_numbers() -> None:
 
 def _prepare_loaded_config(
     config: InstanceConfig,
-    raw_data: dict,
+    raw_data: dict[str, Any],
     path: Path,
-    *,
-    persist_backfill: bool = True,
-    sync_catalog: bool = True,
-) -> InstanceConfig:
-    """Apply lazy metadata backfill for legacy configs and track source path."""
-    changed = False
+) -> None:
+    """Fill in identity metadata gaps for legacy configs (in memory only).
+
+    R16/D1: this helper never touches disk; callers that need the backfill
+    persisted (and catalog-synced) do so explicitly via _persist_config_file.
+    """
     now = _utc_now_iso()
     managed_path = _is_managed_instance_config_path(path)
 
     if managed_path and "schema_version" not in raw_data:
         config.schema_version = CURRENT_SCHEMA_VERSION
-        changed = True
     if managed_path and "instance_uid" not in raw_data:
         config.instance_uid = str(uuid4())
-        changed = True
     if managed_path and ("instance_no" not in raw_data or not config.instance_no):
         config.instance_no = _allocate_instance_no()
-        changed = True
     if managed_path and ("display_name" not in raw_data or not config.display_name):
         config.display_name = raw_data.get("name") or path.parent.name
-        changed = True
     if managed_path and "created_at" not in raw_data:
         config.created_at = now
-        changed = True
     if managed_path and "updated_at" not in raw_data:
         config.updated_at = now
-        changed = True
 
     config.set_source_path(path)
-
-    if changed and persist_backfill:
-        _write_config_file(path, config.model_dump(mode="json"))
-
-    if managed_path and sync_catalog:
-        _sync_instance_catalog(config, path)
-    return config
 
 
 def _iter_config_paths() -> Iterator[Path]:
@@ -391,6 +419,7 @@ def resolve_instance_selector(token: str) -> Path:
     Resolution precedence is instance_uid, instance_no, immutable alias `name`,
     then unique display_name.
     """
+    _normalize_legacy_configs()
     _repair_duplicate_instance_numbers()
     uid_matches: list[Path] = []
     no_matches: list[Path] = []
@@ -422,100 +451,123 @@ def resolve_instance_selector(token: str) -> Path:
     raise ConfigLoadError(get_instances_dir(), f"Instance '{token}' not found")
 
 
-def load_config(
-    path: Path,
-    *,
-    persist_backfill: bool = True,
-    sync_catalog: bool = True,
-) -> InstanceConfig:
+def load_config(path: Path) -> InstanceConfig:
     """
-    Load an instance configuration from a JSON file.
-    
+    Load an instance configuration from a JSON file (pure read).
+
+    R16/D1: this function never mutates disk state — no backfill persistence,
+    no catalog sync, no instance-number allocation. Identity fields missing
+    from legacy files are completed in memory only; call :func:`repair_config`
+    from write paths to persist them.
+
     Args:
         path: Path to the config.json file
-        persist_backfill: Save resolved metadata updates back to file
-        sync_catalog: Mirror metadata into the sqlite catalog
-        
+
     Returns:
         Validated InstanceConfig model
-        
+
     Raises:
         ConfigLoadError: If file cannot be read or validation fails
     """
     path = Path(path).resolve()
 
     if not path.exists():
-        _CONFIG_CACHE.pop(path, None)
+        with _CONFIG_LOCK:
+            _CONFIG_CACHE.pop(path, None)
         raise ConfigLoadError(path, "Configuration file not found")
 
     if not path.is_file():
-        _CONFIG_CACHE.pop(path, None)
+        with _CONFIG_LOCK:
+            _CONFIG_CACHE.pop(path, None)
         raise ConfigLoadError(path, "Path is not a file")
 
-    try:
-        stat = path.stat()
-        mtime = stat.st_mtime
-        size = stat.st_size
-    except OSError as e:
-        raise ConfigLoadError(path, f"Cannot get file stats: {e}", e) from e
-
-    cached_val = _CONFIG_CACHE.get(path)
-    if cached_val is not None:
-        cached_mtime, cached_size, cached_config = cached_val
-        if cached_mtime == mtime and cached_size == size:
-            return cached_config
-
-    try:
-        with open(path, encoding="utf-8") as f:
-            data = json.load(f)
-    except json.JSONDecodeError as e:
-        raise ConfigLoadError(path, f"Invalid JSON: {e}", e) from e
-    except OSError as e:
-        raise ConfigLoadError(path, f"Cannot read file: {e}", e) from e
-
-    try:
-        config = InstanceConfig.model_validate(data)
-    except ValidationError as e:
-        # Format validation errors nicely
-        errors = []
-        for err in e.errors():
-            loc = ".".join(str(x) for x in err["loc"])
-            msg = err["msg"]
-            errors.append(f"  - {loc}: {msg}")
-        error_str = "\n".join(errors)
-        raise ConfigLoadError(
-            path, f"Validation failed:\n{error_str}", e
-        ) from e
-
-    config = _prepare_loaded_config(
-        config,
-        data,
-        path,
-        persist_backfill=persist_backfill,
-        sync_catalog=sync_catalog,
-    )
-
-    if sync_catalog:
+    # Hold the lock across stat + cache check + file read so the (mtime,
+    # content) pair stays consistent even while a writer re-creates the file.
+    with _CONFIG_LOCK:
         try:
             stat = path.stat()
-            _CONFIG_CACHE[path] = (stat.st_mtime, stat.st_size, config)
-        except OSError:
-            pass
+            mtime = stat.st_mtime
+            size = stat.st_size
+        except OSError as e:
+            raise ConfigLoadError(path, f"Cannot get file stats: {e}", e) from e
+
+        cached_val = _CONFIG_CACHE.get(path)
+        if cached_val is not None:
+            cached_mtime, cached_size, cached_config = cached_val
+            if cached_mtime == mtime and cached_size == size:
+                return cached_config
+
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ConfigLoadError(path, f"Invalid JSON: {e}", e) from e
+        except OSError as e:
+            raise ConfigLoadError(path, f"Cannot read file: {e}", e) from e
+
+    config = _validate_instance_data(path, data)
+    config.set_source_path(path)
+
+    with _CONFIG_LOCK:
+        _CONFIG_CACHE[path] = (mtime, size, config)
 
     return config
 
 
-def load_config_from_dict(data: dict, name: str = "inline") -> InstanceConfig:
+def repair_config(path: Path) -> InstanceConfig:
+    """Explicitly backfill legacy identity metadata and persist it (write path).
+
+    R16/D1: the old backfill-on-read side effect of :func:`load_config` moved
+    into this function. It completes schema_version, instance_uid,
+    instance_no, display_name, created_at/updated_at for legacy configs and
+    persists the result (file write + cache eviction + catalog sync) in one
+    locked critical section. Call it from write paths only — discovery entry
+    points use it to normalize legacy trees explicitly.
+
+    Args:
+        path: Path to the config.json file
+
+    Returns:
+        The repaired (and persisted) InstanceConfig model
+
+    Raises:
+        ConfigLoadError: If file cannot be read or validation fails
+    """
+    path = Path(path).resolve()
+
+    if not path.exists():
+        raise ConfigLoadError(path, "Configuration file not found")
+
+    if not path.is_file():
+        raise ConfigLoadError(path, "Path is not a file")
+
+    with _CONFIG_LOCK:
+        try:
+            with open(path, encoding="utf-8") as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            raise ConfigLoadError(path, f"Invalid JSON: {e}", e) from e
+        except OSError as e:
+            raise ConfigLoadError(path, f"Cannot read file: {e}", e) from e
+
+    config = _validate_instance_data(path, data)
+    _prepare_loaded_config(config, data, path)
+    # Explicit write operation: always persist (write + evict + catalog sync).
+    _persist_config_file(config, path)
+    return config
+
+
+def load_config_from_dict(data: dict[str, Any], name: str = "inline") -> InstanceConfig:
     """
     Load an instance configuration from a dictionary.
-    
+
     Args:
         data: Configuration dictionary
         name: Name for error messages
-        
+
     Returns:
         Validated InstanceConfig model
-        
+
     Raises:
         ConfigLoadError: If validation fails
     """
@@ -533,13 +585,52 @@ def load_config_from_dict(data: dict, name: str = "inline") -> InstanceConfig:
         ) from e
 
 
+_LEGACY_IDENTITY_KEYS = (
+    "schema_version",
+    "instance_uid",
+    "instance_no",
+    "display_name",
+    "created_at",
+    "updated_at",
+)
+
+
+def _is_legacy_on_disk(config_path: Path) -> bool:
+    """Return True when the on-disk file lacks any managed identity field."""
+    try:
+        raw = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False  # load_config will surface the real error
+    if not isinstance(raw, dict):
+        return False
+    return any(not raw.get(key) for key in _LEGACY_IDENTITY_KEYS)
+
+
+def _normalize_legacy_configs() -> None:
+    """Explicitly repair legacy configs on disk before discovery (R16/D1).
+
+    The old backfill-on-read side effect of load_config moved here: discovery
+    entry points normalize legacy files through explicit repair_config() calls,
+    so identity fields are persisted + catalog-synced once per file instead of
+    as a hidden write during every read. Fully normalized trees take only the
+    cheap raw-key check (reads never mutate disk).
+    """
+    for config_path in _iter_config_paths():
+        if _is_legacy_on_disk(config_path):
+            repair_config(config_path)
+
+
 def discover_instances() -> Iterator[tuple[str, Path]]:
     """
     Discover all configured instances.
-    
+
+    Normalizes legacy configs (explicit repair) before yielding; the per-file
+    loads themselves are pure reads.
+
     Yields:
         Tuples of (instance_name, config_path) for each found instance
     """
+    _normalize_legacy_configs()
     _repair_duplicate_instance_numbers()
     for config_path in _iter_config_paths():
         config = load_config(config_path)
@@ -549,13 +640,14 @@ def discover_instances() -> Iterator[tuple[str, Path]]:
 def load_all_instances() -> dict[str, InstanceConfig]:
     """
     Load all configured instances.
-    
+
     Returns:
         Dictionary mapping instance names to their configs
-        
+
     Raises:
         ConfigLoadError: If any instance config is invalid
     """
+    _normalize_legacy_configs()
     _repair_duplicate_instance_numbers()
     instances: dict[str, InstanceConfig] = {}
 
@@ -584,13 +676,13 @@ def load_all_instances() -> dict[str, InstanceConfig]:
 def get_instance_config(name: str) -> InstanceConfig:
     """
     Get configuration for a specific instance by name.
-    
+
     Args:
         name: Instance name
-        
+
     Returns:
         Instance configuration
-        
+
     Raises:
         ConfigLoadError: If instance not found or config invalid
     """
@@ -609,11 +701,11 @@ def get_instance_config(name: str) -> InstanceConfig:
 def save_config(config: InstanceConfig, path: Path | None = None) -> Path:
     """
     Save an instance configuration to a JSON file.
-    
+
     Args:
         config: Instance configuration to save
         path: Optional custom path (defaults to instances/<name>/config.json)
-        
+
     Returns:
         Path where config was saved
     """
@@ -627,7 +719,6 @@ def save_config(config: InstanceConfig, path: Path | None = None) -> Path:
             path = instances_dir / config.instance_dir_name / "config.json"
 
     path = Path(path).resolve()
-    _CONFIG_CACHE.pop(path, None)
 
     managed_path = _is_managed_instance_config_path(path)
     if managed_path and config.instance_no is None:
@@ -640,10 +731,8 @@ def save_config(config: InstanceConfig, path: Path | None = None) -> Path:
     config.schema_version = CURRENT_SCHEMA_VERSION
     config.updated_at = _utc_now_iso()
 
-    data = config.model_dump(mode="json")
-    _write_config_file(path, data)
+    # R16/D1: serialized persist + cache eviction + catalog sync (one lock)
+    _persist_config_file(config, path)
     config.set_source_path(path)
-    if managed_path:
-        _sync_instance_catalog(config, path)
 
     return path

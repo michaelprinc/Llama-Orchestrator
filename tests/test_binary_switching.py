@@ -1,15 +1,20 @@
 """Focused tests for local package registration and per-instance switching."""
 
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
 
-from llama_orchestrator.binaries.manager import BinaryManager, BinaryManagerError, BinaryNotFoundError
-from llama_orchestrator.binaries.schema import BinaryConfig
-from llama_orchestrator.binaries.schema import BinaryVersion
+from llama_orchestrator.binaries.manager import (
+    BinaryManager,
+    BinaryManagerError,
+    BinaryNotFoundError,
+)
+from llama_orchestrator.binaries.schema import BinaryConfig, BinaryVersion
 from llama_orchestrator.engine import InstanceStatus
+from llama_orchestrator.naming import SERVER_BASE, executable_name
 
 
 def _make_package(path: Path) -> Path:
@@ -41,7 +46,7 @@ def test_register_rejects_incomplete_or_already_managed_package(tmp_path: Path) 
     manager = BinaryManager(tmp_path / "project")
     incomplete = tmp_path / "incomplete"
     incomplete.mkdir()
-    with pytest.raises(Exception, match="llama-server.exe"):
+    with pytest.raises(Exception, match=re.escape(executable_name(SERVER_BASE))):
         manager.register_local_package(incomplete, version="r3", variant="win-hip-r3")
 
     managed = _make_package(tmp_path / "project" / "bins" / "managed")

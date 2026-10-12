@@ -980,6 +980,7 @@ def test_resolve_models_directory_input_anchors_relative_paths_to_project_root(m
 def test_create_progressbar_with_gridded_parent() -> None:
     import tkinter as tk
     from tkinter import ttk
+
     from llama_orchestrator.gui.usability import create_progress_bar
 
     root = tk.Tk()

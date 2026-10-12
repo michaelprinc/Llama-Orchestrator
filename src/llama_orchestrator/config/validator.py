@@ -16,13 +16,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 
 import psutil
-from llama_orchestrator.runtime_args import parse_args_list
 
 from llama_orchestrator.config.loader import (
-    get_logs_dir,
     get_project_root,
     load_all_instances,
 )
+from llama_orchestrator.runtime_args import parse_args_list
 
 if TYPE_CHECKING:
     from llama_orchestrator.config.schema import InstanceConfig
@@ -93,7 +92,7 @@ class ValidationResult:
         """Add an issue to the result."""
         self.issues.append(issue)
 
-    def merge(self, other: "ValidationResult") -> None:
+    def merge(self, other: ValidationResult) -> None:
         """Merge another result into this one."""
         self.issues.extend(other.issues)
 
@@ -145,7 +144,9 @@ def get_used_ports() -> set[int]:
     try:
         for conn in psutil.net_connections(kind="tcp"):
             if conn.status == "LISTEN":
-                used.add(conn.laddr.port)
+                # types-psutil declares laddr as a heterogeneous tuple union, but at
+                # runtime it is an addr(ip=..., port=...) namedtuple exposing .port.
+                used.add(conn.laddr.port)  # type: ignore[union-attr]
     except (psutil.AccessDenied, PermissionError):
         # On Windows, may need admin rights to see all connections
         pass
@@ -153,7 +154,11 @@ def get_used_ports() -> set[int]:
 
 
 def validate_port_available(config: InstanceConfig) -> ValidationResult:
-    """Validate that the configured port is not in use."""
+    """Validate that the configured port is not in use.
+
+    An occupied port blocks instance start, so per the validation severity
+    policy (docs/validation-severity-policy.md) this is an error, not a warning.
+    """
     result = ValidationResult()
 
     used_ports = get_used_ports()
@@ -163,7 +168,7 @@ def validate_port_available(config: InstanceConfig) -> ValidationResult:
         result.add(ValidationIssue(
             instance=config.name,
             field="server.port",
-            severity="warning",
+            severity="error",
             message=f"Port {port} is currently in use",
             suggestion="Choose a different port or stop the process using it"
         ))
@@ -198,43 +203,40 @@ def validate_port_collisions(configs: dict[str, InstanceConfig]) -> ValidationRe
 
 
 def validate_log_directory(config: InstanceConfig) -> ValidationResult:
-    """Validate that log directory is writable."""
+    """Validate that log directories are writable (R19: side-effect-free).
+
+    No directories are created and no probe files are written on the validated
+    path. A missing log directory passes when its nearest existing ancestor is
+    writable — the start path (engine.process / logging_config) creates it; an
+    existing non-writable directory is reported as an error, mirroring the old
+    pass/fail outcome of the mkdir+touch probe without any mutation.
+    """
     result = ValidationResult()
 
     stdout_path, stderr_path = config.get_log_paths()
-    logs_dir = get_logs_dir()
+    root = get_project_root()
 
-    # Resolve paths relative to logs dir
-    stdout_full = logs_dir.parent / stdout_path
-    stderr_full = logs_dir.parent / stderr_path
-
-    for log_path in [stdout_full, stderr_full]:
+    for log_path in [root / stdout_path, root / stderr_path]:
         log_dir = log_path.parent
 
-        try:
-            # Try to create the directory
-            log_dir.mkdir(parents=True, exist_ok=True)
+        # Judge writability at the nearest existing ancestor so a not-yet-created
+        # directory only fails when creation could not possibly succeed.
+        probe = log_dir
+        while not probe.is_dir() and probe != probe.parent:
+            probe = probe.parent
 
-            # Check if we can write to it
-            test_file = log_dir / ".write_test"
-            try:
-                test_file.touch()
-                test_file.unlink()
-            except OSError as e:
-                result.add(ValidationIssue(
-                    instance=config.name,
-                    field="logs",
-                    severity="error",
-                    message=f"Cannot write to log directory: {log_dir}",
-                    suggestion=f"Check permissions: {e}"
-                ))
-        except OSError as e:
+        if not os.access(probe, os.W_OK):
+            reason = (
+                f"not writable: {probe}"
+                if probe == log_dir
+                else f"cannot create under non-writable ancestor: {probe}"
+            )
             result.add(ValidationIssue(
                 instance=config.name,
                 field="logs",
                 severity="error",
-                message=f"Cannot create log directory: {log_dir}",
-                suggestion=f"Check permissions: {e}"
+                message=f"Log directory not writable ({reason})",
+                suggestion="Check permissions on the log directory (or its parent)"
             ))
 
     return result
@@ -244,15 +246,14 @@ def validate_gpu_config(config: InstanceConfig) -> ValidationResult:
     """Validate GPU configuration."""
     result = ValidationResult()
 
-    if config.gpu.backend == "cpu":
-        if config.gpu.layers > 0:
-            result.add(ValidationIssue(
-                instance=config.name,
-                field="gpu.layers",
-                severity="warning",
-                message=f"GPU layers ({config.gpu.layers}) set but backend is 'cpu'",
-                suggestion="Set backend to 'vulkan' or 'cuda' to use GPU, or set layers to 0"
-            ))
+    if config.gpu.backend == "cpu" and config.gpu.layers > 0:
+        result.add(ValidationIssue(
+            instance=config.name,
+            field="gpu.layers",
+            severity="warning",
+            message=f"GPU layers ({config.gpu.layers}) set but backend is 'cpu'",
+            suggestion="Set backend to 'vulkan' or 'cuda' to use GPU, or set layers to 0"
+        ))
 
     if config.gpu.backend == "vulkan":
         # Check GGML_VULKAN_DEVICE env var
@@ -353,11 +354,11 @@ def validate_host_exposure(config: InstanceConfig) -> ValidationResult:
 def validate_instance(config: InstanceConfig, check_runtime: bool = True) -> ValidationResult:
     """
     Validate a single instance configuration.
-    
+
     Args:
         config: Instance configuration to validate
         check_runtime: If True, check runtime conditions (port availability)
-        
+
     Returns:
         ValidationResult with any issues found
     """
@@ -387,10 +388,10 @@ def validate_instance(config: InstanceConfig, check_runtime: bool = True) -> Val
 def validate_all_instances(check_runtime: bool = True) -> ValidationResult:
     """
     Validate all configured instances.
-    
+
     Args:
         check_runtime: If True, check runtime conditions
-        
+
     Returns:
         ValidationResult with all issues found
     """
@@ -430,7 +431,7 @@ def validate_all_instances(check_runtime: bool = True) -> ValidationResult:
 def lint_config(config: InstanceConfig) -> ValidationResult:
     """
     Run comprehensive linting on a configuration.
-    
+
     This includes all validation checks plus additional best practice checks.
     """
     result = validate_instance(config, check_runtime=True)

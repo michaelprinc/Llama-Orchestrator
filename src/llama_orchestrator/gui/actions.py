@@ -65,7 +65,9 @@ def diff_instances(
     source: str,
     target: str,
     diff_fn: Callable[[str, str], str],
-    parent: tk.Misc,
+    # Tk or Toplevel (typeshed has no common nominal base; both satisfy
+    # Toplevel(master) [Misc] and transient(master) [Wm]).
+    parent: tk.Tk | tk.Toplevel,
 ) -> None:
     """Compare two instances and show diff.
 
@@ -86,7 +88,9 @@ def _show_diff_window(
     name1: str,
     name2: str,
     diff_text: str,
-    parent: tk.Misc,
+    # Tk or Toplevel (typeshed has no common nominal base; both satisfy
+    # Toplevel(master) [Misc] and transient(master) [Wm]).
+    parent: tk.Tk | tk.Toplevel,
 ) -> None:
     """Show diff in a new Toplevel window."""
     dialog = tk.Toplevel(parent)
@@ -125,7 +129,9 @@ def rename_instance(
     instance_name: str,
     current_display_name: str,
     confirm_fn: Callable[[str, str], bool],
-    parent: tk.Misc,
+    # Tk or Toplevel (typeshed has no common nominal base; both satisfy
+    # Toplevel(master) [Misc] and transient(master) [Wm]).
+    parent: tk.Tk | tk.Toplevel,
 ) -> bool:
     """Rename an instance's display name using a modal Toplevel dialog.
 

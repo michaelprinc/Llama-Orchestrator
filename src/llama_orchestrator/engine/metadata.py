@@ -27,6 +27,17 @@ from llama_orchestrator.config import InstanceConfig
 from llama_orchestrator.engine.detection import EffectiveRuntimeSelection
 
 
+def _config_hash(config: InstanceConfig) -> str:
+    """Deterministic hash of the config's JSON serialisation (sorted keys).
+
+    ``mode="json"`` is required: plain ``model_dump()`` leaves ``Path`` fields
+    (e.g. ``model.path``) as ``pathlib.Path`` objects, which are not
+    JSON-serialisable and would raise inside ``json.dumps``.
+    """
+    raw = json.dumps(config.model_dump(mode="json"), sort_keys=True).encode()
+    return hashlib.md5(raw).hexdigest()
+
+
 @dataclass(frozen=True)
 class InstanceMetadata:
     """Immutable snapshot of pre-computed instance data for one refresh cycle.
@@ -90,12 +101,10 @@ class MetadataCache:
         for name, config in configs.items():
             effective = describe_effective_runtime(config)
             model_size = resolve_model_size_gb(config)
-            raw = json.dumps(config.model_dump(), sort_keys=True).encode()
-            h = hashlib.md5(raw).hexdigest()
             self._cache[name] = InstanceMetadata(
                 effective_runtime=effective,
                 model_size_gb=model_size,
-                config_hash=h,
+                config_hash=_config_hash(config),
             )
 
     # -- read -----------------------------------------------------------
@@ -115,8 +124,9 @@ class MetadataCache:
         """Return ``True`` when *configs* differ from what was loaded.
 
         Iterates only over the configs currently passed in (no external
-        file reads).  If a new instance appeared or an existing config
-        changed, the caller should invalidate and reload.
+        file reads).  If a new instance appeared, an existing config
+        changed, **or an instance was removed** (a cached name is no longer
+        present in *configs*), the caller should invalidate and reload.
 
         Args:
             configs: Same mapping passed to ``load_all()``.
@@ -124,13 +134,16 @@ class MetadataCache:
         Returns:
             ``True`` if the cache needs a full reload.
         """
+        # R15/D4: removed instances must also invalidate — a cached name
+        # that is no longer in *configs* means the instance set shrank,
+        # even though every remaining config hash is unchanged.
+        if len(self._cache) > len(configs):
+            return True
         for name, config in configs.items():
             entry = self._cache.get(name)
             if entry is None:
                 return True
-            raw = json.dumps(config.model_dump(), sort_keys=True).encode()
-            h = hashlib.md5(raw).hexdigest()
-            if h != entry.config_hash:
+            if _config_hash(config) != entry.config_hash:
                 return True
         return False
 

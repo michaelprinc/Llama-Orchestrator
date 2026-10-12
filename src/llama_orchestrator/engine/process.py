@@ -6,11 +6,12 @@ Handles starting, stopping, and monitoring llama-server processes.
 
 from __future__ import annotations
 
+import logging
 import subprocess
 import time
 from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import psutil
 
@@ -20,7 +21,12 @@ from llama_orchestrator.config import (
     get_logs_dir,
     get_project_root,
 )
-from llama_orchestrator.engine.command import build_command, build_env, validate_executable
+from llama_orchestrator.engine.command import (
+    build_command,
+    build_env,
+    find_raw_arg_overrides,
+    validate_executable,
+)
 from llama_orchestrator.engine.detach import start_detached
 from llama_orchestrator.engine.locking import instance_lock
 from llama_orchestrator.engine.logging_config import get_instance_log_handler
@@ -29,25 +35,21 @@ from llama_orchestrator.engine.state import (
     InstanceState,
     InstanceStatus,
     RuntimeState,
-    delete_runtime,
-    delete_state,
-    get_health_history,
-    get_recent_events,
-    list_divergent_instances,
     load_all_runtime,
     load_all_states,
     load_runtime,
     load_state,
     log_event,
     record_health_check,
-    reconcile_state,
-    save_runtime,
-    save_state,
+    # Re-exported on purpose: tests patch llama_orchestrator.engine.process.save_state.
+    save_state,  # noqa: F401
     save_state_atomic,
 )
 
 if TYPE_CHECKING:
     from llama_orchestrator.config import InstanceConfig
+
+logger = logging.getLogger(__name__)
 
 
 class ProcessError(Exception):
@@ -58,6 +60,20 @@ class ProcessError(Exception):
         self.message = message
         self.cause = cause
         super().__init__(f"[{instance}] {message}")
+
+
+class PortCollisionError(ProcessError):
+    """The instance cannot bind its configured port because another process owns it.
+
+    Structured signal for the R11 collision policy: callers (health monitor)
+    must react to this exception type, not to message substrings.
+    """
+
+
+# R13: bounded grace period for a just-freed port before spawning. A restart's
+# previous owner may still hold the listening socket while shutting down; the
+# window must cover kill_process_tree's default graceful timeout (10 s).
+SPAWN_PORT_BIND_TIMEOUT = 10.0
 
 
 def _runtime_to_state(runtime: RuntimeState) -> InstanceState:
@@ -75,7 +91,7 @@ def _runtime_to_state(runtime: RuntimeState) -> InstanceState:
 
 def _build_runtime_from_state(
     state: InstanceState,
-    config: "InstanceConfig | None" = None,
+    config: InstanceConfig | None = None,
     cmdline: str = "",
     last_error: str | None = None,
 ) -> RuntimeState:
@@ -102,7 +118,7 @@ def _build_runtime_from_state(
 
 def _persist_health_update(
     state: InstanceState,
-    config: "InstanceConfig",
+    config: InstanceConfig,
     cmdline: str,
     health: HealthStatus,
     response_time_ms: float | None = None,
@@ -137,9 +153,9 @@ def _persist_health_update(
 
 
 def _wait_for_instance_ready(
-    proc: subprocess.Popen,
+    proc: subprocess.Popen[bytes],
     state: InstanceState,
-    config: "InstanceConfig",
+    config: InstanceConfig,
     cmdline: str,
 ) -> InstanceState:
     """Wait for a started instance to become healthy within the startup budget."""
@@ -220,7 +236,7 @@ def _wait_for_instance_ready(
 
 def _wait_for_detached_instance_ready(
     state: InstanceState,
-    config: "InstanceConfig",
+    config: InstanceConfig,
     cmdline: str,
 ) -> InstanceState:
     """Wait for a detached instance to become healthy within the startup budget."""
@@ -323,7 +339,7 @@ def is_process_running(pid: int) -> bool:
         return False
 
 
-def get_process_info(pid: int) -> dict | None:
+def get_process_info(pid: int) -> dict[str, Any] | None:
     """Get information about a running process."""
     try:
         proc = psutil.Process(pid)
@@ -368,10 +384,9 @@ def _send_windows_ctrl_c(pid: int) -> bool:
         ctrl_break_event = 1
         result = kernel32.GenerateConsoleCtrlEvent(ctrl_break_event, pid)
 
-        if result == 0:
-            # Failed to send event - might not be a console process
-            return False
-        return True
+        # GenerateConsoleCtrlEvent returns non-zero on success; zero means the
+        # event failed (e.g. target is not a console process).
+        return result != 0
     except (ImportError, AttributeError, OSError):
         # ctypes or kernel32 not available
         return False
@@ -403,7 +418,7 @@ def graceful_shutdown(
     port: int | None = None,
     timeout: float = 10.0,
     force: bool = False,
-) -> dict:
+) -> dict[str, Any]:
     """
     Gracefully shut down a process with Windows-first approach.
 
@@ -469,26 +484,21 @@ def graceful_shutdown(
                 return result
 
     # Stage 2: Try HTTP /shutdown endpoint
-    if port is not None:
-        if _try_http_shutdown(port, timeout=2.0):
-            # Wait to see if HTTP shutdown worked
-            gone, alive = psutil.wait_procs([parent] + children, timeout=3.0)
-            if not alive:
-                result["method"] = "http_shutdown"
-                result["duration"] = time.monotonic() - start_time
-                return result
+    if port is not None and _try_http_shutdown(port, timeout=2.0):
+        # Wait to see if HTTP shutdown worked
+        gone, alive = psutil.wait_procs([parent] + children, timeout=3.0)
+        if not alive:
+            result["method"] = "http_shutdown"
+            result["duration"] = time.monotonic() - start_time
+            return result
 
     # Stage 3: Send SIGTERM/terminate()
-    try:
+    with suppress(psutil.NoSuchProcess):
         parent.terminate()
-    except psutil.NoSuchProcess:
-        pass
 
     for child in children:
-        try:
+        with suppress(psutil.NoSuchProcess):
             child.terminate()
-        except psutil.NoSuchProcess:
-            pass
 
     # Stage 4: Wait for graceful shutdown
     gone, alive = psutil.wait_procs([parent] + children, timeout=timeout)
@@ -496,10 +506,8 @@ def graceful_shutdown(
     # Stage 5: Force kill remaining
     if alive:
         for proc in alive:
-            try:
+            with suppress(psutil.NoSuchProcess):
                 proc.kill()
-            except psutil.NoSuchProcess:
-                pass
         result["method"] = "terminate_then_kill"
     else:
         result["method"] = "terminate"
@@ -530,17 +538,13 @@ def _force_kill_process_tree(pid: int) -> bool:
         children = []
 
     # Kill parent first
-    try:
+    with suppress(psutil.NoSuchProcess):
         parent.kill()
-    except psutil.NoSuchProcess:
-        pass
 
     # Kill all children
     for child in children:
-        try:
+        with suppress(psutil.NoSuchProcess):
             child.kill()
-        except psutil.NoSuchProcess:
-            pass
 
     return True
 
@@ -560,7 +564,7 @@ def kill_process_tree(pid: int, timeout: float = 10.0, port: int | None = None) 
         True if process was killed, False if not found
     """
     result = graceful_shutdown(pid, port=port, timeout=timeout, force=False)
-    return result["method"] != "not_found"
+    return bool(result["method"] != "not_found")
 
 
 def check_stale_state(state: InstanceState) -> InstanceState:
@@ -569,15 +573,16 @@ def check_stale_state(state: InstanceState) -> InstanceState:
 
     Updates and returns the corrected state.
     """
-    if state.status in (InstanceStatus.RUNNING, InstanceStatus.STARTING):
-        if state.pid is None or not is_process_running(state.pid):
-            # Process is gone but state says running - mark as stopped
-            state.status = InstanceStatus.STOPPED
-            state.pid = None
-            state.health = HealthStatus.UNKNOWN
-            state.error_message = "Process died unexpectedly"
-            runtime = _build_runtime_from_state(state, last_error=state.error_message)
-            save_state_atomic(state, runtime)
+    if state.status in (InstanceStatus.RUNNING, InstanceStatus.STARTING) and (
+        state.pid is None or not is_process_running(state.pid)
+    ):
+        # Process is gone but state says running - mark as stopped
+        state.status = InstanceStatus.STOPPED
+        state.pid = None
+        state.health = HealthStatus.UNKNOWN
+        state.error_message = "Process died unexpectedly"
+        runtime = _build_runtime_from_state(state, last_error=state.error_message)
+        save_state_atomic(state, runtime)
 
     return state
 
@@ -586,7 +591,7 @@ def start_instance(
     name: str,
     wait_for_ready: bool = True,
     detach: bool = False,
-    config_override: "InstanceConfig | None" = None,
+    config_override: InstanceConfig | None = None,
 ) -> InstanceState:
     """
     Start a llama-server instance.
@@ -641,10 +646,51 @@ def start_instance(
             state.error_message = port_message
             runtime = _build_runtime_from_state(state, config=config, last_error=port_message)
             save_state_atomic(state, runtime)
-            raise ProcessError(name, port_message)
+            # R11: structured collision signal so the health monitor can apply
+            # its policy (ERROR + event + restart policy) without sniffing text.
+            raise PortCollisionError(name, port_message)
+
+        # R13: the pre-check above has a TOCTOU window, and on a restart this
+        # instance's own previous owner may still hold the socket while it
+        # shuts down (validation passed via "already owned by this instance").
+        # Wait until the port is provably bindable so we never spawn into a
+        # port our own dying process is still releasing.
+        from llama_orchestrator.health.ports import acquire_port_for_spawn
+
+        if not acquire_port_for_spawn(
+            config.server.port,
+            host=config.server.host,
+            timeout=SPAWN_PORT_BIND_TIMEOUT,
+        ):
+            bind_message = (
+                f"Port {config.server.port} passed pre-check but was not "
+                f"bindable within {SPAWN_PORT_BIND_TIMEOUT:.1f}s at spawn time"
+            )
+            state.status = InstanceStatus.ERROR
+            state.health = HealthStatus.ERROR
+            state.error_message = bind_message
+            runtime = _build_runtime_from_state(
+                state, config=config, last_error=bind_message
+            )
+            save_state_atomic(state, runtime)
+            raise PortCollisionError(name, bind_message)
 
         cmd = build_command(config)
         cmdline = " ".join(cmd)
+
+        # R18: raw args that shadow built-in flags must not fail silently.
+        # Log the effective command at INFO with both values so operators can
+        # see that the RAW value wins at runtime, not the structured config.
+        overrides = find_raw_arg_overrides(config)
+        if overrides:
+            override_text = ", ".join(
+                f"{flag}: config={built} raw={raw}" for flag, built, raw in overrides
+            )
+            logger.info(
+                f"[{name}] Raw args override built-in flags (raw value wins at runtime): "
+                f"{override_text}. Effective command: {cmdline}"
+            )
+
         env = build_env(config)
 
         log_handler = get_instance_log_handler(
@@ -720,7 +766,7 @@ def start_instance(
                 env=env,
                 cwd=str(get_project_root()),
                 **({
-                    "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
+                    "creationflags": subprocess.CREATE_NEW_PROCESS_GROUP
                 } if hasattr(subprocess, "CREATE_NEW_PROCESS_GROUP") else {}),
             )
 
@@ -751,22 +797,55 @@ def start_instance(
             time.sleep(0.5)
 
             if proc.poll() is not None:
-                # Process exited immediately
+                # Process exited immediately. R13: the pre-check can be beaten
+                # by a concurrent bind in the TOCTOU window between it and the
+                # child's own bind — re-probe the port, and if someone else now
+                # holds it, classify as a collision so the monitor's policy
+                # applies instead of a raw exit code.
+                error_message = f"Process exited with code {proc.returncode}"
+                exception: Exception | None = None
+                try:
+                    from llama_orchestrator.health.ports import get_port_info
+
+                    port_info = get_port_info(config.server.port, config.server.host)
+                    if not port_info.is_available and port_info.instance_name != name:
+                        holder = (
+                            f"instance '{port_info.instance_name}'"
+                            if port_info.instance_name
+                            else f"PID {port_info.owner_pid or 'unknown'} ({port_info.owner_name or 'unknown'})"
+                        )
+                        error_message = (
+                            f"{error_message}; port {config.server.port} is now "
+                            f"held by {holder} — spawn raced a concurrent bind "
+                            "(TOCTOU collision)"
+                        )
+                        exception = PortCollisionError(name, error_message)
+                except Exception:
+                    # Classification is best-effort; never mask the original
+                    # failure with a probe error.
+                    logger.debug(
+                        f"[{name}] Post-spawn port re-probe failed; "
+                        "using generic start-failure path",
+                        exc_info=True,
+                    )
+
                 state.status = InstanceStatus.ERROR
                 state.health = HealthStatus.ERROR
-                state.error_message = f"Process exited with code {proc.returncode}"
+                state.error_message = error_message
                 runtime = _build_runtime_from_state(
-                    state, config=config, cmdline=cmdline, last_error=state.error_message
+                    state, config=config, cmdline=cmdline, last_error=error_message
                 )
                 save_state_atomic(state, runtime)
                 log_event(
                     event_type="start_failed",
-                    message=state.error_message,
+                    message=error_message,
                     instance_name=name,
                     level="error",
                     meta={"exit_code": proc.returncode},
                 )
-                raise ProcessError(name, state.error_message)
+                if exception is not None:
+                    raise exception
+                raise ProcessError(name, error_message)
 
             if wait_for_ready:
                 return _wait_for_instance_ready(proc, state, config, cmdline)
@@ -881,7 +960,7 @@ def restart_instance(
     name: str,
     force: bool = False,
     wait_for_ready: bool = True,
-    config_override: "InstanceConfig | None" = None,
+    config_override: InstanceConfig | None = None,
 ) -> InstanceState:
     """
     Restart a llama-server instance.
@@ -905,11 +984,9 @@ def restart_instance(
     if state is not None:
         restart_count = state.restart_count + 1
 
-    # Stop if running
-    try:
+    # Stop if running (may already be stopped)
+    with suppress(ProcessError):
         stop_instance(name, force=force)
-    except ProcessError:
-        pass  # May not be running
 
     # Small delay between stop and start
     time.sleep(0.5)

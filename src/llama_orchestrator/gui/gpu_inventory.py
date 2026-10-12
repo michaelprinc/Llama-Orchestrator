@@ -123,9 +123,15 @@ def render_gpu_inventory(
             )
             widgets.append(alias_btn)
 
-            # Bind left-click to toggle GPU selection
+            # Bind left-click to toggle GPU selection. A default-bound lambda
+            # cannot be type-inferred by mypy against bind's one-argument
+            # callback protocol, so an explicitly annotated closure is used.
             if on_gpu_select is not None:
-                alias_btn.bind("<Button-1>", lambda e, name=gpu_name: on_gpu_select(name))
+
+                def _toggle_gpu(event: tk.Event, selected: str = gpu_name) -> None:
+                    on_gpu_select(selected)
+
+                alias_btn.bind("<Button-1>", _toggle_gpu)
 
             # Add right-click context menu for editing the alias
             if on_edit_alias is not None:
@@ -165,13 +171,15 @@ def _bind_alias_button_context_menu(
 
 
 def edit_gpu_alias(
-    parent: tk.Widget,
+    # Tk or Toplevel (typeshed gives them no common nominal base beyond object;
+    # both satisfy Toplevel(master) [Misc] and transient(master) [Wm]).
+    parent: tk.Tk | tk.Toplevel,
     adapter_name: str,
     current_alias: str,
     aliases_store: dict[str, str],
     on_alias_changed: Callable[[str, str], None],
     normalize_fn: Callable[[str], str],
-    save_fn: Callable[[dict[str, str]], None],
+    save_fn: Callable[[dict[str, str]], object],
 ) -> None:
     """Show a dialog to edit a GPU adapter alias.
 
@@ -182,7 +190,7 @@ def edit_gpu_alias(
         aliases_store: Mutable dict mapping adapter_name -> alias (shared state).
         on_alias_changed: Callback invoked with (adapter_name, normalized_alias).
         normalize_fn: Function to normalize the alias input (str -> str).
-        save_fn: Function to persist aliases dict (dict[str, str] -> Path).
+        save_fn: Function to persist aliases dict; its return value is ignored.
     """
     dialog = tk.Toplevel(parent)
     dialog.title(f"Edit alias for {adapter_name}")

@@ -9,20 +9,22 @@ from __future__ import annotations
 import logging
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 from llama_orchestrator.config import discover_instances, get_instance_config
-from llama_orchestrator.engine.process import restart_instance
+from llama_orchestrator.engine.process import PortCollisionError, restart_instance
 from llama_orchestrator.engine.state import (
     HealthStatus,
     InstanceStatus,
     RuntimeState,
-    load_state,
     load_runtime,
+    load_state,
+    log_event,
     record_health_check,
-    save_state,
     save_runtime,
+    save_state,
 )
 from llama_orchestrator.health.checker import (
     HealthCheckResult,
@@ -60,6 +62,10 @@ class HealthMonitor:
     check_interval: float = 10.0  # Seconds between checks
     on_health_change: Callable[[str, HealthStatus, HealthStatus], None] | None = None
     on_restart: Callable[[str, int], None] | None = None
+    # R11: automatic re-porting on collision is OPT-IN (default off). The
+    # default policy marks the instance ERROR, emits an event, and lets the
+    # configured restart policy (retries/backoff) drive further attempts.
+    reassign_ports_on_collision: bool = False
 
     _running: bool = field(default=False, init=False)
     _thread: threading.Thread | None = field(default=None, init=False)
@@ -254,7 +260,13 @@ class HealthMonitor:
         config: InstanceConfig,
         health_state: InstanceHealthState,
     ) -> None:
-        """Trigger a restart for an unhealthy instance with port collision handling."""
+        """Trigger a restart for an unhealthy instance with port collision handling.
+
+        R11: collisions are detected via the structured ``PortCollisionError``
+        (never message substrings) and routed to ``_handle_port_collision``,
+        which applies the defined policy: ERROR state + event + configured
+        restart policy, with automatic re-porting only when opted in.
+        """
         logger.info(
             f"Restarting instance {name} after {health_state.consecutive_failures} "
             f"consecutive failures (attempt {health_state.restart_attempts + 1})"
@@ -273,19 +285,13 @@ class HealthMonitor:
                 except Exception as e:
                     logger.error(f"Error in on_restart callback: {e}")
 
+        except PortCollisionError as e:
+            logger.error(f"Port collision detected for instance {name}: {e}")
+            self._handle_port_collision(name, config, health_state)
+
         except Exception as e:
             logger.error(f"Failed to restart instance {name}: {e}")
             health_state.restart_attempts += 1
-
-            # Check if this is a port collision
-            error_msg = str(e).lower()
-            if "port" in error_msg and ("in use" in error_msg or "collision" in error_msg):
-                # Port collision detected - try to find a free port and restart
-                logger.warning(
-                    f"Port collision detected for instance {name}. "
-                    f"Attempting to find a free port and restart..."
-                )
-                self._handle_port_collision(name, config, health_state)
 
     def _handle_port_collision(
         self,
@@ -293,61 +299,96 @@ class HealthMonitor:
         config: InstanceConfig,
         health_state: InstanceHealthState,
     ) -> None:
-        """
-        Handle port collision by finding a free port and restarting.
+        """R11 port-collision policy.
 
-        Args:
-            name: Instance name
-            config: Instance configuration
-            health_state: Health tracking state
+        Default (``reassign_ports_on_collision=False``): mark the instance
+        ERROR, emit an error-level event (surfaced by ``describe``/GUI), and
+        count the attempt against the configured restart policy so that
+        max_retries and backoff keep governing subsequent cycles.
+
+        Opt-in (``reassign_ports_on_collision=True``): additionally attempt a
+        one-shot restart on a free port via config override. The override is
+        NOT persisted to the instance's config file; until the operator
+        updates the config, health checks keep probing the configured port.
         """
         from llama_orchestrator.health.ports import suggest_port_for_instance
 
-        # Get the current port from config
         current_port = config.server.port
 
-        # Suggest a new free port
+        # 1. Mark the instance ERROR. The failed start already persisted this
+        #    state; making it explicit keeps the policy self-contained.
+        state = load_state(name)
+        if state is not None:
+            state.status = InstanceStatus.ERROR
+            state.health = HealthStatus.ERROR
+            state.error_message = f"Port {current_port} is in use"
+            save_state(state)
+
+        # 2. Emit the event (visible in describe / GUI activity log).
+        log_event(
+            event_type="port_collision",
+            message=(
+                f"Port collision: port {current_port} is in use; "
+                f"instance marked ERROR"
+            ),
+            instance_name=name,
+            level="error",
+            meta={
+                "port": current_port,
+                "reassign_enabled": self.reassign_ports_on_collision,
+            },
+        )
+
+        # 3. Apply the configured restart policy: count this as an attempt so
+        #    backoff and max_retries apply to subsequent cycles. The instance
+        #    is still failing, so consecutive_failures stays elevated.
+        health_state.restart_attempts += 1
+        health_state.last_restart_time = time.time()
+
+        if not self.reassign_ports_on_collision:
+            logger.warning(
+                f"Port collision for instance {name}: port {current_port} is in use; "
+                f"keeping ERROR state (automatic re-porting is disabled by default; "
+                f"use HealthMonitor(reassign_ports_on_collision=True) to enable it)."
+            )
+            return
+
+        # 4. Opt-in automatic re-porting: one-shot restart on a free port.
         new_port = suggest_port_for_instance(
             name,
             preferred_port=current_port,
             port_range=(8080, 9000),
         )
-
-        if new_port is None:
+        if new_port is None or new_port == current_port:
             logger.error(
-                f"No free port found for instance {name} after port collision. "
-                f"Restart aborted."
+                f"No alternative free port found for instance {name}; "
+                f"keeping ERROR state."
             )
             return
 
-        if new_port != current_port:
-            logger.info(
-                f"Port collision resolved for instance {name}: "
-                f"switching from port {current_port} to {new_port}"
-            )
+        override = config.model_copy(
+            update={"server": config.server.model_copy(update={"port": new_port})}
+        )
+        try:
+            restart_instance(name, wait_for_ready=False, config_override=override)
+        except Exception as e:
+            logger.error(f"Re-port restart of instance {name} to port {new_port} failed: {e}")
+            return
 
-            # Create a modified config with the new port
-            from llama_orchestrator.config import InstanceConfig
-            import copy
-
-            try:
-                # Try to restart with the new port
-                # Note: This requires the instance config to support port override
-                # For now, we log the suggestion and let the user handle it
-                logger.warning(
-                    f"Instance {name} should be restarted with port {new_port} "
-                    f"(was {current_port}). Manual intervention may be required."
-                )
-            except Exception as e:
-                logger.error(f"Failed to restart with new port {new_port}: {e}")
-        else:
-            # Same port is still in use - wait and retry
-            logger.warning(
-                f"Port {current_port} is still in use for instance {name}. "
-                f"Waiting before next restart attempt..."
-            )
-            # Don't increment restart attempts for port collision wait
-            health_state.last_restart_time = time.time()
+        log_event(
+            event_type="port_reassigned",
+            message=(
+                f"Instance restarted on port {new_port} after collision "
+                f"(configured port: {current_port})"
+            ),
+            instance_name=name,
+            level="warning",
+            meta={"from": current_port, "to": new_port},
+        )
+        logger.warning(
+            f"Port collision for instance {name}: restarted on port {new_port} "
+            f"(configured port was {current_port}); update the config to persist it."
+        )
 
     def get_instance_health(self, name: str) -> InstanceHealthState | None:
         """Get the health tracking state for an instance."""
@@ -369,6 +410,7 @@ def start_monitoring(
     interval: float = 10.0,
     on_health_change: Callable[[str, HealthStatus, HealthStatus], None] | None = None,
     on_restart: Callable[[str, int], None] | None = None,
+    reassign_ports_on_collision: bool = False,
 ) -> HealthMonitor:
     """
     Start the global health monitor.
@@ -377,6 +419,8 @@ def start_monitoring(
         interval: Seconds between health checks
         on_health_change: Callback for health state changes
         on_restart: Callback when an instance is restarted
+        reassign_ports_on_collision: Opt-in automatic re-porting on port
+            collision (R11; default False keeps the ERROR+event policy)
 
     Returns:
         The HealthMonitor instance
@@ -391,6 +435,7 @@ def start_monitoring(
             check_interval=interval,
             on_health_change=on_health_change,
             on_restart=on_restart,
+            reassign_ports_on_collision=reassign_ports_on_collision,
         )
         _monitor.start()
         return _monitor

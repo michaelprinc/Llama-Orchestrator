@@ -66,13 +66,14 @@ def test_start_instance_updates_runtime_and_events() -> None:
              patch("llama_orchestrator.engine.process.load_state", return_value=None), \
              patch("llama_orchestrator.engine.process.load_runtime", return_value=None), \
              patch("llama_orchestrator.health.ports.validate_port_for_instance", return_value=(True, "ok")), \
+             patch("llama_orchestrator.health.ports.acquire_port_for_spawn", return_value=True), \
              patch("llama_orchestrator.engine.process.build_command", return_value=["llama-server", "--port", "8001"]), \
              patch("llama_orchestrator.engine.process.build_env", return_value={}), \
              patch("llama_orchestrator.engine.process.get_instance_log_handler", return_value=FakeLogHandler()), \
              patch("llama_orchestrator.engine.process.subprocess.Popen", return_value=proc), \
              patch("llama_orchestrator.health.checker.check_instance_health", return_value=healthy_result) as mock_check_health, \
              patch("llama_orchestrator.engine.process.record_health_check") as mock_record_health, \
-             patch("llama_orchestrator.engine.process.save_state") as mock_save_state, \
+             patch("llama_orchestrator.engine.process.save_state"), \
              patch("llama_orchestrator.engine.process.save_state_atomic") as mock_save_state_atomic, \
              patch("llama_orchestrator.engine.process.log_event") as mock_log_event, \
              patch("llama_orchestrator.engine.process.time.sleep"):
@@ -124,13 +125,14 @@ def test_start_instance_stays_loading_when_readiness_never_succeeds_within_budge
              patch("llama_orchestrator.engine.process.load_state", return_value=None), \
              patch("llama_orchestrator.engine.process.load_runtime", return_value=None), \
              patch("llama_orchestrator.health.ports.validate_port_for_instance", return_value=(True, "ok")), \
+             patch("llama_orchestrator.health.ports.acquire_port_for_spawn", return_value=True), \
              patch("llama_orchestrator.engine.process.build_command", return_value=["llama-server", "--port", "8001"]), \
              patch("llama_orchestrator.engine.process.build_env", return_value={}), \
              patch("llama_orchestrator.engine.process.get_instance_log_handler", return_value=FakeLogHandler()), \
              patch("llama_orchestrator.engine.process.subprocess.Popen", return_value=proc), \
              patch("llama_orchestrator.health.checker.check_instance_health", return_value=loading_result) as mock_check_health, \
              patch("llama_orchestrator.engine.process.record_health_check") as mock_record_health, \
-             patch("llama_orchestrator.engine.process.save_state") as mock_save_state, \
+             patch("llama_orchestrator.engine.process.save_state"), \
              patch("llama_orchestrator.engine.process.save_state_atomic") as mock_save_state_atomic, \
              patch("llama_orchestrator.engine.process.log_event"), \
              patch("llama_orchestrator.engine.process.time.sleep"), \
@@ -181,13 +183,14 @@ def test_start_instance_fails_if_process_exits_during_readiness_wait() -> None:
              patch("llama_orchestrator.engine.process.load_state", return_value=None), \
              patch("llama_orchestrator.engine.process.load_runtime", return_value=None), \
              patch("llama_orchestrator.health.ports.validate_port_for_instance", return_value=(True, "ok")), \
+             patch("llama_orchestrator.health.ports.acquire_port_for_spawn", return_value=True), \
              patch("llama_orchestrator.engine.process.build_command", return_value=["llama-server", "--port", "8001"]), \
              patch("llama_orchestrator.engine.process.build_env", return_value={}), \
              patch("llama_orchestrator.engine.process.get_instance_log_handler", return_value=FakeLogHandler()), \
              patch("llama_orchestrator.engine.process.subprocess.Popen", return_value=proc), \
              patch("llama_orchestrator.health.checker.check_instance_health", return_value=loading_result), \
              patch("llama_orchestrator.engine.process.record_health_check") as mock_record_health, \
-             patch("llama_orchestrator.engine.process.save_state") as mock_save_state, \
+             patch("llama_orchestrator.engine.process.save_state"), \
              patch("llama_orchestrator.engine.process.save_state_atomic") as mock_save_state_atomic, \
              patch("llama_orchestrator.engine.process.log_event") as mock_log_event, \
              patch("llama_orchestrator.engine.process.time.sleep"):
@@ -213,6 +216,7 @@ def test_start_instance_uses_detached_launcher_when_requested() -> None:
          patch("llama_orchestrator.engine.process.load_state", return_value=None), \
          patch("llama_orchestrator.engine.process.load_runtime", return_value=None), \
          patch("llama_orchestrator.health.ports.validate_port_for_instance", return_value=(True, "ok")), \
+         patch("llama_orchestrator.health.ports.acquire_port_for_spawn", return_value=True), \
          patch("llama_orchestrator.engine.process.build_command", return_value=["llama-server", "--port", "8001"]), \
          patch("llama_orchestrator.engine.process.build_env", return_value={}), \
          patch("llama_orchestrator.engine.process.get_instance_log_handler"), \
@@ -220,7 +224,7 @@ def test_start_instance_uses_detached_launcher_when_requested() -> None:
          patch("llama_orchestrator.engine.process.is_process_running", return_value=True), \
          patch("llama_orchestrator.health.checker.check_instance_health", return_value=healthy_result) as mock_check_health, \
          patch("llama_orchestrator.engine.process.record_health_check") as mock_record_health, \
-         patch("llama_orchestrator.engine.process.save_state") as mock_save_state, \
+         patch("llama_orchestrator.engine.process.save_state"), \
          patch("llama_orchestrator.engine.process.save_state_atomic") as mock_save_state_atomic, \
          patch("llama_orchestrator.engine.process.log_event") as mock_log_event:
         mock_start_detached.return_value = MagicMock(success=True, pid=2468)
@@ -246,12 +250,13 @@ def test_start_instance_detached_can_skip_readiness_wait() -> None:
          patch("llama_orchestrator.engine.process.load_state", return_value=None), \
          patch("llama_orchestrator.engine.process.load_runtime", return_value=None), \
          patch("llama_orchestrator.health.ports.validate_port_for_instance", return_value=(True, "ok")), \
+         patch("llama_orchestrator.health.ports.acquire_port_for_spawn", return_value=True), \
          patch("llama_orchestrator.engine.process.build_command", return_value=["llama-server", "--port", "8001"]), \
          patch("llama_orchestrator.engine.process.build_env", return_value={}), \
          patch("llama_orchestrator.engine.process.get_instance_log_handler"), \
          patch("llama_orchestrator.engine.process.start_detached") as mock_start_detached, \
          patch("llama_orchestrator.health.checker.check_instance_health") as mock_check_health, \
-         patch("llama_orchestrator.engine.process.save_state") as mock_save_state, \
+         patch("llama_orchestrator.engine.process.save_state"), \
          patch("llama_orchestrator.engine.process.save_state_atomic") as mock_save_state_atomic:
         mock_start_detached.return_value = MagicMock(success=True, pid=2468)
 
@@ -290,7 +295,7 @@ def test_restart_instance_waits_by_default_and_can_skip_waiting() -> None:
          patch("llama_orchestrator.engine.process.load_runtime", return_value=None), \
          patch("llama_orchestrator.engine.process.stop_instance") as mock_stop, \
          patch("llama_orchestrator.engine.process.start_instance", side_effect=[healthy_state, loading_state]) as mock_start, \
-         patch("llama_orchestrator.engine.process.save_state") as mock_save_state, \
+         patch("llama_orchestrator.engine.process.save_state"), \
          patch("llama_orchestrator.engine.process.save_state_atomic") as mock_save_state_atomic, \
          patch("llama_orchestrator.engine.process.log_event") as mock_log_event, \
          patch("llama_orchestrator.engine.process.time.sleep"):
@@ -358,7 +363,7 @@ def test_stop_instance_uses_runtime_when_legacy_state_missing() -> None:
          patch("llama_orchestrator.engine.process.load_runtime", side_effect=[runtime, runtime, runtime]), \
          patch("llama_orchestrator.engine.process.is_process_running", return_value=True), \
          patch("llama_orchestrator.engine.process.kill_process_tree", return_value=True), \
-         patch("llama_orchestrator.engine.process.save_state") as mock_save_state, \
+         patch("llama_orchestrator.engine.process.save_state"), \
          patch("llama_orchestrator.engine.process.save_state_atomic") as mock_save_state_atomic, \
          patch("llama_orchestrator.engine.process.log_event") as mock_log_event, \
          patch("llama_orchestrator.engine.process.get_log_files", return_value=(Path("stdout.log"), Path("stderr.log"))), \

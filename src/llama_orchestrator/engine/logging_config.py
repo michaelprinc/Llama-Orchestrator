@@ -40,7 +40,7 @@ class LogConfig:
 class InstanceLogHandler:
     """
     Manages rotating log handlers for an instance.
-    
+
     Provides separate handlers for stdout and stderr with
     automatic rotation based on file size.
     """
@@ -53,7 +53,7 @@ class InstanceLogHandler:
     ):
         """
         Initialize instance log handler.
-        
+
         Args:
             name: Instance name
             log_dir: Log directory (default: ~/.llama-orchestrator/logs/<name>)
@@ -113,7 +113,7 @@ class InstanceLogHandler:
     def get_file_handles(self) -> tuple[TextIO, TextIO]:
         """
         Get file handles for subprocess stdout/stderr.
-        
+
         Returns:
             Tuple of (stdout_file, stderr_file) open for appending
         """
@@ -121,13 +121,15 @@ class InstanceLogHandler:
         self.get_stdout_handler()
         self.get_stderr_handler()
 
-        # Open files for subprocess
-        stdout_file = open(
+        # Open files for subprocess. Ownership transfers to the caller, which
+        # must close them after spawning; a context manager would close them
+        # before the caller can use them.
+        stdout_file = open(  # noqa: SIM115 - handles returned to caller
             self.stdout_path, "a",
             encoding=self.config.encoding,
             buffering=1,  # Line buffering
         )
-        stderr_file = open(
+        stderr_file = open(  # noqa: SIM115 - handles returned to caller
             self.stderr_path, "a",
             encoding=self.config.encoding,
             buffering=1,
@@ -154,11 +156,11 @@ class InstanceLogHandler:
     def get_log_files(self) -> dict[str, list[Path]]:
         """
         Get all log files for this instance.
-        
+
         Returns:
             Dictionary with 'stdout' and 'stderr' keys containing lists of log paths
         """
-        result = {"stdout": [], "stderr": []}
+        result: dict[str, list[Path]] = {"stdout": [], "stderr": []}
 
         # Current logs
         if self.stdout_path.exists():
@@ -186,7 +188,7 @@ def setup_orchestrator_logging(
 ) -> None:
     """
     Configure logging for the orchestrator itself.
-    
+
     Args:
         level: Log level
         log_file: Optional file to log to
@@ -231,12 +233,12 @@ def get_instance_log_handler(
 ) -> InstanceLogHandler:
     """
     Get a log handler for an instance.
-    
+
     Args:
         name: Instance name
         max_bytes: Maximum log file size before rotation
         backup_count: Number of backup files to keep
-        
+
     Returns:
         InstanceLogHandler configured for the instance
     """
@@ -250,11 +252,11 @@ def get_instance_log_handler(
 def cleanup_old_logs(name: str, keep_rotated: int = 3) -> int:
     """
     Clean up old rotated logs beyond the keep limit.
-    
+
     Args:
         name: Instance name
         keep_rotated: Number of rotated logs to keep
-        
+
     Returns:
         Number of files removed
     """

@@ -418,11 +418,17 @@ def _read_metadata_value(handle: BinaryIO, value_type: int) -> Any:
 
 
 def _read_u32(handle: BinaryIO) -> int:
-    return _unpack(handle, "<I")
+    value = _unpack(handle, "<I")
+    if not isinstance(value, int):
+        raise ValueError(f"Expected integer u32 GGUF value, got {type(value).__name__}")
+    return value
 
 
 def _read_u64(handle: BinaryIO) -> int:
-    return _unpack(handle, "<Q")
+    value = _unpack(handle, "<Q")
+    if not isinstance(value, int):
+        raise ValueError(f"Expected integer u64 GGUF value, got {type(value).__name__}")
+    return value
 
 
 def _read_string(handle: BinaryIO) -> str:

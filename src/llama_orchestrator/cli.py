@@ -21,14 +21,19 @@ Commands:
 """
 
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated, cast, get_args
 
 import typer
 from rich.console import Console
+from rich.layout import Layout
+from rich.panel import Panel
 from rich.table import Table
 
 from llama_orchestrator import __version__
+from llama_orchestrator.binaries.schema import SupportedVariant
 from llama_orchestrator.cli_exit_codes import ExitCode
+from llama_orchestrator.config.schema import InstanceConfig
+from llama_orchestrator.naming import SERVER_BASE, executable_name
 
 # Initialize Typer app
 app = typer.Typer(
@@ -54,7 +59,7 @@ app.add_typer(binary_app, name="binary")
 console = Console()
 
 
-def _resolve_instance_token(token: str):
+def _resolve_instance_token(token: str) -> tuple[str, InstanceConfig]:
     """Resolve any supported selector token to the immutable alias-backed config."""
     from llama_orchestrator.config import get_instance_config
 
@@ -65,6 +70,17 @@ def _resolve_instance_token(token: str):
 def _raise_exit(code: ExitCode) -> None:
     """Raise a Typer exit with a standard exit code."""
     raise typer.Exit(int(code))
+
+
+def _coerce_supported_variant(variant: str) -> SupportedVariant:
+    """Narrow a CLI variant string to the supported literal set."""
+    supported = set(get_args(SupportedVariant))
+    if variant not in supported:
+        raise ValueError(
+            f"Unsupported binary variant '{variant}'. "
+            f"Supported variants: {', '.join(sorted(supported))}"
+        )
+    return cast("SupportedVariant", variant)
 
 
 def _process_error_code(message: str, default: ExitCode) -> ExitCode:
@@ -89,7 +105,7 @@ def version_callback(value: bool) -> None:
 @app.callback()
 def main(
     version: Annotated[
-        Optional[bool],
+        bool | None,
         typer.Option("--version", "-v", callback=version_callback, is_eager=True),
     ] = None,
 ) -> None:
@@ -99,7 +115,12 @@ def main(
     Standard exit codes: 2 usage, 10-19 config, 20-39 instance/process,
     50-69 binary/daemon.
     """
-    pass
+    # R15/D2: init_db() is no longer an import side effect of engine.state —
+    # the CLI entry point initializes the state database explicitly (the call
+    # is idempotent).  Eager options such as --version exit before this runs.
+    from llama_orchestrator.engine.state import init_db
+
+    init_db()
 
 
 # =============================================================================
@@ -114,16 +135,17 @@ def up(
 ) -> None:
     """
     Start a llama.cpp server instance.
-    
+
     Example:
         llama-orch up gpt-oss
     """
+    from rich.panel import Panel
+
     from llama_orchestrator.engine import (
         ProcessError,
         start_instance,
         validate_executable,
     )
-    from rich.panel import Panel
 
     # Load config first for UUID-aware binary resolution
     try:
@@ -143,7 +165,7 @@ def up(
         console.print(Panel(
             f"[red]{exe_msg}[/red]\n\n"
             "Please install a binary with 'llama-orch binary install'\n"
-            "or ensure llama-server.exe is in the bin/ directory.",
+            f"or ensure {executable_name(SERVER_BASE)} is in the bin/ directory.",
             title="Executable Not Found",
             border_style="red"
         ))
@@ -184,13 +206,14 @@ def down(
 ) -> None:
     """
     Stop a llama.cpp server instance.
-    
+
     Example:
         llama-orch down gpt-oss
         llama-orch down gpt-oss --force
     """
-    from llama_orchestrator.engine import ProcessError, stop_instance
     from rich.panel import Panel
+
+    from llama_orchestrator.engine import ProcessError, stop_instance
 
     try:
         resolved_name, config = _resolve_instance_token(name)
@@ -224,12 +247,13 @@ def restart(
 ) -> None:
     """
     Restart a llama.cpp server instance.
-    
+
     Example:
         llama-orch restart gpt-oss
     """
-    from llama_orchestrator.engine import ProcessError, restart_instance
     from rich.panel import Panel
+
+    from llama_orchestrator.engine import ProcessError, restart_instance
 
     try:
         resolved_name, config = _resolve_instance_token(name)
@@ -271,7 +295,7 @@ def ps(
 ) -> None:
     """
     List all llama.cpp server instances.
-    
+
     Example:
         llama-orch ps
         llama-orch ps --all
@@ -290,7 +314,7 @@ def ps(
     # Filter if not showing all
     if not all_instances:
         instances = {
-            k: v for k, v in instances.items() 
+            k: v for k, v in instances.items()
             if v.status != InstanceStatus.STOPPED
         }
         if not instances:
@@ -358,7 +382,7 @@ def health(
 ) -> None:
     """
     Check health status of an instance.
-    
+
     Example:
         llama-orch health gpt-oss
         llama-orch health --all
@@ -421,13 +445,14 @@ def logs(
 ) -> None:
     """
     View logs of an instance.
-    
+
     Example:
         llama-orch logs gpt-oss --tail 50
         llama-orch logs gpt-oss --follow
         llama-orch logs gpt-oss --stream both
     """
     import time
+
     from llama_orchestrator.config import get_logs_dir
     from llama_orchestrator.engine.detach import get_latest_logs
 
@@ -495,7 +520,8 @@ def logs(
                 for log_type, path in active_files.items():
                     if path is None:
                         continue
-                    handle = open(path, 'r', encoding='utf-8', errors='replace')
+                    # Long-lived follow handles; closed in the finally block below.
+                    handle = open(path, encoding='utf-8', errors='replace')  # noqa: SIM115
                     handle.seek(0, 2)
                     handles[log_type] = handle
 
@@ -533,13 +559,14 @@ def describe(
 ) -> None:
     """
     Show detailed information about an instance.
-    
+
     Example:
         llama-orch describe gpt-oss
         llama-orch describe gpt-oss --json
     """
-    from llama_orchestrator.cli_describe import build_description, format_description_rich
     from rich.panel import Panel
+
+    from llama_orchestrator.cli_describe import build_description, format_description_rich
 
     try:
         resolved_name, config = _resolve_instance_token(name)
@@ -594,6 +621,10 @@ def _build_dashboard_table() -> Table:
         state = instances.get(name)
 
         # Get config info
+        port: str
+        backend: str
+        model: str
+        display_name: str
         try:
             config = get_instance_config(name)
             port = str(config.server.port)
@@ -647,11 +678,9 @@ def _build_dashboard_table() -> Table:
     return table
 
 
-def _build_dashboard_events_panel(events_for: str | None = None):
+def _build_dashboard_events_panel(events_for: str | None = None) -> Panel:
     """Build the dashboard recent-events panel."""
     from datetime import datetime
-
-    from rich.panel import Panel
 
     from llama_orchestrator.engine import get_recent_events
 
@@ -673,10 +702,8 @@ def _build_dashboard_events_panel(events_for: str | None = None):
     return Panel("\n".join(lines), title=title, border_style="blue")
 
 
-def _build_dashboard_layout(events_for: str | None = None):
+def _build_dashboard_layout(events_for: str | None = None) -> Layout:
     """Build the full dashboard layout."""
-    from rich.layout import Layout
-
     layout = Layout()
     layout.split_row(
         Layout(_build_dashboard_table(), name="instances", ratio=3),
@@ -687,18 +714,19 @@ def _build_dashboard_layout(events_for: str | None = None):
 
 @app.command()
 def dashboard(
-    events_for: Annotated[Optional[str], typer.Option("--events-for", help="Filter dashboard events by instance")] = None,
+    events_for: Annotated[str | None, typer.Option("--events-for", help="Filter dashboard events by instance")] = None,
 ) -> None:
     """
     Launch live TUI dashboard.
-    
+
     Shows all instances with live status updates.
     Press 'q' to quit, 'r' to refresh, 'h' for help.
-    
+
     Example:
         llama-orch dashboard
     """
     import time
+
     from rich.live import Live
 
     console.print("[bold]Starting dashboard...[/bold]")
@@ -722,7 +750,9 @@ def gui() -> None:
         llama-orch gui
     """
     try:
-        from llama_orchestrator.gui import launch_gui
+        # Import from the leaf module: gui/__init__ re-exports without __all__,
+        # which mypy strict treats as an implicit (unexported) name.
+        from llama_orchestrator.gui.app import launch_gui
     except Exception as e:
         console.print(f"[red]Failed to load GUI:[/red] {e}")
         _raise_exit(ExitCode.GENERAL_ERROR)
@@ -744,13 +774,21 @@ def init(
 ) -> None:
     """
     Initialize a new instance configuration.
-    
+
     Example:
         llama-orch init gpt-oss --model ../models/gpt-oss.gguf --port 8001
         llama-orch init my-model -m models/model.gguf -p 8002 -b vulkan -d 1 -l 30
     """
-    from llama_orchestrator.config import GpuConfig, InstanceConfig, ModelConfig, ServerConfig, get_instance_config, save_config
     from rich.panel import Panel
+
+    from llama_orchestrator.config import (
+        GpuConfig,
+        InstanceConfig,
+        ModelConfig,
+        ServerConfig,
+        get_instance_config,
+        save_config,
+    )
 
     try:
         existing = get_instance_config(name)
@@ -782,7 +820,7 @@ def init(
                 port=port,
             ),
             gpu=GpuConfig(
-                backend=backend,  # type: ignore
+                backend=backend,
                 device_id=device,
                 layers=layers,
             ),
@@ -859,7 +897,7 @@ def config_set_binary(
 @config_app.command("validate")
 def config_validate(
     path: Annotated[
-        Optional[Path], 
+        Path | None,
         typer.Argument(help="Config file path (optional)")
     ] = None,
     check_runtime: Annotated[
@@ -868,19 +906,20 @@ def config_validate(
 ) -> None:
     """
     Validate instance configuration.
-    
+
     Example:
         llama-orch config validate
         llama-orch config validate instances/gpt-oss/config.json
         llama-orch config validate --runtime
     """
+    from rich.panel import Panel
+
     from llama_orchestrator.config import (
         ConfigLoadError,
         load_config,
         validate_all_instances,
         validate_instance,
     )
-    from rich.panel import Panel
 
     if path:
         console.print(f"[blue]Validating config:[/blue] {path}")
@@ -920,14 +959,17 @@ def config_lint(
 ) -> None:
     """
     Run full validation (lint) on all configurations.
-    
+
     Includes additional best practice checks beyond basic validation.
-    
+
     Example:
         llama-orch config lint
         llama-orch config lint --json
     """
     import json
+
+    from rich.panel import Panel
+    from rich.table import Table
 
     from llama_orchestrator.config import (
         ConfigLoadError,
@@ -935,8 +977,6 @@ def config_lint(
         lint_config,
         load_all_instances,
     )
-    from rich.panel import Panel
-    from rich.table import Table
 
     console.print("[blue]Linting all configurations...[/blue]\n")
 
@@ -988,7 +1028,7 @@ def config_lint(
             for issue in result.issues:
                 severity_style = {
                     "error": "red",
-                    "warning": "yellow", 
+                    "warning": "yellow",
                     "info": "blue"
                 }[issue.severity]
                 table.add_row(
@@ -1043,7 +1083,7 @@ def config_migrate_model_metadata(
         typer.Option("--fetch-hf-license", help="Fetch license metadata from Hugging Face when hf: tags are present"),
     ] = False,
     hf_token: Annotated[
-        Optional[str],
+        str | None,
         typer.Option("--hf-token", help="Optional Hugging Face token for license metadata refresh"),
     ] = None,
 ) -> None:
@@ -1114,16 +1154,17 @@ def daemon_start(
 ) -> None:
     """
     Start the orchestrator daemon.
-    
+
     The daemon monitors all instances and triggers auto-restarts
     based on health check policies.
-    
+
     Example:
         llama-orch daemon start
         llama-orch daemon start --foreground
     """
-    from llama_orchestrator.daemon import is_daemon_running, start_daemon
     from rich.panel import Panel
+
+    from llama_orchestrator.daemon import is_daemon_running, start_daemon
 
     if is_daemon_running():
         console.print("[yellow]Daemon is already running.[/yellow]")
@@ -1155,12 +1196,13 @@ def daemon_start(
 def daemon_stop() -> None:
     """
     Stop the orchestrator daemon.
-    
+
     Example:
         llama-orch daemon stop
     """
-    from llama_orchestrator.daemon import is_daemon_running, stop_daemon
     from rich.panel import Panel
+
+    from llama_orchestrator.daemon import is_daemon_running, stop_daemon
 
     if not is_daemon_running():
         console.print("[yellow]Daemon is not running.[/yellow]")
@@ -1183,12 +1225,13 @@ def daemon_stop() -> None:
 def daemon_status() -> None:
     """
     Show daemon status.
-    
+
     Example:
         llama-orch daemon status
     """
-    from llama_orchestrator.daemon import get_daemon_status
     from rich.panel import Panel
+
+    from llama_orchestrator.daemon import get_daemon_status
 
     status = get_daemon_status()
 
@@ -1269,11 +1312,13 @@ def daemon_uninstall(
 
 @binary_app.command("register")
 def binary_register(
-    package_dir: Annotated[Path, typer.Argument(help="Directory containing llama-server.exe and matching DLLs")],
+    package_dir: Annotated[
+        Path, typer.Argument(help=f"Directory containing {executable_name(SERVER_BASE)} and matching libraries")
+    ],
     version: Annotated[str, typer.Option("--version", help="Immutable build/package identifier")],
     variant: Annotated[str, typer.Option("--variant", help="Backend/build variant label")],
     source_url: Annotated[
-        Optional[str], typer.Option("--source-url", help="Optional provenance URL or local identifier")
+        str | None, typer.Option("--source-url", help="Optional provenance URL or local identifier")
     ] = None,
 ) -> None:
     """Import a complete locally built or downloaded llama-server package.
@@ -1339,6 +1384,12 @@ def binary_install(
     from llama_orchestrator.binaries import BinaryManager
     from llama_orchestrator.config import get_project_root
 
+    try:
+        variant_value = _coerce_supported_variant(variant)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _raise_exit(ExitCode.BINARY_INSTALL_FAILED)
+
     project_root = get_project_root()
     manager = BinaryManager(project_root)
 
@@ -1360,7 +1411,7 @@ def binary_install(
             try:
                 binary = manager.install(
                     version=version,
-                    variant=variant,
+                    variant=variant_value,
                     insecure=insecure,
                 )
                 progress.update(task, description="Installation complete!")
@@ -1393,10 +1444,10 @@ def binary_install(
 def binary_list() -> None:
     """
     List all installed llama.cpp binaries.
-    
+
     Shows all binaries in the bins/ directory with their UUIDs,
     versions, variants, and installation dates.
-    
+
     Example:
         llama-orch binary list
     """
@@ -1439,7 +1490,7 @@ def binary_info(
 ) -> None:
     """
     Show detailed information about an installed binary.
-    
+
     Example:
         llama-orch binary info 550e8400-e29b-41d4-a716-446655440000
         llama-orch binary info 550e8400  # partial UUID match
@@ -1495,30 +1546,34 @@ def binary_info(
 @binary_app.command("remove")
 def binary_remove(
     binary_id: Annotated[str, typer.Argument(help="Binary UUID to remove")],
-    force: Annotated[bool, typer.Option("--force", "-f", help="Skip confirmation")] = False,
+    force: Annotated[
+        bool, typer.Option("--force", "-f", help="Skip confirmation and allow removal of binaries pinned by instance configs")
+    ] = False,
 ) -> None:
     """
     Remove an installed llama.cpp binary.
-    
-    Removes the binary directory and unregisters it from the registry.
-    
+
+    Delegates to BinaryManager.uninstall(): the registry entry is removed and
+    persisted before the files are deleted, and removal fails with a clear
+    error if any instance config pins this binary (unless --force).
+
     Example:
         llama-orch binary remove 550e8400-e29b-41d4-a716-446655440000
         llama-orch binary remove 550e8400 --force
     """
-    import shutil
-
     from rich.panel import Panel
 
-    from llama_orchestrator.binaries.registry import load_registry, remove_binary
-    from llama_orchestrator.config import get_bins_dir
+    from llama_orchestrator.binaries.manager import (
+        BinaryInUseError,
+        BinaryManager,
+        BinaryNotFoundError,
+    )
+    from llama_orchestrator.config import get_project_root
 
-    bins_dir = get_bins_dir()
-    registry = load_registry(bins_dir)
-
-    # Find matching binary
+    # Find matching binary (full UUID or unique prefix)
+    manager = BinaryManager(get_project_root())
     matches = []
-    for binary in registry.binaries:
+    for binary in manager.registry.list_all():
         if str(binary.id) == binary_id:
             matches = [binary]
             break
@@ -1538,6 +1593,22 @@ def binary_remove(
 
     binary = matches[0]
 
+    # Fail fast (before prompting) when an instance config pins this binary.
+    if not force:
+        try:
+            using = manager.instances_using(binary.id)
+        except Exception as exc:
+            console.print(f"[red]Cannot verify in-use status: {exc}[/red]")
+            _raise_exit(ExitCode.CONFIG_INVALID)
+        if using:
+            console.print(Panel(
+                f"[red]Binary is pinned by instance config(s): {', '.join(using)}[/red]\n\n"
+                "Stop the instances or remove their binary pin first, or retry with --force.",
+                title="Binary In Use",
+                border_style="red",
+            ))
+            _raise_exit(ExitCode.BINARY_INVALID)
+
     # Confirm deletion
     if not force:
         console.print("[yellow]About to remove binary:[/yellow]")
@@ -1551,13 +1622,19 @@ def binary_remove(
             console.print("[dim]Cancelled.[/dim]")
             raise typer.Exit(0)
 
-    # Remove directory
-    if binary.path and binary.path.exists():
-        shutil.rmtree(binary.path)
-        console.print(f"[dim]Removed directory: {binary.path}[/dim]")
-
-    # Remove from registry
-    remove_binary(bins_dir, binary.id)
+    try:
+        manager.uninstall(binary.id, force=force)
+    except BinaryInUseError as exc:
+        console.print(Panel(
+            f"[red]{exc.message}[/red]\n\n"
+            "Stop the instances or remove their binary pin first, or retry with --force.",
+            title="Binary In Use",
+            border_style="red",
+        ))
+        _raise_exit(ExitCode.BINARY_INSTALL_FAILED)
+    except BinaryNotFoundError:
+        console.print(f"[red]No binary found matching '{binary_id}'[/red]")
+        _raise_exit(ExitCode.BINARY_NOT_FOUND)
 
     console.print(Panel(
         f"[green]Binary removed successfully![/green]\n\n"
@@ -1577,20 +1654,25 @@ def binary_latest(
 ) -> None:
     """
     Show the latest available llama.cpp version from GitHub.
-    
+
     Example:
         llama-orch binary latest
         llama-orch binary latest --variant win-cuda-13.3-x64
     """
-    from rich.panel import Panel
-
     from llama_orchestrator.binaries import GitHubClient
+
+    try:
+        variant_value = _coerce_supported_variant(variant)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        _raise_exit(ExitCode.BINARY_DOWNLOAD_FAILED)
+
     console.print("[cyan]Fetching latest release from GitHub...[/cyan]")
 
     try:
         with GitHubClient() as client:
-            release = client.get_latest_binary_release(variant)
-            download_url = client.get_asset_url(release["tag_name"], variant)
+            release = client.get_latest_binary_release(variant_value)
+            download_url = client.get_asset_url(release["tag_name"], variant_value)
         if download_url is None:
             raise RuntimeError(f"No archive published for backend '{variant}'")
 

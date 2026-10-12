@@ -90,9 +90,11 @@ def resolve_models_directory_input(value: str) -> Path:
 class HuggingFaceImportDialog(tk.Toplevel):
     """Import a GGUF model from Hugging Face and prefill Add Model fields."""
 
+    # Tk or Toplevel (typeshed has no common nominal base; both satisfy
+    # Toplevel(master) [Misc] and transient(master) [Wm]).
     def __init__(
         self,
-        master: tk.Tk,
+        master: tk.Tk | tk.Toplevel,
         on_use: Callable[[ImportedModelSelection], None],
     ) -> None:
         super().__init__(master)
@@ -309,6 +311,9 @@ class HuggingFaceImportDialog(tk.Toplevel):
         if variant is None or self.repo_ref is None:
             messagebox.showerror("Hugging Face import", "Select one GGUF variant first.", parent=self)
             return
+        # Capture while the None-check narrowing is still active; the worker
+        # thread runs later, when dialog state may have changed.
+        repo_id = self.repo_ref.repo_id
         models_dir = self._resolve_models_dir()
         token = self.token_store.get_token()
 
@@ -352,7 +357,7 @@ class HuggingFaceImportDialog(tk.Toplevel):
         def worker() -> None:
             try:
                 selection = download_gguf_variant(
-                    self.repo_ref.repo_id,
+                    repo_id,
                     variant.filename,
                     models_dir,
                     token=token,

@@ -2,10 +2,7 @@
 Tests for llama_orchestrator.engine module.
 """
 
-import os
-import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -104,14 +101,14 @@ class TestBuildEnv:
     def test_vulkan_env_vars(self, sample_config):
         """Test Vulkan environment variables are set."""
         env = build_env(sample_config)
-        
+
         assert "GGML_VULKAN_DEVICE" in env
         assert env["GGML_VULKAN_DEVICE"] == "0"
 
     def test_cuda_env_vars(self, cuda_config):
         """Test CUDA environment variables are set."""
         env = build_env(cuda_config)
-        
+
         assert "CUDA_VISIBLE_DEVICES" in env
         assert env["CUDA_VISIBLE_DEVICES"] == "1"
 
@@ -125,7 +122,7 @@ class TestBuildEnv:
     def test_cpu_no_gpu_env(self, cpu_config):
         """Test CPU backend has no GPU-specific env vars."""
         env = build_env(cpu_config)
-        
+
         assert "GGML_VULKAN_DEVICE" not in env
         assert "CUDA_VISIBLE_DEVICES" not in env
         assert "HIP_VISIBLE_DEVICES" not in env
@@ -143,7 +140,7 @@ class TestInstanceState:
             status=InstanceStatus.RUNNING,
             health=HealthStatus.UNKNOWN,
         )
-        
+
         assert state.name == "test"
         assert state.pid == 1234
         assert state.status == InstanceStatus.RUNNING
@@ -158,7 +155,7 @@ class TestInstanceState:
             health=HealthStatus.HEALTHY,
         )
         assert running.status_symbol == "*"
-        
+
         stopped = InstanceState(
             name="test",
             status=InstanceStatus.STOPPED,
@@ -174,7 +171,7 @@ class TestInstanceState:
             health=HealthStatus.HEALTHY,
         )
         assert healthy.health_symbol == "*"
-        
+
         unhealthy = InstanceState(
             name="test",
             status=InstanceStatus.ERROR,

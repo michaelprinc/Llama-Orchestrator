@@ -9,9 +9,9 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable
 
 from llama_orchestrator.engine.state import (
     HealthStatus,
@@ -89,14 +89,14 @@ def reconcile_instance(
 ) -> ReconcileResult:
     """
     Reconcile a single instance's state with actual process.
-    
+
     Checks if the database state matches reality and corrects if needed.
-    
+
     Args:
         name: Instance name to reconcile
         auto_cleanup: Whether to automatically fix issues
         stale_threshold: Seconds before considering state stale
-        
+
     Returns:
         ReconcileResult with action taken
     """
@@ -249,12 +249,12 @@ def reconcile_all(
 ) -> ReconcileSummary:
     """
     Reconcile all instances and optionally detect orphans.
-    
+
     Args:
         auto_cleanup: Whether to automatically fix issues
         stale_threshold: Seconds before considering state stale
         detect_orphans: Whether to detect orphan processes
-        
+
     Returns:
         ReconcileSummary with all results
     """
@@ -310,7 +310,7 @@ def reconcile_all(
 class Reconciler:
     """
     Background reconciler that periodically checks state consistency.
-    
+
     Can be used by the daemon to automatically detect and handle
     process issues.
     """
@@ -325,7 +325,7 @@ class Reconciler:
     ):
         """
         Initialize the reconciler.
-        
+
         Args:
             interval: Seconds between reconciliation runs
             auto_cleanup: Whether to automatically fix issues

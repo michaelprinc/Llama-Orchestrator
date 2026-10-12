@@ -12,10 +12,10 @@ import logging
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Optional
 from uuid import UUID
 
 from llama_orchestrator.binaries.schema import BinaryRegistry, BinaryVersion
+from llama_orchestrator.naming import SERVER_BASE, executable_name, locate_executable
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +29,7 @@ VERSION_FILENAME = "version.json"
 class RegistryError(Exception):
     """Error during registry operations."""
 
-    def __init__(self, message: str, cause: Optional[Exception] = None):
+    def __init__(self, message: str, cause: Exception | None = None):
         self.message = message
         self.cause = cause
         super().__init__(message)
@@ -48,15 +48,15 @@ def get_version_path(binary_dir: Path) -> Path:
 def load_registry(bins_dir: Path) -> BinaryRegistry:
     """
     Load binary registry from bins/registry.json.
-    
+
     Creates empty registry if file doesn't exist.
-    
+
     Args:
         bins_dir: Path to bins/ directory
-        
+
     Returns:
         BinaryRegistry model
-        
+
     Raises:
         RegistryError: If registry file is corrupted
     """
@@ -83,13 +83,13 @@ def load_registry(bins_dir: Path) -> BinaryRegistry:
 def save_registry(bins_dir: Path, registry: BinaryRegistry) -> None:
     """
     Save binary registry to bins/registry.json with atomic write.
-    
+
     Uses temp file + rename for atomic operation to prevent corruption.
-    
+
     Args:
         bins_dir: Path to bins/ directory
         registry: BinaryRegistry model to save
-        
+
     Raises:
         RegistryError: If save fails
     """
@@ -126,11 +126,11 @@ def save_registry(bins_dir: Path, registry: BinaryRegistry) -> None:
 def save_version_metadata(binary: BinaryVersion, bins_dir: Path) -> None:
     """
     Save version.json metadata file in binary directory.
-    
+
     Args:
         binary: BinaryVersion model to save
         bins_dir: Path to bins/ directory
-        
+
     Raises:
         RegistryError: If save fails
     """
@@ -152,13 +152,13 @@ def save_version_metadata(binary: BinaryVersion, bins_dir: Path) -> None:
         raise RegistryError(f"Failed to save version metadata: {e}", cause=e) from e
 
 
-def load_version_metadata(binary_dir: Path) -> Optional[BinaryVersion]:
+def load_version_metadata(binary_dir: Path) -> BinaryVersion | None:
     """
     Load version.json metadata from binary directory.
-    
+
     Args:
         binary_dir: Path to binary directory
-        
+
     Returns:
         BinaryVersion model or None if not found
     """
@@ -181,7 +181,7 @@ def load_version_metadata(binary_dir: Path) -> Optional[BinaryVersion]:
 class BinaryRegistryManager:
     """
     Manager for binary registry operations.
-    
+
     Provides a higher-level interface for CRUD operations on the registry.
     All lookups use UUID as the primary key.
     """
@@ -189,12 +189,12 @@ class BinaryRegistryManager:
     def __init__(self, bins_dir: Path):
         """
         Initialize registry manager.
-        
+
         Args:
             bins_dir: Path to bins/ directory
         """
         self.bins_dir = bins_dir
-        self._registry: Optional[BinaryRegistry] = None
+        self._registry: BinaryRegistry | None = None
 
     @property
     def registry(self) -> BinaryRegistry:
@@ -213,41 +213,41 @@ class BinaryRegistryManager:
         if self._registry is not None:
             save_registry(self.bins_dir, self._registry)
 
-    def get_by_id(self, binary_id: UUID) -> Optional[BinaryVersion]:
+    def get_by_id(self, binary_id: UUID) -> BinaryVersion | None:
         """
         Get binary by UUID (primary lookup).
-        
+
         Args:
             binary_id: UUID of binary
-            
+
         Returns:
             BinaryVersion or None if not found
         """
         return self.registry.get_by_id(binary_id)
 
-    def get_by_version(self, version: str, variant: str) -> Optional[BinaryVersion]:
+    def get_by_version(self, version: str, variant: str) -> BinaryVersion | None:
         """
         Get binary by version and variant (fallback lookup).
-        
+
         Args:
             version: llama.cpp version tag
             variant: Platform variant
-            
+
         Returns:
             BinaryVersion or None if not found
         """
         return self.registry.get_by_version(version, variant)
 
-    def get_default(self) -> Optional[BinaryVersion]:
+    def get_default(self) -> BinaryVersion | None:
         """Get the default binary if set."""
         return self.registry.get_default()
 
     def add(self, binary: BinaryVersion) -> None:
         """
         Add a binary to the registry.
-        
+
         Also saves version.json in the binary directory.
-        
+
         Args:
             binary: BinaryVersion to add
         """
@@ -255,15 +255,15 @@ class BinaryRegistryManager:
         save_version_metadata(binary, self.bins_dir)
         self.save()
 
-    def remove(self, binary_id: UUID) -> Optional[BinaryVersion]:
+    def remove(self, binary_id: UUID) -> BinaryVersion | None:
         """
         Remove a binary from the registry.
-        
+
         Note: Does NOT delete files, only removes from registry.
-        
+
         Args:
             binary_id: UUID of binary to remove
-            
+
         Returns:
             Removed BinaryVersion or None if not found
         """
@@ -275,10 +275,10 @@ class BinaryRegistryManager:
     def set_default(self, binary_id: UUID) -> bool:
         """
         Set the default binary.
-        
+
         Args:
             binary_id: UUID of binary to set as default
-            
+
         Returns:
             True if successful, False if binary not found
         """
@@ -303,13 +303,13 @@ class BinaryRegistryManager:
         """Get the number of installed binaries."""
         return len(self.registry.binaries)
 
-    def get_binary_path(self, binary_id: UUID) -> Optional[Path]:
+    def get_binary_path(self, binary_id: UUID) -> Path | None:
         """
         Get the full path to a binary directory.
-        
+
         Args:
             binary_id: UUID of binary
-            
+
         Returns:
             Path to binary directory or None if not found
         """
@@ -318,28 +318,34 @@ class BinaryRegistryManager:
             return None
         return self.bins_dir / str(binary.id)
 
-    def get_server_path(self, binary_id: UUID) -> Optional[Path]:
+    def get_server_path(self, binary_id: UUID) -> Path | None:
         """
-        Get the path to llama-server.exe for a binary.
-        
+        Get the path to the llama-server executable for a binary.
+
+        Prefers the platform-native file name but still locates packages
+        created on the other platform through the cross-platform candidate.
+
         Args:
             binary_id: UUID of binary
-            
+
         Returns:
-            Path to llama-server.exe or None if not found
+            Path to the llama-server executable or None if not found
         """
         binary_path = self.get_binary_path(binary_id)
         if binary_path is None:
             return None
-        return binary_path / "llama-server.exe"
+        located = locate_executable(binary_path, SERVER_BASE)
+        if located is not None:
+            return located
+        return binary_path / executable_name(SERVER_BASE)
 
     def verify_binary_exists(self, binary_id: UUID) -> bool:
         """
         Check if binary directory and executable exist on disk.
-        
+
         Args:
             binary_id: UUID of binary
-            
+
         Returns:
             True if binary files exist
         """

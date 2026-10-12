@@ -14,7 +14,7 @@ Usage:
 import json
 import re
 import sys
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -54,7 +54,7 @@ class Section:
 
 
 def read_file(path: str) -> list[str]:
-    with open(path, "r") as f:
+    with open(path) as f:
         return f.readlines()
 
 
@@ -68,7 +68,7 @@ def extract_classes_and_methods(lines: list[str]) -> list[Class]:
         m = re.match(r'^class\s+(\w+)(?:\(([^)]+)\))?\s*:', line)
         if m:
             class_name = m.group(1)
-            bases = m.group(2) or ""
+            m.group(2) or ""
             current_class = Class(
                 name=class_name,
                 line_start=i,
