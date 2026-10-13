@@ -36,7 +36,9 @@ from llama_orchestrator.engine.detection import DetectedGpu
 from llama_orchestrator.gui.usability import get_health_tag, get_status_tag
 
 if TYPE_CHECKING:
-    from llama_orchestrator.gui import GuiRefreshSnapshot, TableRow
+    # Import from the leaf module (not the gui package root) to avoid a
+    # circular import that mypy reports as missing explicit exports.
+    from llama_orchestrator.gui.dataclasses import GuiRefreshSnapshot, TableRow
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +61,9 @@ class RefreshController:
         refresh_interval_ms: int = 2000,
         gpu_inventory_interval_s: float = 60.0,
         _collect_snapshot: Callable[[], GuiRefreshSnapshot] | None = None,
-        _render_diff_rows: Callable[[tuple, tuple, tuple[str, ...]], None] | None = None,
+        _render_diff_rows: (
+            Callable[[tuple[TableRow, ...], tuple[DetectedGpu, ...], tuple[str, ...]], None] | None
+        ) = None,
         _render_refresh_metadata: Callable[[GuiRefreshSnapshot, tuple[str, ...], str | None], None] | None = None,
         _render_daemon_status: Callable[[], None] | None = None,
         _update_benchmark_controls: Callable[[], None] | None = None,
@@ -133,7 +137,8 @@ class RefreshController:
 
     def _default_collect(self) -> GuiRefreshSnapshot:
         """Default data collection (callable is overridden by the GUI)."""
-        from llama_orchestrator.gui import GuiRefreshSnapshot
+        from llama_orchestrator.gui.dataclasses import GuiRefreshSnapshot
+
         return GuiRefreshSnapshot(
             rows=(),
             detected_gpus=(),
@@ -191,6 +196,14 @@ class RenderDiffMixin:
     to get incremental tree updates instead of full rebuilds.
     """
 
+    # Structural state provided by the host GUI class. Declared here so the
+    # mixin type-checks without Any; these are annotations only (no runtime
+    # effect). ``tree`` is intentionally left undeclared: it belongs to the
+    # host and its widget calls stay suppressed at the use sites.
+    _row_map: dict[str, TableRow]
+    _last_gpu_inventory: tuple[DetectedGpu, ...] | None
+    _gpu_inventory_ts: float
+
     def render_diff_rows(
         self,
         new_rows: tuple[TableRow, ...],
@@ -205,7 +218,7 @@ class RenderDiffMixin:
         """
         from llama_orchestrator.gui.app import RUNNING_BENCHMARK_ROW_TAG
         new_map: dict[str, TableRow] = {row.name: row for row in new_rows}
-        existing = self._row_map  # type: ignore[attr-defined]
+        existing = self._row_map
 
         # Update or insert
         for name, row in new_map.items():
@@ -235,7 +248,7 @@ class RenderDiffMixin:
                 self.tree.move(row.name, "", index)  # type: ignore[attr-defined]
 
         # Update the map
-        self._row_map = new_map  # type: ignore[attr-defined]
+        self._row_map = new_map
 
     def _debounced_gpu_inventory(self, detected_gpus: tuple[DetectedGpu, ...]) -> bool:
         """Return True if the GPU inventory actually changed.
@@ -245,10 +258,10 @@ class RenderDiffMixin:
         """
         now = time.monotonic()
         if (
-            self._last_gpu_inventory == detected_gpus  # type: ignore[attr-defined]
-            and now - self._gpu_inventory_ts < 60  # type: ignore[attr-defined]
+            self._last_gpu_inventory == detected_gpus
+            and now - self._gpu_inventory_ts < 60
         ):
             return False  # skip rebuild (no change)
-        self._last_gpu_inventory = detected_gpus  # type: ignore[attr-defined]
-        self._gpu_inventory_ts = now  # type: ignore[attr-defined]
+        self._last_gpu_inventory = detected_gpus
+        self._gpu_inventory_ts = now
         return True  # trigger rebuild (changed)

@@ -7,9 +7,9 @@ Uses Pydantic v2 for validation and serialization.
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, HttpUrl, PrivateAttr, field_validator, model_validator
@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field, HttpUrl, PrivateAttr, field_validator, mo
 
 def _utc_now_iso() -> str:
     """Return a stable UTC timestamp for persisted config metadata."""
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 KNOWN_PARAMETER_PATHS: tuple[str, ...] = (
@@ -180,7 +180,7 @@ class ParameterMutabilityConfig(BaseModel):
         return normalized
 
     @model_validator(mode="after")
-    def validate_coverage(self) -> "ParameterMutabilityConfig":
+    def validate_coverage(self) -> ParameterMutabilityConfig:
         """Ensure every known parameter path is classified exactly once."""
         static_set = set(self.static)
         dynamic_set = set(self.dynamic)
@@ -211,22 +211,22 @@ class ParameterMutabilityConfig(BaseModel):
 class BinaryConfig(BaseModel):
     """
     Binary configuration for llama.cpp server executable.
-    
+
     The binary_id (UUID) is the PRIMARY identifier that joins to
     bins/registry.json. Version and variant are optional hints
     for resolution when binary_id is not set.
-    
+
     This enables:
     - Unambiguous binary identification via UUID
     - Database-like joins between config.json and registry.json
     - Multiple installations of the same version+variant
     """
 
-    binary_id: Optional[UUID] = Field(
+    binary_id: UUID | None = Field(
         default=None,
         description="Primary identifier - UUID of installed binary. Joins to registry.json"
     )
-    version: Optional[str] = Field(
+    version: str | None = Field(
         default=None,
         description="llama.cpp version tag (e.g., 'b7572', 'latest'). Used when binary_id is None"
     )
@@ -235,18 +235,18 @@ class BinaryConfig(BaseModel):
         min_length=1,
         description="Platform/GPU variant. May identify a locally built ROCm package."
     )
-    source_url: Optional[HttpUrl] = Field(
+    source_url: HttpUrl | None = Field(
         default=None,
         description="Custom download URL (overrides auto-generated URL)"
     )
-    sha256: Optional[str] = Field(
+    sha256: str | None = Field(
         default=None,
         description="Expected SHA256 checksum for verification"
     )
 
     @field_validator("sha256")
     @classmethod
-    def validate_sha256(cls, v: Optional[str]) -> Optional[str]:
+    def validate_sha256(cls, v: str | None) -> str | None:
         """Validate SHA256 format if provided."""
         if v is not None:
             v = v.lower().strip()
@@ -306,19 +306,15 @@ class GpuConfig(BaseModel):
     """Configuration for GPU acceleration."""
 
     backend: Literal["cpu", "vulkan", "cuda", "metal", "hip"] = Field(
-        default="cpu", 
+        default="cpu",
         description="GPU backend to use"
     )
     device_id: int = Field(default=0, ge=0, description="GPU device index")
     layers: int = Field(default=0, ge=0, description="Number of layers to offload to GPU")
 
-    @model_validator(mode="after")
-    def validate_gpu_config(self) -> "GpuConfig":
-        """Validate GPU configuration consistency."""
-        if self.backend == "cpu" and self.layers > 0:
-            # Allow layers > 0 with CPU, just warn (handled at runtime)
-            pass
-        return self
+    # R20: the former no-op model validator (cpu + layers > 0 → pass) was
+    # removed; `config/validator.validate_gpu_config` is the single
+    # implementation of that rule (warning severity).
 
 
 class HealthcheckConfig(BaseModel):
@@ -334,11 +330,11 @@ class HealthcheckConfig(BaseModel):
         default_factory=lambda: [200],
         description="Expected HTTP status codes (for HTTP probe)"
     )
-    expected_body: Optional[str] = Field(
+    expected_body: str | None = Field(
         default=None,
         description="Expected substring in response body (for HTTP probe)"
     )
-    custom_script: Optional[str] = Field(
+    custom_script: str | None = Field(
         default=None,
         description="Custom script to execute (for custom probe). Use {host} and {port} placeholders"
     )
@@ -348,7 +344,7 @@ class HealthcheckConfig(BaseModel):
         default="disabled",
         description="Execution mode for custom probes: disabled (default), restricted, or sandboxed"
     )
-    allowlist_directory: Optional[str] = Field(
+    allowlist_directory: str | None = Field(
         default=None,
         description="Directory path where custom probe scripts are allowed to reside"
     )
@@ -367,13 +363,13 @@ class HealthcheckConfig(BaseModel):
     backoff_jitter: float = Field(default=0.1, ge=0.0, le=1.0, description="Jitter factor (0-1) to add randomness")
 
     @model_validator(mode="after")
-    def validate_healthcheck_config(self) -> "HealthcheckConfig":
+    def validate_healthcheck_config(self) -> HealthcheckConfig:
         """Validate healthcheck configuration consistency."""
         if self.type == "custom" and not self.custom_script:
             raise ValueError("custom_script is required when type is 'custom'")
         return self
 
-    def to_probe_dict(self) -> dict:
+    def to_probe_dict(self) -> dict[str, Any]:
         """Convert to probe configuration dictionary."""
         return {
             "type": self.type,
@@ -559,9 +555,9 @@ class ModelMetadata(BaseModel):
 class InstanceConfig(BaseModel):
     """
     Complete configuration for a llama.cpp server instance.
-    
+
     This is the root schema that combines all sub-configurations.
-    
+
     The `binary` field is optional for backward compatibility.
     If not set, the system falls back to the legacy bin/ directory.
     """
@@ -574,7 +570,7 @@ class InstanceConfig(BaseModel):
     created_at: str = Field(default_factory=_utc_now_iso, description="Creation timestamp in UTC")
     updated_at: str = Field(default_factory=_utc_now_iso, description="Last update timestamp in UTC")
     sort_order: int | None = Field(default=None, description="Optional GUI sort override")
-    binary: Optional[BinaryConfig] = Field(
+    binary: BinaryConfig | None = Field(
         default=None,
         description="Binary version configuration. UUID joins to bins/registry.json"
     )
@@ -685,7 +681,7 @@ class InstanceConfig(BaseModel):
         return normalized
 
     @model_validator(mode="after")
-    def apply_identity_defaults(self) -> "InstanceConfig":
+    def apply_identity_defaults(self) -> InstanceConfig:
         """Fill additive identity metadata for legacy configs."""
         if not self.display_name:
             self.display_name = self.name

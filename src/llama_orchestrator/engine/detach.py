@@ -16,8 +16,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-import psutil
-
 from llama_orchestrator.config import get_logs_dir, get_project_root
 from llama_orchestrator.engine.state import (
     HealthStatus,
@@ -49,7 +47,7 @@ class DetachResult:
 class LogRotator:
     """
     Manages log file rotation for instances.
-    
+
     Keeps last N log files and rotates on startup.
     """
 
@@ -60,10 +58,10 @@ class LogRotator:
     def rotate(self, base_name: str) -> Path:
         """
         Rotate log files and return path for new log.
-        
+
         Args:
             base_name: Base name for log file (e.g., "stdout", "stderr")
-            
+
         Returns:
             Path to new log file
         """
@@ -96,11 +94,11 @@ def get_instance_log_dir(name: str) -> Path:
 def setup_log_files(name: str, rotate: bool = True) -> tuple[Path, Path]:
     """
     Set up log files for an instance.
-    
+
     Args:
         name: Instance name
         rotate: Whether to rotate logs (creates new timestamped files)
-        
+
     Returns:
         Tuple of (stdout_log, stderr_log) paths
     """
@@ -157,7 +155,7 @@ def start_detached(
 ) -> DetachResult:
     """
     Start a detached process with file-based logging.
-    
+
     This function:
     1. Opens log files
     2. Writes startup marker
@@ -165,10 +163,10 @@ def start_detached(
     4. Closes log file handles immediately (process has its own handles)
     5. Saves runtime state
     6. Returns result
-    
+
     The key difference from the old approach is that we DON'T keep file handles
     open - the child process inherits them and they're closed in the parent.
-    
+
     Args:
         name: Instance name
         cmd: Command to run as list
@@ -176,7 +174,7 @@ def start_detached(
         port: Port the server will listen on
         cwd: Working directory
         rotate_logs: Whether to rotate logs
-        
+
     Returns:
         DetachResult with process info
     """
@@ -199,9 +197,11 @@ def start_detached(
 
     try:
         # Open log files for the child process
-        # Use line buffering (buffering=1) for better real-time logging
-        stdout_handle = open(stdout_log, "a", encoding="utf-8", buffering=1)
-        stderr_handle = open(stderr_log, "a", encoding="utf-8", buffering=1)
+        # Use line buffering (buffering=1) for better real-time logging.
+        # Context managers cannot span the Popen call; handles are closed
+        # immediately after spawn (the child inherits its own copies).
+        stdout_handle = open(stdout_log, "a", encoding="utf-8", buffering=1)  # noqa: SIM115
+        stderr_handle = open(stderr_log, "a", encoding="utf-8", buffering=1)  # noqa: SIM115
 
         # Spawn the process
         # On Windows, CREATE_NEW_PROCESS_GROUP allows the process to survive
@@ -218,7 +218,7 @@ def start_detached(
             cwd=str(cwd),
             creationflags=creationflags,
             # Don't close_fds on Windows - it's not supported with redirects
-            close_fds=False if sys.platform == "win32" else True,
+            close_fds=sys.platform != "win32",
         )
 
         pid = proc.pid
@@ -319,14 +319,14 @@ def stop_detached(
 ) -> bool:
     """
     Stop a detached process gracefully with Windows-first approach.
-    
+
     Args:
         name: Instance name (for logging)
         pid: Process ID to stop
         port: Optional port for HTTP shutdown
         timeout: Timeout for graceful shutdown
         force: Force kill immediately
-        
+
     Returns:
         True if process was stopped
     """
@@ -365,16 +365,16 @@ def stop_detached(
 def get_latest_logs(name: str, lines: int = 100) -> dict[str, list[str]]:
     """
     Get latest log lines for an instance.
-    
+
     Args:
         name: Instance name
         lines: Number of lines to return
-        
+
     Returns:
         Dictionary with 'stdout' and 'stderr' keys containing log lines
     """
     log_dir = get_instance_log_dir(name)
-    result = {"stdout": [], "stderr": []}
+    result: dict[str, list[str]] = {"stdout": [], "stderr": []}
 
     for log_type in ["stdout", "stderr"]:
         # Find most recent log file
@@ -392,7 +392,7 @@ def get_latest_logs(name: str, lines: int = 100) -> dict[str, list[str]]:
         latest = log_files[0]
 
         try:
-            with open(latest, "r", encoding="utf-8", errors="replace") as f:
+            with open(latest, encoding="utf-8", errors="replace") as f:
                 all_lines = f.readlines()
                 result[log_type] = all_lines[-lines:]
         except OSError as e:
@@ -404,12 +404,12 @@ def get_latest_logs(name: str, lines: int = 100) -> dict[str, list[str]]:
 def tail_log(name: str, log_type: str = "stdout", lines: int = 50) -> str:
     """
     Tail a log file for an instance.
-    
+
     Args:
         name: Instance name
         log_type: "stdout" or "stderr"
         lines: Number of lines to return
-        
+
     Returns:
         Log content as string
     """

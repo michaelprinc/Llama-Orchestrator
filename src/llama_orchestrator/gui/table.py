@@ -198,7 +198,8 @@ def get_tree_column_from_event(
         col_index = int(col_id[1:]) - 1   # "#1" -> 0
         columns = tree["columns"]
         if 0 <= col_index < len(columns):
-            return columns[col_index]
+            # tree["columns"] is untyped (Any); column ids are strings.
+            return str(columns[col_index])
     except (ValueError, IndexError):
         pass
     return None

@@ -13,6 +13,7 @@ import shlex
 import sqlite3
 import subprocess
 import time
+from collections.abc import Callable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -958,7 +959,7 @@ def sample_gpu_memory_from_vendor_or_log(
     stderr_log: Path | None = None,
 ) -> GpuMemorySample:
     """Best-effort dedicated memory fallback with explicit provenance."""
-    commands = [
+    commands: list[tuple[list[str], Callable[[str], float | None]]] = [
         (
             [
                 "nvidia-smi",
@@ -1044,6 +1045,7 @@ def sample_gpu_memory(
         backend=backend,
         stderr_log=stderr_log,
     )
+    sample_error: str | None
     if pid is not None and fallback_sample.sample_error:
         sample_error = f"process_counter_unavailable; {fallback_sample.sample_error}"
     elif pid is not None:
@@ -1155,6 +1157,30 @@ def _normalize_speculative_mode(value: str | None) -> str | None:
     if not modes:
         return None
     return ", ".join(modes)
+
+
+def _telemetry_as_float(telemetry: Mapping[str, float | int | str | None], key: str) -> float | None:
+    """Read a numeric telemetry field through the mixed dict value type."""
+    value = telemetry[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _telemetry_as_int(telemetry: Mapping[str, float | int | str | None], key: str) -> int | None:
+    """Read an integral telemetry field through the mixed dict value type."""
+    value = telemetry[key]
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value)
+
+
+def _telemetry_as_str(telemetry: Mapping[str, float | int | str | None], key: str) -> str | None:
+    """Read a string telemetry field through the mixed dict value type."""
+    value = telemetry[key]
+    if isinstance(value, str):
+        return value
+    return None
 
 
 def _extract_benchmark_telemetry(
@@ -1609,7 +1635,7 @@ def quick_benchmark_instance(
             prompt_sha256=prompt_digest,
             prompt_chars=len(prompt),
             output_tokens=output_tokens,
-            tokens_per_second=telemetry["tokens_per_second"],
+            tokens_per_second=_telemetry_as_float(telemetry, "tokens_per_second"),
             latency_ms=latency_ms,
             elapsed_ms=elapsed_ms,
             vram_mb=memory_sample.dedicated_vram_mb,
@@ -1623,17 +1649,17 @@ def quick_benchmark_instance(
             sampled_pid=memory_sample.sampled_pid,
             sampled_device_label=memory_sample.sampled_device_label,
             memory_sample_error=memory_sample.sample_error,
-            prompt_tokens=telemetry["prompt_tokens"],
-            tokens_cached=telemetry["tokens_cached"],
-            cache_hit_rate=telemetry["cache_hit_rate"],
-            prompt_ms=telemetry["prompt_ms"],
-            prompt_tokens_per_second=telemetry["prompt_tokens_per_second"],
-            time_per_output_token_ms=telemetry["time_per_output_token_ms"],
-            end_to_end_tokens_per_second=telemetry["end_to_end_tokens_per_second"],
-            speculative_mode=telemetry["speculative_mode"],
-            draft_tokens=telemetry["draft_tokens"],
-            draft_tokens_accepted=telemetry["draft_tokens_accepted"],
-            draft_acceptance_rate=telemetry["draft_acceptance_rate"],
+            prompt_tokens=_telemetry_as_int(telemetry, "prompt_tokens"),
+            tokens_cached=_telemetry_as_int(telemetry, "tokens_cached"),
+            cache_hit_rate=_telemetry_as_float(telemetry, "cache_hit_rate"),
+            prompt_ms=_telemetry_as_float(telemetry, "prompt_ms"),
+            prompt_tokens_per_second=_telemetry_as_float(telemetry, "prompt_tokens_per_second"),
+            time_per_output_token_ms=_telemetry_as_float(telemetry, "time_per_output_token_ms"),
+            end_to_end_tokens_per_second=_telemetry_as_float(telemetry, "end_to_end_tokens_per_second"),
+            speculative_mode=_telemetry_as_str(telemetry, "speculative_mode"),
+            draft_tokens=_telemetry_as_int(telemetry, "draft_tokens"),
+            draft_tokens_accepted=_telemetry_as_int(telemetry, "draft_tokens_accepted"),
+            draft_acceptance_rate=_telemetry_as_float(telemetry, "draft_acceptance_rate"),
         )
     except Exception as exc:
         output_text = "".join(chunks)
@@ -1663,17 +1689,17 @@ def quick_benchmark_instance(
             shared_ram_mb=None,
             total_gpu_memory_mb=None,
             error=str(exc),
-            prompt_tokens=telemetry["prompt_tokens"],
-            tokens_cached=telemetry["tokens_cached"],
-            cache_hit_rate=telemetry["cache_hit_rate"],
-            prompt_ms=telemetry["prompt_ms"],
-            prompt_tokens_per_second=telemetry["prompt_tokens_per_second"],
-            time_per_output_token_ms=telemetry["time_per_output_token_ms"],
-            end_to_end_tokens_per_second=telemetry["end_to_end_tokens_per_second"],
-            speculative_mode=telemetry["speculative_mode"],
-            draft_tokens=telemetry["draft_tokens"],
-            draft_tokens_accepted=telemetry["draft_tokens_accepted"],
-            draft_acceptance_rate=telemetry["draft_acceptance_rate"],
+            prompt_tokens=_telemetry_as_int(telemetry, "prompt_tokens"),
+            tokens_cached=_telemetry_as_int(telemetry, "tokens_cached"),
+            cache_hit_rate=_telemetry_as_float(telemetry, "cache_hit_rate"),
+            prompt_ms=_telemetry_as_float(telemetry, "prompt_ms"),
+            prompt_tokens_per_second=_telemetry_as_float(telemetry, "prompt_tokens_per_second"),
+            time_per_output_token_ms=_telemetry_as_float(telemetry, "time_per_output_token_ms"),
+            end_to_end_tokens_per_second=_telemetry_as_float(telemetry, "end_to_end_tokens_per_second"),
+            speculative_mode=_telemetry_as_str(telemetry, "speculative_mode"),
+            draft_tokens=_telemetry_as_int(telemetry, "draft_tokens"),
+            draft_tokens_accepted=_telemetry_as_int(telemetry, "draft_tokens_accepted"),
+            draft_acceptance_rate=_telemetry_as_float(telemetry, "draft_acceptance_rate"),
         )
         memory_sample = sample_gpu_memory(
             pid=pid,

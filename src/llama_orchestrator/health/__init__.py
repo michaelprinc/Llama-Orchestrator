@@ -12,6 +12,11 @@ from llama_orchestrator.health.backoff import (
     calculate_jittered_delay,
     with_jitter,
 )
+from llama_orchestrator.health.checker import (
+    HealthCheckResult,
+    check_health,
+    check_instance_health,
+)
 from llama_orchestrator.health.client_pool import (
     AsyncHealthConfig,
     AsyncHealthMonitor,
@@ -22,11 +27,6 @@ from llama_orchestrator.health.client_pool import (
     close_global_pool,
     get_global_pool,
 )
-from llama_orchestrator.health.checker import (
-    HealthCheckResult,
-    check_health,
-    check_instance_health,
-)
 from llama_orchestrator.health.monitor import (
     HealthMonitor,
     start_monitoring,
@@ -34,6 +34,7 @@ from llama_orchestrator.health.monitor import (
 )
 from llama_orchestrator.health.ports import (
     PortInfo,
+    acquire_port_for_spawn,
     check_port_available,
     find_free_port,
     get_port_info,
@@ -76,6 +77,7 @@ __all__ = [
     "stop_monitoring",
     # Port management
     "PortInfo",
+    "acquire_port_for_spawn",
     "check_port_available",
     "find_free_port",
     "get_port_info",

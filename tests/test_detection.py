@@ -3,7 +3,13 @@
 from pathlib import Path
 from uuid import uuid4
 
-from llama_orchestrator.config.schema import BinaryConfig, GpuConfig, InstanceConfig, ModelConfig, ServerConfig
+from llama_orchestrator.config.schema import (
+    BinaryConfig,
+    GpuConfig,
+    InstanceConfig,
+    ModelConfig,
+    ServerConfig,
+)
 from llama_orchestrator.engine.detection import (
     DetectedGpu,
     collect_detected_gpu_inventory,

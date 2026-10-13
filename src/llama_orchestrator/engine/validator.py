@@ -11,6 +11,7 @@ import logging
 import time
 from dataclasses import dataclass
 from enum import Enum
+from typing import Any
 
 import psutil
 
@@ -63,13 +64,13 @@ class ProcessValidation:
         )
 
 
-def get_process_info(pid: int) -> dict | None:
+def get_process_info(pid: int) -> dict[str, Any] | None:
     """
     Get detailed information about a process.
-    
+
     Args:
         pid: Process ID to check
-        
+
     Returns:
         Dictionary with process info or None if process doesn't exist
     """
@@ -83,7 +84,7 @@ def get_process_info(pid: int) -> dict | None:
             cmdline = proc.name()
 
         try:
-            status = proc.status()
+            status: str = proc.status()
         except psutil.AccessDenied:
             status = "unknown"
 
@@ -125,11 +126,11 @@ def get_process_info(pid: int) -> dict | None:
 def is_llama_server_process(cmdline: str | None, expected_binary: str | None = None) -> bool:
     """
     Check if cmdline looks like a llama-server process.
-    
+
     Args:
         cmdline: Command line string to check
         expected_binary: Expected binary name to match
-        
+
     Returns:
         True if this looks like a llama-server process
     """
@@ -149,10 +150,7 @@ def is_llama_server_process(cmdline: str | None, expected_binary: str | None = N
         return True
 
     # Check for diffusion adapter or runner processes
-    if "diffusion_http_adapter" in cmdline_lower or "llama-diffusion" in cmdline_lower:
-        return True
-
-    return False
+    return bool("diffusion_http_adapter" in cmdline_lower or "llama-diffusion" in cmdline_lower)
 
 
 def validate_process(
@@ -163,13 +161,13 @@ def validate_process(
 ) -> ProcessValidation:
     """
     Validate that an instance's process is running correctly.
-    
+
     Args:
         name: Instance name to validate
         expected_pid: Expected PID (if None, loads from runtime state)
         expected_cmdline: Expected command line (if None, loads from runtime state)
         stale_threshold_seconds: Seconds before a process is considered stale
-        
+
     Returns:
         ProcessValidation with validation results
     """
@@ -244,31 +242,30 @@ def validate_process(
 
     # Check command line match
     actual_cmdline = proc_info.get("cmdline")
-    if expected_cmdline and actual_cmdline:
-        # Check if this is the expected process
-        if not is_llama_server_process(actual_cmdline):
-            log_event(
-                event_type="pid_mismatch",
-                message=f"PID {expected_pid} is not a llama-server process",
-                instance_name=name,
-                level="error",
-                meta={
-                    "expected_cmdline": expected_cmdline,
-                    "actual_cmdline": actual_cmdline,
-                },
-            )
+    # PID mismatch check: the expected PID is alive but not a llama-server.
+    if expected_cmdline and actual_cmdline and not is_llama_server_process(actual_cmdline):
+        log_event(
+            event_type="pid_mismatch",
+            message=f"PID {expected_pid} is not a llama-server process",
+            instance_name=name,
+            level="error",
+            meta={
+                "expected_cmdline": expected_cmdline,
+                "actual_cmdline": actual_cmdline,
+            },
+        )
 
-            return ProcessValidation(
-                status=ValidationStatus.PID_MISMATCH,
-                expected_pid=expected_pid,
-                actual_pid=expected_pid,
-                expected_cmdline=expected_cmdline,
-                actual_cmdline=actual_cmdline,
-                process_running=True,
-                process_responding=False,
-                last_seen_age_seconds=_get_last_seen_age(runtime),
-                message=f"PID {expected_pid} is different process: {actual_cmdline[:100]}",
-            )
+        return ProcessValidation(
+            status=ValidationStatus.PID_MISMATCH,
+            expected_pid=expected_pid,
+            actual_pid=expected_pid,
+            expected_cmdline=expected_cmdline,
+            actual_cmdline=actual_cmdline,
+            process_running=True,
+            process_responding=False,
+            last_seen_age_seconds=_get_last_seen_age(runtime),
+            message=f"PID {expected_pid} is different process: {actual_cmdline[:100]}",
+        )
 
     # Check staleness
     last_seen_age = _get_last_seen_age(runtime)
@@ -316,13 +313,13 @@ def _get_last_seen_age(runtime: RuntimeState) -> float | None:
     return None
 
 
-def find_orphaned_processes(known_instances: list[str]) -> list[dict]:
+def find_orphaned_processes(known_instances: list[str]) -> list[dict[str, Any]]:
     """
     Find llama-server processes that are not in our known instances.
-    
+
     Args:
         known_instances: List of known instance names
-        
+
     Returns:
         List of orphaned process info dicts
     """
@@ -373,11 +370,11 @@ def find_orphaned_processes(known_instances: list[str]) -> list[dict]:
 def cleanup_stale_runtime(name: str, max_age_seconds: float = 3600.0) -> bool:
     """
     Check if a runtime state is stale and should be cleaned up.
-    
+
     Args:
         name: Instance name to check
         max_age_seconds: Maximum age before considering cleanup
-        
+
     Returns:
         True if runtime was cleaned up
     """

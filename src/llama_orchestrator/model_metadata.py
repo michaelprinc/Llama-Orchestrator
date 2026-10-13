@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -42,7 +42,7 @@ _KV_BYTES_PER_ELEMENT: dict[str, float] = {
 
 
 def _utc_now_iso() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def _extract_hf_repo_id(tags: list[str]) -> str | None:
@@ -95,12 +95,22 @@ def _build_derived_memory_model(metadata: GgufModelMetadata | None) -> dict[str,
     head_dim_k = metadata.attention_key_length
     head_dim_v = metadata.attention_value_length
 
-    if head_dim_k is None and metadata.embedding_length and head_count:
-        if head_count > 0 and metadata.embedding_length % head_count == 0:
-            head_dim_k = metadata.embedding_length // head_count
-    if head_dim_v is None and metadata.embedding_length and head_count:
-        if head_count > 0 and metadata.embedding_length % head_count == 0:
-            head_dim_v = metadata.embedding_length // head_count
+    if (
+        head_dim_k is None
+        and metadata.embedding_length
+        and head_count
+        and head_count > 0
+        and metadata.embedding_length % head_count == 0
+    ):
+        head_dim_k = metadata.embedding_length // head_count
+    if (
+        head_dim_v is None
+        and metadata.embedding_length
+        and head_count
+        and head_count > 0
+        and metadata.embedding_length % head_count == 0
+    ):
+        head_dim_v = metadata.embedding_length // head_count
 
     if not layers or not kv_heads or not head_dim_k or not head_dim_v:
         return {

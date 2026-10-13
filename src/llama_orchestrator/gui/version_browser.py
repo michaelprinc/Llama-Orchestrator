@@ -13,6 +13,7 @@ from llama_orchestrator.binaries.manager import (
     resolve_local_package_directory,
 )
 from llama_orchestrator.binaries.schema import BinaryVersion
+from llama_orchestrator.naming import SERVER_BASE, executable_name, locate_executable
 
 
 @dataclass(frozen=True)
@@ -66,8 +67,10 @@ def build_version_rows(
     """Build display rows and expose missing package executables explicitly."""
     rows: list[tuple[str, ...]] = []
     for binary in sorted(binaries, key=lambda item: item.installed_at, reverse=True):
-        server_path = package_path(binary) / "llama-server.exe"
-        status = "Ready" if server_path.is_file() else "Missing llama-server.exe"
+        pkg_dir = package_path(binary)
+        located = locate_executable(pkg_dir, SERVER_BASE)
+        server_path = located if located is not None else pkg_dir / executable_name(SERVER_BASE)
+        status = "Ready" if located is not None else f"Missing {executable_name(SERVER_BASE)}"
         rows.append(
             (
                 str(binary.id),
@@ -87,7 +90,9 @@ class LocalPackageImportDialog(tk.Toplevel):
 
     def __init__(
         self,
-        master: tk.Misc,
+        # Tk or Toplevel (typeshed has no common nominal base; both satisfy
+        # Toplevel(master) [Misc] and transient(master) [Wm]).
+        master: tk.Tk | tk.Toplevel,
         on_import: Callable[[LocalPackageImport], None],
         managed_bins_dir: Path,
     ) -> None:
@@ -132,7 +137,7 @@ class LocalPackageImportDialog(tk.Toplevel):
         ttk.Label(
             frame,
             text=(
-                "Select a complete package, or a build folder with bin/llama-server.exe. "
+                f"Select a complete package, or a build folder with bin/{executable_name(SERVER_BASE)}. "
                 "For ROCm builds, the matching artifacts/package bundle is copied to bins/<UUID>."
             ),
             wraplength=580,
@@ -177,7 +182,9 @@ class SwitchServerDialog(tk.Toplevel):
 
     def __init__(
         self,
-        master: tk.Misc,
+        # Tk or Toplevel (typeshed has no common nominal base; both satisfy
+        # Toplevel(master) [Misc] and transient(master) [Wm]).
+        master: tk.Tk | tk.Toplevel,
         *,
         binaries: Sequence[BinaryVersion],
         package_path: Callable[[BinaryVersion], Path],
@@ -267,7 +274,9 @@ class VersionBrowserDialog(tk.Toplevel):
 
     def __init__(
         self,
-        master: tk.Misc,
+        # Tk or Toplevel (typeshed has no common nominal base; both satisfy
+        # Toplevel(master) [Misc] and transient(master) [Wm]).
+        master: tk.Tk | tk.Toplevel,
         *,
         list_binaries: Callable[[], Sequence[BinaryVersion]],
         package_path: Callable[[BinaryVersion], Path],

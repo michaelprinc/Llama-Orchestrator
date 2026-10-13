@@ -154,7 +154,9 @@ def apply_managed_runtime_args(
 
 
 def launch_hugging_face_import_dialog(
-    parent: tk.Misc,
+    # Tk or Toplevel (typeshed has no common nominal base; both satisfy
+    # Toplevel(master) [Misc] and transient(master) [Wm]).
+    parent: tk.Tk | tk.Toplevel,
     on_use: Callable[[ImportedModelSelection], None],
 ) -> None:
     """Open the extracted Hugging Face dialog from the Add model flow."""
@@ -399,7 +401,9 @@ class AddModelDialog(tk.Toplevel):
 class AddModelPortSettingsDialog(tk.Toplevel):
     """Dialog for configuring the minimum port for model instances."""
 
-    def __init__(self, parent: tk.Misc, current_min_port: int) -> None:
+    # Tk or Toplevel (typeshed has no common nominal base; both satisfy
+    # Toplevel(parent) [Misc] and transient(parent) [Wm]).
+    def __init__(self, parent: tk.Tk | tk.Toplevel, current_min_port: int) -> None:
         super().__init__(parent)
         self.title("Port settings")
         self.resizable(False, False)

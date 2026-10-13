@@ -26,7 +26,7 @@ Usage inside the GUI class::
 from __future__ import annotations
 
 import tkinter as tk
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from tkinter import ttk
 
 # ---------------------------------------------------------------------------
@@ -47,7 +47,12 @@ SHORTCUT_REGISTRY: dict[str, str] = {
 }
 
 
-def register_shortcuts(root: tk.Tk, bindings: dict[str, Callable] | None = None) -> None:
+def register_shortcuts(
+    root: tk.Tk,
+    # Mapping (covariant in the value type) so callers may pass plain dicts of
+    # narrower callback types; tkinter callbacks return no meaningful value.
+    bindings: Mapping[str, Callable[[tk.Event[tk.Misc]], None]] | None = None,
+) -> None:
     """Register keyboard shortcuts on the given Tk root.
 
     Args:
@@ -61,10 +66,16 @@ def register_shortcuts(root: tk.Tk, bindings: dict[str, Callable] | None = None)
     else:
         # Register default shortcuts with stub actions
         for key, action_label in SHORTCUT_REGISTRY.items():
-            root.bind(
-                key,
-                lambda event, label=action_label: _on_shortcut_triggered(event, label),
-            )
+            root.bind(key, _make_shortcut_callback(action_label))
+
+
+def _make_shortcut_callback(label: str) -> Callable[[tk.Event[tk.Misc]], None]:
+    """Build the default shortcut callback for one registry entry."""
+
+    def callback(event: tk.Event[tk.Misc]) -> None:
+        _on_shortcut_triggered(event, label)
+
+    return callback
 
 
 def _on_shortcut_triggered(event: tk.Event, action_label: str) -> None:
@@ -104,7 +115,9 @@ def create_progress_bar(parent: tk.Misc) -> ttk.Progressbar:
             def pack_forget(self) -> None:
                 return None
 
-        ttk.Progressbar = _ProgressbarStub  # type: ignore[assignment]
+        # Assign through the module dict: mypy forbids rebinding a class name
+        # directly, and vars(ttk) is the same mapping at runtime.
+        vars(ttk)["Progressbar"] = _ProgressbarStub
 
     progress = ttk.Progressbar(parent, mode="indeterminate", length=400)
     # Pack at the bottom

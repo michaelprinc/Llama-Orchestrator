@@ -14,7 +14,7 @@ import time
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 
 class DiffusionRunner:
@@ -116,7 +116,7 @@ class AdapterHandler(BaseHTTPRequestHandler):
 
     @property
     def runner(self) -> DiffusionRunner:
-        return self.server.runner  # type: ignore[attr-defined]
+        return cast("DiffusionRunner", self.server.runner)  # type: ignore[attr-defined]
 
     def _json(self, status: int, payload: dict[str, Any]) -> None:
         data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -175,7 +175,7 @@ class AdapterHandler(BaseHTTPRequestHandler):
                         "finish_reason": None
                     }]
                 }
-                self.wfile.write(f"data: {json.dumps(chunk1, ensure_ascii=False)}\n\n".encode("utf-8"))
+                self.wfile.write(f"data: {json.dumps(chunk1, ensure_ascii=False)}\n\n".encode())
                 self.wfile.flush()
 
                 # Second chunk with stop and usage metrics
@@ -196,7 +196,7 @@ class AdapterHandler(BaseHTTPRequestHandler):
                     },
                     "completion_tokens": completion_tokens
                 }
-                self.wfile.write(f"data: {json.dumps(chunk2, ensure_ascii=False)}\n\n".encode("utf-8"))
+                self.wfile.write(f"data: {json.dumps(chunk2, ensure_ascii=False)}\n\n".encode())
                 self.wfile.flush()
 
                 # Done marker

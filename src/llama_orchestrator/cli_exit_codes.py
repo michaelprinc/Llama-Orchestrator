@@ -7,7 +7,7 @@ scripting and automation compatibility.
 Exit Code Ranges:
     0:      Success
     1-9:    General errors
-    10-19:  Configuration errors  
+    10-19:  Configuration errors
     20-29:  Instance errors
     30-39:  Process/Runtime errors
     40-49:  Network errors
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
 class ExitCode(IntEnum):
     """
     Standard exit codes for CLI commands.
-    
+
     Follows common Unix conventions with project-specific extensions.
     """
 
@@ -87,13 +87,13 @@ class ExitCode(IntEnum):
     DAEMON_UNREACHABLE = 64
 
     @classmethod
-    def from_exception(cls, exc: Exception) -> "ExitCode":
+    def from_exception(cls, exc: Exception) -> ExitCode:
         """
         Map an exception to an appropriate exit code.
-        
+
         Args:
             exc: Exception to map
-            
+
         Returns:
             Appropriate ExitCode for the exception
         """
@@ -195,11 +195,11 @@ class ExitCode(IntEnum):
 def exit_with_code(
     code: ExitCode,
     message: str | None = None,
-    console: "Console | None" = None,
+    console: Console | None = None,
 ) -> None:
     """
     Exit with a standard exit code and optional message.
-    
+
     Args:
         code: Exit code to use
         message: Optional message to display
@@ -223,17 +223,17 @@ def exit_with_code(
 
 def handle_cli_error(
     exc: Exception,
-    console: "Console | None" = None,
+    console: Console | None = None,
     verbose: bool = False,
 ) -> ExitCode:
     """
     Handle a CLI exception and return appropriate exit code.
-    
+
     Args:
         exc: Exception to handle
         console: Rich console for output
         verbose: Show stack trace if True
-        
+
     Returns:
         Appropriate exit code
     """

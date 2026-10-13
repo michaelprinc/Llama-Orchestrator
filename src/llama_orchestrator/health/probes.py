@@ -48,6 +48,14 @@ class ProbeSecurityError(Exception):
         super().__init__(self.message)
 
 
+# Structured failure kinds recorded in ``ProbeResult.error_kind`` (R12/F6).
+# The health checker classifies probe failures on these values (and the
+# status code) instead of matching free-form message substrings.
+ERROR_KIND_TIMEOUT = "timeout"
+ERROR_KIND_UNREACHABLE = "unreachable"
+ERROR_KIND_BODY_MISMATCH = "body_mismatch"
+
+
 @dataclass
 class ProbeResult:
     """Result of a health probe check."""
@@ -57,6 +65,10 @@ class ProbeResult:
     status_code: int | None = None
     message: str = ""
     details: dict[str, Any] = field(default_factory=dict)
+    # Structured failure kind (one of the ERROR_KIND_* constants above).
+    # ``None`` means "no structured cause recorded"; classifiers must fail
+    # closed to ERROR for that case unless the status code says otherwise.
+    error_kind: str | None = None
 
     @property
     def is_healthy(self) -> bool:
@@ -67,7 +79,7 @@ class ProbeResult:
 class HealthProbe(ABC):
     """
     Abstract base class for health probes.
-    
+
     Subclasses implement specific health check mechanisms.
     """
 
@@ -79,7 +91,7 @@ class HealthProbe(ABC):
     ):
         """
         Initialize health probe.
-        
+
         Args:
             timeout: Timeout for each check in seconds
             retries: Number of retries on failure
@@ -99,11 +111,11 @@ class HealthProbe(ABC):
     def check(self, host: str, port: int) -> ProbeResult:
         """
         Perform a health check.
-        
+
         Args:
             host: Target host
             port: Target port
-            
+
         Returns:
             ProbeResult with check outcome
         """
@@ -112,11 +124,11 @@ class HealthProbe(ABC):
     def check_with_retry(self, host: str, port: int) -> ProbeResult:
         """
         Perform health check with retries.
-        
+
         Args:
             host: Target host
             port: Target port
-            
+
         Returns:
             ProbeResult from successful check or last failed attempt
         """
@@ -143,7 +155,7 @@ class HealthProbe(ABC):
 class HTTPProbe(HealthProbe):
     """
     HTTP health probe.
-    
+
     Checks health by making HTTP GET request to a specified path.
     """
 
@@ -152,11 +164,11 @@ class HTTPProbe(HealthProbe):
         path: str = "/health",
         expected_status: int | list[int] = 200,
         expected_body: str | None = None,
-        **kwargs,
+        **kwargs: Any,
     ):
         """
         Initialize HTTP probe.
-        
+
         Args:
             path: Health check endpoint path
             expected_status: Expected HTTP status code(s)
@@ -202,6 +214,7 @@ class HTTPProbe(HealthProbe):
                     response_time_ms=elapsed_ms,
                     status_code=response.status_code,
                     message=f"Expected body not found: {self.expected_body}",
+                    error_kind=ERROR_KIND_BODY_MISMATCH,
                 )
 
             return ProbeResult(
@@ -218,6 +231,7 @@ class HTTPProbe(HealthProbe):
                 success=False,
                 response_time_ms=elapsed_ms,
                 message=f"Timeout after {self.timeout}s",
+                error_kind=ERROR_KIND_TIMEOUT,
             )
 
         except httpx.ConnectError as e:
@@ -226,6 +240,7 @@ class HTTPProbe(HealthProbe):
                 success=False,
                 response_time_ms=elapsed_ms,
                 message=f"Connection failed: {e}",
+                error_kind=ERROR_KIND_UNREACHABLE,
             )
 
         except Exception as e:
@@ -240,7 +255,7 @@ class HTTPProbe(HealthProbe):
 class TCPProbe(HealthProbe):
     """
     TCP health probe.
-    
+
     Checks health by attempting TCP connection to the port.
     """
 
@@ -271,14 +286,16 @@ class TCPProbe(HealthProbe):
                     success=False,
                     response_time_ms=elapsed_ms,
                     message=f"TCP connection failed (error: {result})",
+                    error_kind=ERROR_KIND_UNREACHABLE,
                 )
 
-        except socket.timeout:
+        except TimeoutError:
             elapsed_ms = (time.perf_counter() - start) * 1000
             return ProbeResult(
                 success=False,
                 response_time_ms=elapsed_ms,
                 message=f"TCP timeout after {self.timeout}s",
+                error_kind=ERROR_KIND_TIMEOUT,
             )
 
         except Exception as e:
@@ -310,7 +327,7 @@ class CustomProbe(HealthProbe):
         shell: bool = False,
         execution_mode: ProbeExecutionMode = ProbeExecutionMode.DISABLED,
         allowlist_directory: str | None = None,
-        **kwargs,
+        **kwargs: Any,
     ):
         """
         Initialize custom probe.
@@ -443,6 +460,7 @@ class CustomProbe(HealthProbe):
                 success=False,
                 response_time_ms=elapsed_ms,
                 message=f"Script timeout after {self.timeout}s",
+                error_kind=ERROR_KIND_TIMEOUT,
             )
 
         except Exception as e:
@@ -499,29 +517,29 @@ class ProbeFactory:
     def create(config: ProbeConfig) -> HealthProbe:
         """
         Create a health probe from configuration.
-        
+
         Args:
             config: Probe configuration
-            
+
         Returns:
             Configured HealthProbe instance
         """
-        common_kwargs = {
-            "timeout": config.timeout,
-            "retries": config.retries,
-            "retry_delay": config.retry_delay,
-        }
-
         if config.type == ProbeType.HTTP:
             return HTTPProbe(
                 path=config.path,
                 expected_status=config.expected_status,
                 expected_body=config.expected_body,
-                **common_kwargs,
+                timeout=config.timeout,
+                retries=config.retries,
+                retry_delay=config.retry_delay,
             )
 
         elif config.type == ProbeType.TCP:
-            return TCPProbe(**common_kwargs)
+            return TCPProbe(
+                timeout=config.timeout,
+                retries=config.retries,
+                retry_delay=config.retry_delay,
+            )
 
         elif config.type == ProbeType.CUSTOM:
             if not config.custom_script:
@@ -535,20 +553,22 @@ class ProbeFactory:
                 script=config.custom_script,
                 execution_mode=exec_mode,
                 allowlist_directory=config.allowlist_directory,
-                **common_kwargs,
+                timeout=config.timeout,
+                retries=config.retries,
+                retry_delay=config.retry_delay,
             )
 
         else:
             raise ValueError(f"Unknown probe type: {config.type}")
 
     @staticmethod
-    def from_dict(data: dict) -> HealthProbe:
+    def from_dict(data: dict[str, Any]) -> HealthProbe:
         """
         Create a health probe from dictionary configuration.
-        
+
         Args:
             data: Dictionary with probe settings
-            
+
         Returns:
             Configured HealthProbe instance
         """
@@ -570,13 +590,13 @@ class ProbeFactory:
         return ProbeFactory.create(config)
 
     @staticmethod
-    def from_instance_config(instance_config: "InstanceConfig") -> HealthProbe:
+    def from_instance_config(instance_config: InstanceConfig) -> HealthProbe:
         """
         Create a health probe from instance configuration.
-        
+
         Args:
             instance_config: Instance configuration object
-            
+
         Returns:
             Configured HealthProbe instance
         """

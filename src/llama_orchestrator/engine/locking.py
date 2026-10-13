@@ -10,11 +10,37 @@ from __future__ import annotations
 import logging
 import os
 import time
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Generator
 
 logger = logging.getLogger(__name__)
+
+# R7/F3 staleness policy: a lock is stale iff
+#   (age > max_age)  OR  (owner PID dead AND age > grace).
+# The grace period prevents immediate takeover of a lock whose owner just died
+# (and guards against PID-reuse false positives); the max-age branch reclaims
+# orphaned locks even when the recorded PID happens to be alive.
+DEFAULT_GRACE_SECONDS = 5.0
+DEFAULT_MAX_AGE_SECONDS = 300.0
+
+#: Injectable "is this PID alive" oracle. Production default uses psutil; tests
+#: inject a fixed answer so staleness is deterministic (no live-PID reliance).
+PidOracle = Callable[[int], bool]
+
+
+def _default_pid_oracle(pid: int) -> bool:
+    """Best-effort liveness check for the production path.
+
+    Any failure (psutil missing, OS error) fails closed: the PID is treated as
+    alive so a lock is never stolen on uncertain evidence.
+    """
+    try:
+        import psutil
+
+        return bool(psutil.pid_exists(pid))
+    except Exception:
+        return True
 
 
 class LockError(Exception):
@@ -30,17 +56,19 @@ class LockTimeoutError(LockError):
 class InstanceLockManager:
     """
     Manages file-based locks for instance operations.
-    
+
     Uses simple file-based locking with PID files to prevent race conditions
     when multiple processes try to operate on the same instance.
     """
 
-    def __init__(self, lock_dir: Path | None = None):
+    def __init__(self, lock_dir: Path | None = None, pid_oracle: PidOracle | None = None):
         """
         Initialize the lock manager.
-        
+
         Args:
             lock_dir: Directory for lock files (default: ~/.llama-orchestrator/locks)
+            pid_oracle: Injectable PID-liveness check (defaults to psutil-based).
+                Tests inject a fixed oracle so staleness is deterministic.
         """
         if lock_dir is None:
             lock_dir = Path.home() / ".llama-orchestrator" / "locks"
@@ -48,6 +76,7 @@ class InstanceLockManager:
         self.lock_dir = Path(lock_dir)
         self.lock_dir.mkdir(parents=True, exist_ok=True)
         self._held_locks: dict[str, Path] = {}
+        self._pid_oracle: PidOracle = pid_oracle if pid_oracle is not None else _default_pid_oracle
 
     def _get_lock_path(self, name: str) -> Path:
         """Get path to lock file for an instance."""
@@ -55,7 +84,7 @@ class InstanceLockManager:
         safe_name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
         return self.lock_dir / f"{safe_name}.lock"
 
-    def _read_lock_info(self, lock_path: Path) -> dict | None:
+    def _read_lock_info(self, lock_path: Path) -> dict[str, str] | None:
         """Read lock info from file."""
         try:
             if not lock_path.exists():
@@ -74,41 +103,56 @@ class InstanceLockManager:
 
             return info if info else None
 
-        except (OSError, IOError):
+        except OSError:
             return None
 
-    def _is_lock_stale(self, lock_path: Path, stale_seconds: float = 300.0) -> bool:
+    def _is_lock_stale(
+        self,
+        lock_path: Path,
+        max_age_seconds: float = DEFAULT_MAX_AGE_SECONDS,
+        grace_seconds: float = DEFAULT_GRACE_SECONDS,
+    ) -> bool:
         """
-        Check if a lock file is stale.
-        
-        A lock is stale if:
-        1. The owning process no longer exists
-        2. The lock file is older than stale_seconds
+        Check if a lock file is stale (R7/F3 policy).
+
+        A lock is stale iff:
+        1. age > max_age_seconds — regardless of owner liveness (bounds how long
+           a live holder may keep a lock; reclaims orphaned files), OR
+        2. the owning PID is dead AND age > grace_seconds — the grace period
+           means fresh locks are never deleted, even if their owner dies in the
+           moment between writing and checking (and it guards against PID reuse).
+
+        Unknown age (missing/invalid ``created``) or unknown owner (missing/
+        invalid ``pid``) fails closed: the condition that cannot be verified is
+        treated as not met.
         """
         info = self._read_lock_info(lock_path)
 
         if info is None:
+            # Empty/unreadable lock file: nothing to verify ownership against.
             return True
 
-        # Check if owning process still exists
-        try:
-            pid = int(info.get("pid", 0))
-            if pid > 0:
-                import psutil
-                if not psutil.pid_exists(pid):
-                    logger.debug(f"Lock owner PID {pid} no longer exists")
-                    return True
-        except (ValueError, ImportError):
-            pass
-
-        # Check lock age
         try:
             created = float(info.get("created", 0))
-            if created > 0 and (time.time() - created) > stale_seconds:
-                logger.debug(f"Lock is older than {stale_seconds}s")
-                return True
         except ValueError:
-            pass
+            created = 0.0
+
+        age = time.time() - created if created > 0 else None
+
+        # Rule 1: age-based staleness (applies to live owners too).
+        if age is not None and age > max_age_seconds:
+            logger.debug(f"Lock is older than {max_age_seconds}s")
+            return True
+
+        # Rule 2: dead-owner staleness, only after the grace period.
+        if age is not None and age > grace_seconds:
+            try:
+                pid = int(info.get("pid", 0))
+            except ValueError:
+                pid = 0
+            if pid > 0 and not self._pid_oracle(pid):
+                logger.debug(f"Lock owner PID {pid} no longer exists (age {age:.1f}s)")
+                return True
 
         return False
 
@@ -124,7 +168,7 @@ class InstanceLockManager:
         try:
             if lock_path.exists():
                 lock_path.unlink()
-        except (OSError, IOError) as e:
+        except OSError as e:
             logger.warning(f"Failed to remove lock file {lock_path}: {e}")
 
     def acquire(
@@ -133,21 +177,25 @@ class InstanceLockManager:
         operation: str = "unknown",
         timeout: float = 30.0,
         retry_interval: float = 0.5,
-        stale_timeout: float = 300.0,
+        stale_timeout: float = DEFAULT_MAX_AGE_SECONDS,
+        grace_seconds: float = DEFAULT_GRACE_SECONDS,
     ) -> bool:
         """
         Acquire a lock for an instance.
-        
+
         Args:
             name: Instance name
             operation: Description of the operation (for logging)
             timeout: Maximum time to wait for lock
             retry_interval: Time between lock acquisition attempts
-            stale_timeout: Age after which a lock is considered stale
-            
+            stale_timeout: Max age after which a lock is considered stale
+                (applies regardless of owner liveness; R7 max_age)
+            grace_seconds: Minimum age before a dead-owner lock may be reclaimed
+                (R7 grace; fresh locks are never deleted)
+
         Returns:
             True if lock was acquired
-            
+
         Raises:
             LockTimeoutError: If lock cannot be acquired within timeout
         """
@@ -168,11 +216,11 @@ class InstanceLockManager:
                     self._held_locks[name] = lock_path
                     logger.debug(f"Acquired lock for '{name}' (operation: {operation})")
                     return True
-                except (OSError, IOError) as e:
+                except OSError as e:
                     logger.debug(f"Failed to create lock file: {e}")
             else:
                 # Lock exists, check if stale
-                if self._is_lock_stale(lock_path, stale_timeout):
+                if self._is_lock_stale(lock_path, stale_timeout, grace_seconds):
                     logger.info(f"Removing stale lock for '{name}'")
                     self._remove_lock_file(lock_path)
                     continue
@@ -199,10 +247,10 @@ class InstanceLockManager:
     def release(self, name: str) -> bool:
         """
         Release a lock for an instance.
-        
+
         Args:
             name: Instance name
-            
+
         Returns:
             True if lock was released, False if we didn't hold it
         """
@@ -237,27 +285,28 @@ class InstanceLockManager:
             return False
 
         # Check if lock is stale
-        if self._is_lock_stale(lock_path):
-            return False
+        return not self._is_lock_stale(lock_path)
 
-        return True
-
-    def get_lock_info(self, name: str) -> dict | None:
+    def get_lock_info(self, name: str) -> dict[str, str] | None:
         """Get info about who holds a lock."""
         lock_path = self._get_lock_path(name)
         return self._read_lock_info(lock_path)
 
-    def cleanup_stale_locks(self, stale_timeout: float = 300.0) -> int:
+    def cleanup_stale_locks(
+        self,
+        stale_timeout: float = DEFAULT_MAX_AGE_SECONDS,
+        grace_seconds: float = DEFAULT_GRACE_SECONDS,
+    ) -> int:
         """
         Remove all stale lock files.
-        
+
         Returns:
             Number of stale locks removed
         """
         removed = 0
 
         for lock_file in self.lock_dir.glob("*.lock"):
-            if self._is_lock_stale(lock_file, stale_timeout):
+            if self._is_lock_stale(lock_file, stale_timeout, grace_seconds):
                 self._remove_lock_file(lock_file)
                 removed += 1
                 logger.info(f"Removed stale lock: {lock_file.name}")
@@ -285,17 +334,17 @@ def instance_lock(
 ) -> Generator[None, None, None]:
     """
     Context manager for instance locking.
-    
+
     Usage:
         with instance_lock("my-instance", "start"):
             # Only one process can be here at a time
             start_instance("my-instance", config)
-    
+
     Args:
         name: Instance name to lock
         operation: Description of the operation (for logging/debugging)
         timeout: Maximum time to wait for lock
-        
+
     Raises:
         LockTimeoutError: If lock cannot be acquired within timeout
     """
@@ -316,9 +365,9 @@ def multi_instance_lock(
 ) -> Generator[None, None, None]:
     """
     Context manager for locking multiple instances atomically.
-    
+
     Acquires locks in sorted order to prevent deadlocks.
-    
+
     Args:
         names: List of instance names to lock
         operation: Description of the operation

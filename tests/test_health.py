@@ -2,12 +2,11 @@
 Tests for llama_orchestrator.health module.
 """
 
-import time
 from unittest.mock import MagicMock, patch
 
 import httpx
-import pytest
 
+from llama_orchestrator.engine.state import HealthStatus
 from llama_orchestrator.health.checker import (
     HealthCheckResult,
     HealthCheckStatus,
@@ -16,7 +15,6 @@ from llama_orchestrator.health.checker import (
     check_instance_health,
 )
 from llama_orchestrator.health.probes import ProbeResult
-from llama_orchestrator.engine.state import HealthStatus
 
 
 class TestHealthCheckStatus:
@@ -48,7 +46,7 @@ class TestHealthCheckResult:
         """Test is_loading property."""
         loading = HealthCheckResult(status=HealthCheckStatus.LOADING)
         assert loading.is_loading is True
-        
+
         ok = HealthCheckResult(status=HealthCheckStatus.OK)
         assert ok.is_loading is False
 
@@ -61,7 +59,7 @@ class TestHealthCheckResult:
             (HealthCheckStatus.UNREACHABLE, HealthStatus.UNHEALTHY),
             (HealthCheckStatus.TIMEOUT, HealthStatus.UNHEALTHY),
         ]
-        
+
         for check_status, expected_health in cases:
             result = HealthCheckResult(status=check_status)
             assert result.to_health_status == expected_health
@@ -75,12 +73,12 @@ class TestCheckHealth:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"status": "ok", "slots_idle": 1, "slots_processing": 0}
-        
+
         with patch("httpx.Client") as mock_client:
             mock_client.return_value.__enter__.return_value.get.return_value = mock_response
-            
+
             result = check_health("127.0.0.1", 8001)
-            
+
             assert result.status == HealthCheckStatus.OK
             assert result.is_healthy is True
             assert result.slots_idle == 1
@@ -91,12 +89,12 @@ class TestCheckHealth:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"status": "loading model"}
-        
+
         with patch("httpx.Client") as mock_client:
             mock_client.return_value.__enter__.return_value.get.return_value = mock_response
-            
+
             result = check_health("127.0.0.1", 8001)
-            
+
             assert result.status == HealthCheckStatus.LOADING
             assert result.is_loading is True
 
@@ -104,21 +102,21 @@ class TestCheckHealth:
         """Test handling 503 response."""
         mock_response = MagicMock()
         mock_response.status_code = 503
-        
+
         with patch("httpx.Client") as mock_client:
             mock_client.return_value.__enter__.return_value.get.return_value = mock_response
-            
+
             result = check_health("127.0.0.1", 8001)
-            
+
             assert result.status == HealthCheckStatus.LOADING
 
     def test_connection_refused(self):
         """Test handling connection refused."""
         with patch("httpx.Client") as mock_client:
             mock_client.return_value.__enter__.return_value.get.side_effect = httpx.ConnectError("Connection refused")
-            
+
             result = check_health("127.0.0.1", 8001)
-            
+
             assert result.status == HealthCheckStatus.UNREACHABLE
             assert "refused" in result.error_message.lower()
 
@@ -126,9 +124,9 @@ class TestCheckHealth:
         """Test handling request timeout."""
         with patch("httpx.Client") as mock_client:
             mock_client.return_value.__enter__.return_value.get.side_effect = httpx.TimeoutException("Timed out")
-            
+
             result = check_health("127.0.0.1", 8001)
-            
+
             assert result.status == HealthCheckStatus.TIMEOUT
 
     def test_response_time_recorded(self):
@@ -136,12 +134,12 @@ class TestCheckHealth:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"status": "ok"}
-        
+
         with patch("httpx.Client") as mock_client:
             mock_client.return_value.__enter__.return_value.get.return_value = mock_response
-            
+
             result = check_health("127.0.0.1", 8001)
-            
+
             assert result.response_time_ms is not None
             assert result.response_time_ms >= 0
 
@@ -150,13 +148,13 @@ class TestCheckHealth:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"status": "ok"}
-        
+
         with patch("httpx.Client") as mock_client:
             mock_get = mock_client.return_value.__enter__.return_value.get
             mock_get.return_value = mock_response
-            
+
             check_health("127.0.0.1", 8001, path="/v1/health")
-            
+
             mock_get.assert_called_once()
             call_url = mock_get.call_args[0][0]
             assert "/v1/health" in call_url
@@ -170,22 +168,22 @@ class TestCheckHealthWithFallback:
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.json.return_value = {"status": "ok"}
-        
+
         with patch("httpx.Client") as mock_client:
             mock_client.return_value.__enter__.return_value.get.return_value = mock_response
-            
+
             result = check_health_with_fallback("127.0.0.1", 8001)
-            
+
             assert result.status == HealthCheckStatus.OK
 
     def test_fallback_on_unreachable(self):
         """Test fallback to /v1/health when primary fails."""
         call_count = 0
-        
+
         def mock_get(url):
             nonlocal call_count
             call_count += 1
-            
+
             if "/health" in url and "/v1" not in url:
                 raise httpx.ConnectError("Connection refused")
             else:
@@ -193,12 +191,12 @@ class TestCheckHealthWithFallback:
                 mock_response.status_code = 200
                 mock_response.json.return_value = {"status": "ok"}
                 return mock_response
-        
+
         with patch("httpx.Client") as mock_client:
             mock_client.return_value.__enter__.return_value.get.side_effect = mock_get
-            
+
             result = check_health_with_fallback("127.0.0.1", 8001)
-            
+
             # Should have tried both endpoints
             assert call_count == 2
             assert result.status == HealthCheckStatus.OK

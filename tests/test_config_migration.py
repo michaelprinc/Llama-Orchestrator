@@ -6,12 +6,22 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from llama_orchestrator.benchmark import BenchmarkResult, get_benchmark_db_path, init_benchmark_db, record_benchmark_result
+from llama_orchestrator.benchmark import (
+    BenchmarkResult,
+    get_benchmark_db_path,
+    init_benchmark_db,
+    record_benchmark_result,
+)
 from llama_orchestrator.cli import app
-from llama_orchestrator.config import InstanceConfig, ModelConfig, save_config
+from llama_orchestrator.config import InstanceConfig, ModelConfig
 from llama_orchestrator.config.migration import migrate_instances
-from llama_orchestrator.engine.state import HealthStatus, InstanceStatus, RuntimeState, init_db, save_runtime
-
+from llama_orchestrator.engine.state import (
+    HealthStatus,
+    InstanceStatus,
+    RuntimeState,
+    init_db,
+    save_runtime,
+)
 
 runner = CliRunner()
 

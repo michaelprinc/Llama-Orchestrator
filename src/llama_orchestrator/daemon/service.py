@@ -11,22 +11,35 @@ import atexit
 import logging
 import os
 import signal
+import subprocess
 import sys
 import threading
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from types import FrameType
+from typing import TYPE_CHECKING
 
 from llama_orchestrator.config import discover_instances, get_state_dir
-from llama_orchestrator.engine.state import InstanceStatus, load_state, log_event
 from llama_orchestrator.engine.reconciler import Reconciler, ReconcileSummary
+from llama_orchestrator.engine.state import (
+    HealthStatus,
+    InstanceStatus,
+    init_db,
+    load_state,
+    log_event,
+)
 from llama_orchestrator.health import HealthMonitor, start_monitoring, stop_monitoring
 
 if TYPE_CHECKING:
     pass
 
 logger = logging.getLogger(__name__)
+
+# Windows process-creation flags used by _daemonize() on win32.
+CREATE_NO_WINDOW = 0x08000000
+DETACHED_PROCESS = 0x00000008
 
 
 def get_pid_file() -> Path:
@@ -101,6 +114,12 @@ class DaemonService:
         # Callbacks
         self._on_shutdown: Callable[[], None] | None = None
 
+        # R15/D2: explicit state-DB initialization at the daemon entry point
+        # (init_db is no longer an import side effect of engine.state).  This
+        # is the single choke point for both start_daemon() and the direct
+        # _run_foreground() callers; init_db is idempotent.
+        init_db()
+
     def start(self, foreground: bool = False) -> None:
         """
         Start the daemon service.
@@ -162,20 +181,17 @@ class DaemonService:
             script = Path(__file__).parent / "_daemon_main.py"
 
             # Write a simple entry point script
-            script_content = '''
+            script_content = f'''
 import sys
-sys.path.insert(0, r"{}")
+sys.path.insert(0, r"{str(Path(__file__).parent.parent.parent)}")
 from llama_orchestrator.daemon.service import DaemonService
 daemon = DaemonService()
 daemon._run_foreground()
-'''.format(str(Path(__file__).parent.parent.parent))
+'''
 
             script.write_text(script_content)
 
             # Start detached process
-            CREATE_NO_WINDOW = 0x08000000
-            DETACHED_PROCESS = 0x00000008
-
             subprocess.Popen(
                 [python, str(script)],
                 creationflags=CREATE_NO_WINDOW | DETACHED_PROCESS,
@@ -240,8 +256,8 @@ daemon._run_foreground()
         Logs warnings for any ports that are in use by unknown processes.
         """
         from llama_orchestrator.health.ports import (
-            get_used_ports_by_instances,
             get_port_info,
+            get_used_ports_by_instances,
         )
 
         used_ports = get_used_ports_by_instances()
@@ -268,7 +284,7 @@ daemon._run_foreground()
         if pid_file.exists():
             pid_file.unlink()
 
-    def _handle_signal(self, signum, frame) -> None:
+    def _handle_signal(self, signum: int, frame: FrameType | None) -> None:
         """Handle termination signals."""
         logger.info(f"Received signal {signum}, initiating shutdown...")
         self._stop_event.set()
@@ -367,7 +383,7 @@ daemon._run_foreground()
                 f"{summary.actions_taken} actions taken"
             )
 
-    def _on_health_change(self, name: str, old_status, new_status) -> None:
+    def _on_health_change(self, name: str, old_status: HealthStatus, new_status: HealthStatus) -> None:
         """Callback for health status changes."""
         logger.info(f"Instance '{name}' health changed: {old_status.value} -> {new_status.value}")
         self._health_checks += 1
@@ -429,13 +445,12 @@ def is_daemon_running() -> bool:
 
     try:
         pid = int(pid_file.read_text().strip())
-    except (ValueError, IOError):
+    except (OSError, ValueError):
         return False
 
     # Check if process is running
     try:
         if sys.platform == "win32":
-            import subprocess
             result = subprocess.run(
                 ["tasklist", "/FI", f"PID eq {pid}"],
                 capture_output=True,
@@ -460,7 +475,7 @@ def get_daemon_status() -> DaemonStatus:
 
     try:
         pid = int(pid_file.read_text().strip())
-    except (ValueError, IOError):
+    except (OSError, ValueError):
         return DaemonStatus(running=False)
 
     # Count monitored instances
@@ -510,7 +525,7 @@ def stop_daemon() -> bool:
 
     try:
         pid = int(pid_file.read_text().strip())
-    except (ValueError, IOError):
+    except (OSError, ValueError):
         return False
 
     stop_request = get_stop_request_file()
@@ -526,25 +541,47 @@ def stop_daemon() -> bool:
                 return True
             time.sleep(0.1)
 
-        # Escalate to process termination if needed
+        # Escalate to process termination if needed (R26). The daemon may die
+        # between our last liveness check and the signal below: a dead PID must
+        # read as success, so escalation is confirmed by post-checks instead of
+        # trusting exit codes / unguarded kills.
         if sys.platform == "win32":
-            import subprocess
-
             subprocess.run(["taskkill", "/PID", str(pid)], check=False)
             for _ in range(20):
                 if not is_daemon_running():
                     return True
                 time.sleep(0.1)
 
-            subprocess.run(["taskkill", "/PID", str(pid), "/F"], check=True)
+            # taskkill exits non-zero on an already-dead PID, so use
+            # check=False and confirm the state afterwards.
+            subprocess.run(["taskkill", "/PID", str(pid), "/F"], check=False)
+            if not is_daemon_running():
+                return True
+            logger.error(f"Daemon (pid {pid}) still running after taskkill /F")
+            return False
         else:
-            os.kill(pid, signal.SIGTERM)
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                # Daemon exited between our last check and the signal.
+                return True
             for _ in range(20):
                 if not is_daemon_running():
                     return True
                 time.sleep(0.1)
 
-            os.kill(pid, signal.SIGKILL)
+            try:
+                os.kill(pid, signal.SIGKILL)
+            except ProcessLookupError:
+                # SIGTERM took effect (or the process died) while we waited.
+                return True
+            if is_daemon_running():
+                # SIGKILL delivery is guaranteed by the kernel; an "alive"
+                # reading here means the exit has not been reaped yet.
+                logger.warning(
+                    f"Daemon (pid {pid}) still reports alive after SIGKILL "
+                    "(likely unreaped); treating as stopped"
+                )
 
         return True
 

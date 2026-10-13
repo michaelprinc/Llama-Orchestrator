@@ -5,7 +5,13 @@ from __future__ import annotations
 import struct
 from pathlib import Path
 
-from llama_orchestrator.config import InstanceConfig, ModelConfig, ModelMetadata, ModelMetadataUserMetadata, save_config
+from llama_orchestrator.config import (
+    InstanceConfig,
+    ModelConfig,
+    ModelMetadata,
+    ModelMetadataUserMetadata,
+    save_config,
+)
 from llama_orchestrator.config.migration import migrate_model_metadata
 from llama_orchestrator.hf_import import ImportedModelSelection
 from llama_orchestrator.model_metadata import build_model_metadata

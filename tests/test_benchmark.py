@@ -650,7 +650,7 @@ def test_resolve_benchmark_sampling_device_id_ignores_draft_only_device_override
 def test_benchmark_results_caching(tmp_path: Path) -> None:
     """Verify that latest_benchmark_results correctly caches database queries and invalidates on write."""
     db_path = tmp_path / "benchmarks.sqlite"
-    
+
     # 1. Clear active cache first to avoid pollution
     from llama_orchestrator.benchmark import _LATEST_BENCHMARK_RESULTS_CACHE
     _LATEST_BENCHMARK_RESULTS_CACHE.clear()
@@ -676,7 +676,7 @@ def test_benchmark_results_caching(tmp_path: Path) -> None:
     results1 = latest_benchmark_results(db_path)
     assert "bench-cache" in results1
     assert results1["bench-cache"].tokens_per_second == 5.0
-    
+
     # Verify path was cached
     resolved_path = db_path.resolve()
     assert resolved_path in _LATEST_BENCHMARK_RESULTS_CACHE

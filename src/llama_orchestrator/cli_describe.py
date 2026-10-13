@@ -108,6 +108,7 @@ class InstanceDescription:
     gpu_device: int = 0
     gpu_layers: int = 0
     effective_command: str | None = None
+    arg_overrides: list[tuple[str, str, str]] = field(default_factory=list)
     memory_estimate: MemoryFitEstimate | None = None
 
     # Runtime state (V2)
@@ -132,8 +133,8 @@ class InstanceDescription:
     process_cmdline: str | None = None
 
     # Events (recent)
-    recent_events: list[dict] = field(default_factory=list)
-    health_history: list[dict] = field(default_factory=list)
+    recent_events: list[dict[str, Any]] = field(default_factory=list)
+    health_history: list[dict[str, Any]] = field(default_factory=list)
 
     # Paths
     stdout_log: str = ""
@@ -162,6 +163,11 @@ class InstanceDescription:
                     "layers": self.gpu_layers,
                 },
                 "effective_command": self.effective_command,
+                "arg_overrides": [
+                    {"flag": flag, "config_value": built, "raw_value": raw}
+                    for flag, built, raw in self.arg_overrides
+                ]
+                or None,
                 "memory_estimate": self.memory_estimate.to_dict() if self.memory_estimate else None,
             },
             "runtime": {
@@ -261,7 +267,11 @@ def build_description(
     Returns:
         InstanceDescription with all available information
     """
-    from llama_orchestrator.engine.command import build_command, format_command
+    from llama_orchestrator.engine.command import (
+        build_command,
+        find_raw_arg_overrides,
+        format_command,
+    )
     from llama_orchestrator.engine.process import get_process_info
     from llama_orchestrator.engine.state import get_health_history, get_recent_events, load_runtime
     from llama_orchestrator.engine.validator import validate_process
@@ -292,6 +302,11 @@ def build_description(
             desc.effective_command = format_command(built_command)
         except Exception as e:
             logger.debug(f"Could not build effective command for {name}: {e}")
+        try:
+            # R18: raw args shadowing built-in flags must be visible, not silent.
+            desc.arg_overrides = find_raw_arg_overrides(config)
+        except Exception as e:
+            logger.debug(f"Could not detect raw arg overrides for {name}: {e}")
         desc.stdout_log = config.logs.stdout.format(name=name)
         desc.stderr_log = config.logs.stderr.format(name=name)
         try:
@@ -364,7 +379,13 @@ def build_description(
             events = get_recent_events(name, limit=event_limit)
             desc.recent_events = [
                 {
-                    "timestamp": e.timestamp.isoformat() if hasattr(e, 'timestamp') else str(e.get('timestamp')),
+                    # R11: rows from get_recent_events are dicts keyed by the
+                    # schema column "ts" (epoch seconds), not "timestamp".
+                    "timestamp": (
+                        datetime.fromtimestamp(float(e['ts'])).strftime("%Y-%m-%d %H:%M:%S")
+                        if isinstance(e, dict) and isinstance(e.get('ts'), int | float)
+                        else e.timestamp.isoformat() if hasattr(e, 'timestamp') else str(e.get('timestamp', ''))
+                    ),
                     "type": e.event_type if hasattr(e, 'event_type') else e.get('event_type'),
                     "message": e.message if hasattr(e, 'message') else e.get('message'),
                 }
@@ -374,18 +395,18 @@ def build_description(
             logger.debug(f"Could not get events: {e}")
 
         try:
-            health_history = get_health_history(name, limit=5)
-            desc.health_history = [
-                {
-                    "health": entry.get("health"),
-                    "response_time_ms": entry.get("response_time_ms"),
-                    "error_message": entry.get("error_message"),
-                    "checked_at": _coerce_datetime(entry.get("checked_at")).isoformat()
-                    if _coerce_datetime(entry.get("checked_at"))
-                    else None,
-                }
-                for entry in health_history
-            ]
+            history_rows: list[dict[str, Any]] = []
+            for entry in get_health_history(name, limit=5):
+                checked_at = _coerce_datetime(entry.get("checked_at"))
+                history_rows.append(
+                    {
+                        "health": entry.get("health"),
+                        "response_time_ms": entry.get("response_time_ms"),
+                        "error_message": entry.get("error_message"),
+                        "checked_at": checked_at.isoformat() if checked_at else None,
+                    }
+                )
+            desc.health_history = history_rows
         except Exception as e:
             logger.debug(f"Could not get health history: {e}")
 
@@ -428,6 +449,11 @@ def format_description_rich(desc: InstanceDescription) -> str:
     lines.append(f"  GPU Layers:   {desc.gpu_layers}")
     if desc.effective_command:
         lines.append(f"  Command:      {desc.effective_command}")
+    if desc.arg_overrides:
+        lines.append("  [yellow]Raw arg overrides (raw value wins at runtime)[/yellow]")
+        for flag, built_in_value, raw_value in desc.arg_overrides:
+            suffix = "" if built_in_value == raw_value else "  (differs from config)"
+            lines.append(f"    {flag}: config={built_in_value} raw={raw_value}{suffix}")
     lines.append("")
 
     if desc.memory_estimate:

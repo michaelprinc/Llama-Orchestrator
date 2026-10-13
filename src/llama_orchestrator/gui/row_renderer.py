@@ -7,14 +7,16 @@ Handles visibility filtering and table row rendering.
 from __future__ import annotations
 
 import tkinter as tk
-from typing import Any, Sequence
+from collections.abc import Sequence
+from typing import Any
+
 from llama_orchestrator.gui.dataclasses import TableRow
-from llama_orchestrator.gui_state import stable_sort_rows
+from llama_orchestrator.gui_state import SortSpec, stable_sort_rows
 
 
 def filter_visible_rows(
     rows: Sequence[TableRow],
-    sort_order: tuple[str, ...],
+    sort_order: tuple[SortSpec, ...],
 ) -> tuple[TableRow, ...]:
     """Filter and sort rows according to GUI settings."""
     return tuple(

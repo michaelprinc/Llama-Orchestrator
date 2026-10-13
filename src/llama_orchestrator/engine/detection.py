@@ -9,6 +9,8 @@ import time
 from collections.abc import Iterable
 from dataclasses import dataclass
 
+from llama_orchestrator.naming import SERVER_BASE, executable_name
+
 from .command import build_command, build_env, resolve_model_path
 from .process import get_log_files
 
@@ -180,7 +182,7 @@ def _resolve_primary_gpu_labels(
 
 def _build_configured_display_command(config: InstanceConfig) -> list[str]:
     """Build only the flags needed for GUI display when a package is unavailable."""
-    command = ["llama-server.exe", "--threads", str(config.model.threads)]
+    command = [executable_name(SERVER_BASE), "--threads", str(config.model.threads)]
     if config.gpu.backend != "cpu":
         command.extend(["--n-gpu-layers", str(config.gpu.layers)])
     if config.server.parallel > 1:

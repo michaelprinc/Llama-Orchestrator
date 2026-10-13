@@ -9,13 +9,18 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from enum import Enum
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import httpx
 
 from llama_orchestrator.config import get_instance_config
 from llama_orchestrator.engine.state import HealthStatus
-from llama_orchestrator.health.probes import ProbeFactory, ProbeResult
+from llama_orchestrator.health.probes import (
+    ERROR_KIND_TIMEOUT,
+    ERROR_KIND_UNREACHABLE,
+    ProbeFactory,
+    ProbeResult,
+)
 
 if TYPE_CHECKING:
     from llama_orchestrator.config import InstanceConfig
@@ -37,7 +42,7 @@ class HealthCheckResult:
     status: HealthCheckStatus
     response_time_ms: float | None = None
     error_message: str | None = None
-    raw_response: dict | None = None
+    raw_response: dict[str, Any] | None = None
     slots_idle: int | None = None
     slots_processing: int | None = None
 
@@ -63,7 +68,7 @@ class HealthCheckResult:
         }.get(self.status, HealthStatus.UNKNOWN)
 
 
-def _uses_legacy_http_flow(config: "InstanceConfig") -> bool:
+def _uses_legacy_http_flow(config: InstanceConfig) -> bool:
     """Keep the old HTTP parser for the default llama.cpp health endpoint."""
     healthcheck = config.healthcheck
     return (
@@ -75,31 +80,65 @@ def _uses_legacy_http_flow(config: "InstanceConfig") -> bool:
     )
 
 
+#: HTTP status codes that mean "server is up but not ready yet" (llama.cpp
+#: answers 503 while the model is still loading).
+_LOADING_STATUS_CODES = frozenset({503})
+
+
+def classify_probe_outcome(
+    success: bool,
+    status_code: int | None,
+    error_kind: str | None,
+) -> HealthCheckStatus:
+    """Map a structured probe outcome to a health status (R12/F6).
+
+    Classification is table-driven on the probe's structured fields only —
+    never on free-form message substrings:
+
+    * ``success`` is True → OK
+    * status code in :data:`_LOADING_STATUS_CODES` → LOADING
+    * ``error_kind`` == timeout → TIMEOUT
+    * ``error_kind`` == unreachable → UNREACHABLE
+    * anything else → ERROR (fail closed)
+
+    Precedence is success > status code > error kind.  A probe that cannot
+    report a structured cause (``error_kind is None``) fails closed to ERROR
+    unless the status code says otherwise.
+    """
+    if success:
+        return HealthCheckStatus.OK
+    if status_code is not None and status_code in _LOADING_STATUS_CODES:
+        return HealthCheckStatus.LOADING
+    if error_kind == ERROR_KIND_TIMEOUT:
+        return HealthCheckStatus.TIMEOUT
+    if error_kind == ERROR_KIND_UNREACHABLE:
+        return HealthCheckStatus.UNREACHABLE
+    return HealthCheckStatus.ERROR
+
+
 def _probe_result_to_health_check_result(result: ProbeResult) -> HealthCheckResult:
-    """Convert a generic probe result into the legacy health check result contract."""
+    """Convert a generic probe result into the legacy health check result contract.
+
+    Status classification is delegated to :func:`classify_probe_outcome`,
+    which inspects only structured fields (``success``, ``status_code``,
+    ``error_kind``), never the message text (R12/F6).
+    """
+    status = classify_probe_outcome(
+        result.success,
+        result.status_code,
+        result.error_kind,
+    )
     if result.success:
         return HealthCheckResult(
-            status=HealthCheckStatus.OK,
+            status=status,
             response_time_ms=result.response_time_ms,
             raw_response=result.details,
         )
 
-    message = result.message or ""
-    message_lower = message.lower()
-
-    if result.status_code == 503:
-        status = HealthCheckStatus.LOADING
-    elif "timeout" in message_lower:
-        status = HealthCheckStatus.TIMEOUT
-    elif any(token in message_lower for token in ["connection failed", "refused", "unreachable", "tcp connection failed"]):
-        status = HealthCheckStatus.UNREACHABLE
-    else:
-        status = HealthCheckStatus.ERROR
-
     return HealthCheckResult(
         status=status,
         response_time_ms=result.response_time_ms,
-        error_message=message,
+        error_message=result.message or "",
         raw_response=result.details,
     )
 
@@ -112,13 +151,13 @@ def check_health(
 ) -> HealthCheckResult:
     """
     Perform a health check against a llama.cpp server.
-    
+
     Args:
         host: Server hostname or IP
         port: Server port
         path: Health check endpoint path (default: /health)
         timeout: Request timeout in seconds
-        
+
     Returns:
         HealthCheckResult with status and response info
     """
@@ -159,11 +198,13 @@ def check_health(
                             raw_response=data,
                         )
                 except Exception as e:
-                    # Response wasn't valid JSON
+                    # HTTP 200 but no valid JSON body: the server is up and
+                    # answering (typically still loading the model) but not
+                    # ready.  Classified LOADING, never OK (R12/F6).
                     return HealthCheckResult(
-                        status=HealthCheckStatus.OK,
+                        status=HealthCheckStatus.LOADING,
                         response_time_ms=elapsed_ms,
-                        error_message=f"Invalid JSON response: {e}",
+                        error_message=f"HTTP 200 without valid JSON body: {e}",
                     )
             elif response.status_code == 503:
                 # Service unavailable - typically means still loading
@@ -203,15 +244,15 @@ def check_health_with_fallback(
 ) -> HealthCheckResult:
     """
     Check health with fallback to /v1/health endpoint.
-    
+
     Some older versions of llama.cpp use /v1/health instead of /health.
     This function tries both endpoints.
-    
+
     Args:
         host: Server hostname or IP
         port: Server port
         timeout: Request timeout in seconds
-        
+
     Returns:
         HealthCheckResult from first successful check
     """
@@ -230,17 +271,17 @@ def check_health_with_fallback(
 def check_instance_health(name: str, timeout: float | None = None) -> HealthCheckResult:
     """
     Check health of a named instance.
-    
+
     Loads the instance configuration and performs a health check
     against the configured host:port.
-    
+
     Args:
         name: Instance name
         timeout: Optional timeout override (uses config default if not provided)
-        
+
     Returns:
         HealthCheckResult
-        
+
     Raises:
         FileNotFoundError: If instance config doesn't exist
     """

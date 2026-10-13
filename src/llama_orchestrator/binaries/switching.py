@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-from uuid import UUID
-
 from llama_orchestrator.binaries.manager import BinaryManager, BinaryManagerError
 from llama_orchestrator.binaries.schema import BinaryVersion
-from llama_orchestrator.config import BinaryConfig, get_instance_config, get_project_root, save_config
+from llama_orchestrator.config import (
+    BinaryConfig,
+    get_instance_config,
+    get_project_root,
+    save_config,
+)
 from llama_orchestrator.engine import InstanceStatus, list_instances, restart_instance
+from llama_orchestrator.naming import SERVER_BASE, executable_name
 
 
 class BinarySwitchError(BinaryManagerError):
@@ -40,7 +44,7 @@ def switch_instance_binary(
     binary = resolve_binary_selector(manager, binary_selector)
     server_path = manager.registry.get_server_path(binary.id)
     if server_path is None or not server_path.is_file():
-        raise BinarySwitchError(f"Registered binary {binary.id} has no llama-server.exe")
+        raise BinarySwitchError(f"Registered binary {binary.id} has no {executable_name(SERVER_BASE)}")
 
     state = list_instances().get(config.name)
     is_running = state is not None and state.status == InstanceStatus.RUNNING

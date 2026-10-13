@@ -6,6 +6,7 @@ Extracted from app.py to reduce context fill during independent refactoring.
 from __future__ import annotations
 
 import tkinter as tk
+from collections.abc import Callable
 from tkinter import messagebox, ttk
 
 from llama_orchestrator.benchmark import BenchmarkSettings
@@ -40,9 +41,11 @@ GRID_BENCHMARK_LABEL = "Grid benchmark"
 class GridBenchmarkDialog(tk.Toplevel):
     """Grid benchmark parameter dialog."""
 
+    # Tk or Toplevel (typeshed has no common nominal base; both satisfy
+    # Toplevel(parent) [Misc] and transient(parent) [Wm]).
     def __init__(
         self,
-        parent: tk.Misc,
+        parent: tk.Tk | tk.Toplevel,
         settings: BenchmarkSettings,
         config: InstanceConfig | None = None,
     ) -> None:
@@ -140,7 +143,9 @@ class GridBenchmarkDialog(tk.Toplevel):
             )
             if spec.kind == "composite" and spec.name == KV_CACHE_PARAMETER_NAME:
                 selected_profile_ids = tuple(str(value) for value in parse_grid_values(step_or_values.get(), "enum"))
-                step_or_values._kv_cache_profile_ids = selected_profile_ids
+                # Side-band state on the variable; plain attribute assignment
+                # would fail mypy --strict (attr-defined on StringVar).
+                setattr(step_or_values, "_kv_cache_profile_ids", selected_profile_ids)  # noqa: B010
                 composite_frame = ttk.Frame(body)
                 composite_frame.grid(row=row, column=5, sticky="ew", padx=4)
                 composite_frame.columnconfigure(0, weight=1)
@@ -153,7 +158,7 @@ class GridBenchmarkDialog(tk.Toplevel):
                 ttk.Button(
                     composite_frame,
                     text="Configure...",
-                    command=lambda target=step_or_values: self._configure_kv_cache(target),
+                    command=self._make_configure_command(step_or_values),
                 ).grid(row=0, column=1, sticky="e", padx=(4, 0))
                 step_or_values.set(format_kv_cache_profile_summary(selected_profile_ids))
             else:
@@ -248,13 +253,23 @@ class GridBenchmarkDialog(tk.Toplevel):
         values = parse_grid_values(text, "enum")
         return tuple(str(value) for value in values)
 
+    def _make_configure_command(self, variable: tk.StringVar) -> Callable[[], None]:
+        """Build the Configure button command bound to one parameter row."""
+
+        def configure() -> None:
+            self._configure_kv_cache(variable)
+
+        return configure
+
     def _configure_kv_cache(self, target: tk.StringVar) -> None:
         selected = self._selected_kv_cache_profile_ids(target.get())
         dialog = KvCacheProfileDialog(self, selected)
         self.wait_window(dialog)
         if dialog.result is None:
             return
-        target._kv_cache_profile_ids = tuple(dialog.result)
+        # Side-band state on the variable; plain attribute assignment
+        # would fail mypy --strict (attr-defined on StringVar).
+        setattr(target, "_kv_cache_profile_ids", tuple(dialog.result))  # noqa: B010
         target.set(format_kv_cache_profile_summary(dialog.result))
         self._parameter_vars[KV_CACHE_PARAMETER_NAME].enabled.set(True)
         self._update_preview()

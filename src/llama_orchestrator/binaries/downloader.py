@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import tempfile
 import warnings
 import zipfile
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
 
 import httpx
 
@@ -41,7 +42,7 @@ class InsecureModeWarning(RuntimeWarning):
 class DownloadError(Exception):
     """Error during download or extraction."""
 
-    def __init__(self, message: str, cause: Optional[Exception] = None):
+    def __init__(self, message: str, cause: Exception | None = None):
         self.message = message
         self.cause = cause
         super().__init__(message)
@@ -71,16 +72,16 @@ class TLSVerificationError(DownloadError):
 
 
 # Type for progress callback: (downloaded_bytes, total_bytes) -> None
-ProgressCallback = Callable[[int, Optional[int]], None]
+ProgressCallback = Callable[[int, int | None], None]
 
 
 def download_file(
     url: str,
     dest_path: Path,
     timeout: float = DEFAULT_TIMEOUT,
-    progress_callback: Optional[ProgressCallback] = None,
+    progress_callback: ProgressCallback | None = None,
     verify_tls: bool = VERIFY_TLS,
-    expected_sha256: Optional[str] = None,
+    expected_sha256: str | None = None,
 ) -> Path:
     """
     Download a file from URL to destination path with TLS verification.
@@ -128,81 +129,76 @@ def download_file(
     tmp_path: Path | None = None
     try:
         # Use httpx client with TLS verification
-        client_kwargs = {"timeout": timeout, "follow_redirects": True}
-
-        if verify_tls:
-            client_kwargs["verify"] = True
-        else:
-            client_kwargs["verify"] = False
+        if not verify_tls:
             logger.warning(f"TLS verification disabled for {url}")
+        client = httpx.Client(timeout=timeout, follow_redirects=True, verify=verify_tls)
 
-        with httpx.Client(**client_kwargs) as client:
-            with client.stream("GET", url) as response:
-                response.raise_for_status()
+        with client, client.stream("GET", url) as response:
+            response.raise_for_status()
 
-                # Get total size if available
-                total_size = response.headers.get("content-length")
-                total_bytes = int(total_size) if total_size else None
+            # Get total size if available
+            total_size = response.headers.get("content-length")
+            total_bytes = int(total_size) if total_size else None
 
-                # Check max download size
-                if total_bytes and total_bytes > MAX_DOWNLOAD_SIZE:
-                    raise DownloadError(
-                        f"Download too large: {total_bytes} bytes "
-                        f"(max: {MAX_DOWNLOAD_SIZE} bytes)"
-                    )
-
-                # Download to temporary file first (atomic write)
-                with tempfile.NamedTemporaryFile(
-                    dir=str(dest_path.parent),
-                    suffix=".tmp",
-                    delete=False,
-                ) as tmp_file:
-                    tmp_path = Path(tmp_file.name)
-                    downloaded = 0
-
-                    for chunk in response.iter_bytes(chunk_size=CHUNK_SIZE):
-                        downloaded += len(chunk)
-                        if downloaded > MAX_DOWNLOAD_SIZE:
-                            raise DownloadError(
-                                f"Download too large: exceeded {MAX_DOWNLOAD_SIZE} bytes"
-                            )
-                        tmp_file.write(chunk)
-
-                        if progress_callback:
-                            progress_callback(downloaded, total_bytes)
-
-                # Verify size if we got content-length
-                if total_bytes and downloaded != total_bytes:
-                    tmp_path.unlink(missing_ok=True)
-                    raise DownloadError(
-                        f"Download size mismatch: expected {total_bytes}, "
-                        f"got {downloaded}"
-                    )
-
-                # Verify checksum if expected
-                if expected_sha256:
-                    actual_sha256 = calculate_sha256(tmp_path)
-                    if actual_sha256 != expected_sha256.lower().strip():
-                        tmp_path.unlink(missing_ok=True)
-                        raise ChecksumError(expected_sha256, actual_sha256)
-                    logger.info(
-                        "SHA256 checksum verified for %s: %s",
-                        dest_path.name,
-                        actual_sha256[:16] + "...",
-                    )
-
-                # Atomically move to destination
-                tmp_path.replace(dest_path)
-                tmp_path = None
-
-                logger.info(
-                    "Downloaded %d bytes to %s (TLS verification: %s, source: %s)",
-                    downloaded,
-                    dest_path,
-                    "enabled" if verify_tls else "disabled",
-                    url,
+            # Check max download size
+            if total_bytes and total_bytes > MAX_DOWNLOAD_SIZE:
+                raise DownloadError(
+                    f"Download too large: {total_bytes} bytes "
+                    f"(max: {MAX_DOWNLOAD_SIZE} bytes)"
                 )
-                return dest_path
+
+            # Download to temporary file first (atomic write)
+            with tempfile.NamedTemporaryFile(
+                dir=str(dest_path.parent),
+                suffix=".tmp",
+                delete=False,
+            ) as tmp_file:
+                tmp_path = Path(tmp_file.name)
+                downloaded = 0
+
+                for chunk in response.iter_bytes(chunk_size=CHUNK_SIZE):
+                    downloaded += len(chunk)
+                    if downloaded > MAX_DOWNLOAD_SIZE:
+                        raise DownloadError(
+                            f"Download too large: exceeded {MAX_DOWNLOAD_SIZE} bytes"
+                        )
+                    tmp_file.write(chunk)
+
+                    if progress_callback:
+                        progress_callback(downloaded, total_bytes)
+
+            # Verify size if we got content-length
+            if total_bytes and downloaded != total_bytes:
+                tmp_path.unlink(missing_ok=True)
+                raise DownloadError(
+                    f"Download size mismatch: expected {total_bytes}, "
+                    f"got {downloaded}"
+                )
+
+            # Verify checksum if expected
+            if expected_sha256:
+                actual_sha256 = calculate_sha256(tmp_path)
+                if actual_sha256 != expected_sha256.lower().strip():
+                    tmp_path.unlink(missing_ok=True)
+                    raise ChecksumError(expected_sha256, actual_sha256)
+                logger.info(
+                    "SHA256 checksum verified for %s: %s",
+                    dest_path.name,
+                    actual_sha256[:16] + "...",
+                )
+
+            # Atomically move to destination
+            tmp_path.replace(dest_path)
+            tmp_path = None
+
+            logger.info(
+                "Downloaded %d bytes to %s (TLS verification: %s, source: %s)",
+                downloaded,
+                dest_path,
+                "enabled" if verify_tls else "disabled",
+                url,
+            )
+            return dest_path
 
     except httpx.HTTPStatusError as e:
         # A response returned from ``client.stream()`` has deliberately not
@@ -229,9 +225,9 @@ def download_file(
 def download_file_safe(
     url: str,
     dest_path: Path,
-    expected_sha256: Optional[str] = None,
+    expected_sha256: str | None = None,
     timeout: float = DEFAULT_TIMEOUT,
-    progress_callback: Optional[ProgressCallback] = None,
+    progress_callback: ProgressCallback | None = None,
 ) -> Path:
     """
     Download a file with full safety checks (TLS + checksum + atomic write).
@@ -386,7 +382,14 @@ def extract_tar_gz(archive_path: Path, dest_dir: Path) -> Path:
                 if member.name.startswith("/") or ".." in member.name:
                     raise DownloadError(f"Unsafe path in archive: {member.name}")
 
-            tf.extractall(dest_dir, filter="data" if hasattr(tarfile, "data_filter") else None)
+            # R6/F2: the `filter=` keyword only exists on Python 3.12+ (tarfile
+            # "data_filter"). Passing it on older interpreters raises TypeError,
+            # and omitting it on 3.14+ is deprecated, so branch explicitly. On
+            # < 3.12 the manual member-name check above is the traversal guard.
+            if hasattr(tarfile, "data_filter"):
+                tf.extractall(dest_dir, filter="data")
+            else:
+                tf.extractall(dest_dir)
 
             logger.info(f"Extracted {len(members)} files to {dest_dir}")
 
@@ -432,7 +435,12 @@ def find_executables(path: Path) -> list[str]:
     """Find all executable files in a directory."""
     executables = []
     for file in path.rglob("*"):
-        if file.is_file() and file.suffix.lower() in (".exe", ".dll"):
+        if not file.is_file():
+            continue
+        if os.name == "nt":  # Windows packages name binaries and DLLs explicitly
+            if file.suffix.lower() in (".exe", ".dll"):
+                executables.append(file.name)
+        elif not file.suffix:
             executables.append(file.name)
     return sorted(set(executables))
 
@@ -440,8 +448,8 @@ def find_executables(path: Path) -> list[str]:
 def download_and_extract(
     url: str,
     dest_dir: Path,
-    expected_sha256: Optional[str] = None,
-    progress_callback: Optional[ProgressCallback] = None,
+    expected_sha256: str | None = None,
+    progress_callback: ProgressCallback | None = None,
     cleanup: bool = True,
     verify_tls: bool = True,
 ) -> tuple[Path, str]:
@@ -502,17 +510,17 @@ def download_and_extract(
 class DownloadProgress:
     """Helper class for tracking download progress with Rich."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.downloaded = 0
-        self.total: Optional[int] = None
+        self.total: int | None = None
 
-    def update(self, downloaded: int, total: Optional[int]) -> None:
+    def update(self, downloaded: int, total: int | None) -> None:
         """Update progress."""
         self.downloaded = downloaded
         self.total = total
 
     @property
-    def percent(self) -> Optional[float]:
+    def percent(self) -> float | None:
         """Get progress percentage."""
         if self.total is None or self.total == 0:
             return None
@@ -520,11 +528,12 @@ class DownloadProgress:
 
     def format_size(self, size: int) -> str:
         """Format bytes as human-readable string."""
+        value = float(size)
         for unit in ["B", "KB", "MB", "GB"]:
-            if size < 1024:
-                return f"{size:.1f} {unit}"
-            size /= 1024
-        return f"{size:.1f} TB"
+            if value < 1024:
+                return f"{value:.1f} {unit}"
+            value /= 1024
+        return f"{value:.1f} TB"
 
     def __str__(self) -> str:
         """Format progress as string."""

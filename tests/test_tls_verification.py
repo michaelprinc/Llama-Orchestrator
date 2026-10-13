@@ -9,19 +9,19 @@ Tests cover:
 """
 
 import hashlib
+import os
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import pytest
 import httpx
+import pytest
 
 from llama_orchestrator.binaries.downloader import (
     ChecksumError,
     DownloadError,
     DownloadProgress,
     InsecureModeWarning,
-    TLSVerificationError,
     calculate_sha256,
     download_and_extract,
     download_file,
@@ -35,14 +35,10 @@ from llama_orchestrator.binaries.downloader import (
 )
 from llama_orchestrator.binaries.github import (
     GitHubClient,
-    GitHubError,
-    RateLimitError,
     get_download_url,
     get_latest_version,
 )
 from llama_orchestrator.binaries.manager import BinaryManager
-from llama_orchestrator.binaries.schema import SupportedVariant
-
 
 # =============================================================================
 # download_file Tests
@@ -272,16 +268,18 @@ class TestDownloadAndExtract:
                 with zipfile.ZipFile(archive_path, "w") as zf:
                     zf.writestr("test.txt", "content")
 
-                with patch("llama_orchestrator.binaries.downloader.download_file") as mock_dl:
+                with (
+                    patch("llama_orchestrator.binaries.downloader.download_file") as mock_dl,
+                    patch("llama_orchestrator.binaries.downloader.calculate_sha256", return_value="abc" * 16),
+                    patch("llama_orchestrator.binaries.downloader.verify_checksum"),
+                    patch("llama_orchestrator.binaries.downloader.extract_archive"),
+                ):
                     mock_dl.return_value = archive_path
-                    with patch("llama_orchestrator.binaries.downloader.calculate_sha256", return_value="abc" * 16):
-                        with patch("llama_orchestrator.binaries.downloader.verify_checksum"):
-                            with patch("llama_orchestrator.binaries.downloader.extract_archive"):
-                                download_and_extract(url, dest_dir, verify_tls=False)
+                    download_and_extract(url, dest_dir, verify_tls=False)
 
-                                # Verify verify_tls was passed as False
-                                call_kwargs = mock_dl.call_args.kwargs
-                                assert call_kwargs.get("verify_tls") is False
+                    # Verify verify_tls was passed as False
+                    call_kwargs = mock_dl.call_args.kwargs
+                    assert call_kwargs.get("verify_tls") is False
 
     def test_download_and_extract_default_verifies_tls(self, tmp_path: Path) -> None:
         """download_and_extract should verify TLS by default."""
@@ -289,14 +287,16 @@ class TestDownloadAndExtract:
         dest_dir = tmp_path / "extracted"
         dest_dir.mkdir()
 
-        with patch("llama_orchestrator.binaries.downloader.download_file") as mock_dl:
-            with patch("llama_orchestrator.binaries.downloader.calculate_sha256", return_value="abc" * 16):
-                with patch("llama_orchestrator.binaries.downloader.verify_checksum"):
-                    with patch("llama_orchestrator.binaries.downloader.extract_archive"):
-                        download_and_extract(url, dest_dir)
+        with (
+            patch("llama_orchestrator.binaries.downloader.download_file") as mock_dl,
+            patch("llama_orchestrator.binaries.downloader.calculate_sha256", return_value="abc" * 16),
+            patch("llama_orchestrator.binaries.downloader.verify_checksum"),
+            patch("llama_orchestrator.binaries.downloader.extract_archive"),
+        ):
+            download_and_extract(url, dest_dir)
 
-                        call_kwargs = mock_dl.call_args.kwargs
-                        assert call_kwargs.get("verify_tls") is True
+            call_kwargs = mock_dl.call_args.kwargs
+            assert call_kwargs.get("verify_tls") is True
 
 
 # =============================================================================
@@ -442,7 +442,7 @@ class TestBinaryManagerInsecure:
         mock_version.variant = "win-cpu-x64"
 
         with patch("llama_orchestrator.binaries.manager.download_and_extract") as mock_extract, \
-             patch("llama_orchestrator.binaries.manager.logger") as mock_logger, \
+             patch("llama_orchestrator.binaries.manager.logger"), \
              patch.object(manager.registry, "add"), \
              patch.object(manager.registry, "count", return_value=1):
 
@@ -469,7 +469,7 @@ class TestBinaryManagerInsecure:
         mock_version.variant = "win-cpu-x64"
 
         with patch("llama_orchestrator.binaries.manager.download_and_extract") as mock_extract, \
-             patch("llama_orchestrator.binaries.manager.logger") as mock_logger, \
+             patch("llama_orchestrator.binaries.manager.logger"), \
              patch.object(manager.registry, "add"), \
              patch.object(manager.registry, "count", return_value=1):
 
@@ -490,7 +490,7 @@ class TestBinaryManagerInsecure:
         manager = BinaryManager(tmp_path)
 
         with patch("llama_orchestrator.binaries.manager.download_and_extract") as mock_extract, \
-             patch("llama_orchestrator.binaries.manager.logger") as mock_logger, \
+             patch("llama_orchestrator.binaries.manager.logger"), \
              patch.object(manager.registry, "add"), \
              patch.object(manager.registry, "count", return_value=1), \
              patch("llama_orchestrator.binaries.manager.GitHubClient") as mock_github:
@@ -526,6 +526,7 @@ class TestCLIInsecureFlag:
     def test_binary_install_accepts_insecure_flag(self) -> None:
         """CLI binary install should accept --insecure flag."""
         from typer.testing import CliRunner
+
         from llama_orchestrator.cli import app
 
         runner = CliRunner()
@@ -554,6 +555,7 @@ class TestCLIInsecureFlag:
     def test_binary_install_default_no_insecure(self) -> None:
         """CLI binary install should default to secure (no --insecure)."""
         from typer.testing import CliRunner
+
         from llama_orchestrator.cli import app
 
         runner = CliRunner()
@@ -581,6 +583,7 @@ class TestCLIInsecureFlag:
     def test_binary_install_passes_latest_as_version_string(self) -> None:
         """The manager resolves 'latest'; passing None breaks URL construction."""
         from typer.testing import CliRunner
+
         from llama_orchestrator.cli import app
 
         mock_version = MagicMock()
@@ -712,15 +715,25 @@ class TestHelperFunctions:
         assert size == 5 + 6  # "hello" + "world!"
 
     def test_find_executables(self, tmp_path: Path) -> None:
-        """find_executables should find .exe and .dll files."""
-        (tmp_path / "test.exe").touch()
-        (tmp_path / "test.dll").touch()
-        (tmp_path / "test.txt").touch()
+        """find_executables should find platform executables and skip data files."""
+        if os.name == "nt":  # Windows packages name binaries and DLLs explicitly
+            (tmp_path / "test.exe").touch()
+            (tmp_path / "test.dll").touch()
+            (tmp_path / "test.txt").touch()
 
-        executables = find_executables(tmp_path)
-        assert "test.exe" in executables
-        assert "test.dll" in executables
-        assert "test.txt" not in executables
+            executables = find_executables(tmp_path)
+            assert "test.exe" in executables
+            assert "test.dll" in executables
+            assert "test.txt" not in executables
+        else:  # POSIX packages ship extensionless executables
+            (tmp_path / "test-server").touch()
+            (tmp_path / "libggml.so").touch()
+            (tmp_path / "test.txt").touch()
+
+            executables = find_executables(tmp_path)
+            assert "test-server" in executables
+            assert "libggml.so" not in executables
+            assert "test.txt" not in executables
 
     def test_download_progress_format_size(self) -> None:
         """DownloadProgress.format_size should format bytes correctly."""

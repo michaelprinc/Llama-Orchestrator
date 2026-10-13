@@ -12,6 +12,11 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from llama_orchestrator.config import get_llama_server_path, get_project_root
+from llama_orchestrator.naming import (
+    DIFFUSION_RUNNER_BASE,
+    SERVER_BASE,
+    executable_name,
+)
 
 if TYPE_CHECKING:
     from llama_orchestrator.config import InstanceConfig
@@ -43,7 +48,7 @@ def build_command(config: InstanceConfig) -> list[str]:
     model_path = resolve_model_path(config)
 
     if config.env.get("LLAMA_ORCH_RUNTIME") == "diffusion-gemma":
-        runner = server_exe.parent / "llama-diffusion-gemma-visual-server.exe"
+        runner = server_exe.parent / executable_name(DIFFUSION_RUNNER_BASE)
         cmd_args = [
             sys.executable,
             "-m",
@@ -58,6 +63,26 @@ def build_command(config: InstanceConfig) -> list[str]:
         if config.args:
             cmd_args.extend(config.args)
         return cmd_args
+
+    args = _base_llama_server_args(config)
+
+    # Add any extra args from config (raw tokens; they may shadow built-in
+    # flags — see find_raw_arg_overrides for the R18 override policy).
+    if config.args:
+        args.extend(config.args)
+
+    return args
+
+
+def _base_llama_server_args(config: InstanceConfig) -> list[str]:
+    """
+    Build the built-in llama-server arguments from structured config fields.
+
+    Excludes raw ``config.args`` so that override detection (R18) can compare
+    the two layers without duplication of the flag-emission logic.
+    """
+    server_exe = get_llama_server_path(config)
+    model_path = resolve_model_path(config)
 
     args = [
         str(server_exe),
@@ -83,11 +108,64 @@ def build_command(config: InstanceConfig) -> list[str]:
     if config.server.disable_fit:
         args.extend(["-fit", "off"])
 
-    # Add any extra args from config
-    if config.args:
-        args.extend(config.args)
-
     return args
+
+
+def _parse_flag_pairs(args: list[str]) -> dict[str, str]:
+    """
+    Parse command-line tokens into flag→value pairs.
+
+    Supports ``--flag value``, ``--flag=value`` and single-dash flags
+    (e.g. ``-fit off``). Later occurrences win, mirroring llama.cpp's
+    last-occurrence-wins semantics for repeated flags. Non-flag tokens are
+    skipped.
+    """
+    pairs: dict[str, str] = {}
+    i = 0
+    while i < len(args):
+        tok = args[i]
+        if tok.startswith("--"):
+            if "=" in tok:
+                flag, _, value = tok.partition("=")
+                pairs[flag] = value
+                i += 1
+            elif i + 1 < len(args):
+                pairs[tok] = args[i + 1]
+                i += 2
+            else:
+                pairs[tok] = ""
+                i += 1
+        elif tok.startswith("-") and len(tok) > 1 and not tok[1].isdigit():
+            if i + 1 < len(args):
+                pairs[tok] = args[i + 1]
+                i += 2
+            else:
+                pairs[tok] = ""
+                i += 1
+        else:
+            i += 1
+    return pairs
+
+
+def find_raw_arg_overrides(config: InstanceConfig) -> list[tuple[str, str, str]]:
+    """
+    Detect raw ``config.args`` tokens that re-specify a built-in flag (R18).
+
+    Returns ``(flag, built_in_value, raw_value)`` triples in the order each
+    flag first appears in the raw args. llama.cpp applies the last occurrence
+    of a repeated flag, so when the values differ the RAW value is what takes
+    effect at runtime even though the structured config says otherwise — this
+    must be surfaced (describe + INFO log), never silent.
+    """
+    if not config.args:
+        return []
+    base_map = _parse_flag_pairs(_base_llama_server_args(config))
+    raw_map = _parse_flag_pairs(list(config.args))
+    overrides: list[tuple[str, str, str]] = []
+    for flag, raw_value in raw_map.items():
+        if flag in base_map:
+            overrides.append((flag, base_map[flag], raw_value))
+    return overrides
 
 
 def build_env(config: InstanceConfig) -> dict[str, str]:
@@ -141,13 +219,13 @@ def validate_executable(config: InstanceConfig | None = None) -> tuple[bool, str
         return False, str(e)
 
     if config is not None and config.env.get("LLAMA_ORCH_RUNTIME") == "diffusion-gemma":
-        runner = server_exe.parent / "llama-diffusion-gemma-visual-server.exe"
+        runner = server_exe.parent / executable_name(DIFFUSION_RUNNER_BASE)
         if not runner.is_file():
             return False, f"DiffusionGemma runner not found at {runner}"
         return True, f"DiffusionGemma runner found at {runner}"
 
     if not server_exe.exists():
-        return False, f"llama-server.exe not found at {server_exe}"
+        return False, f"{executable_name(SERVER_BASE)} not found at {server_exe}"
 
     if not server_exe.is_file():
         return False, f"{server_exe} is not a file"

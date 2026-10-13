@@ -7,9 +7,9 @@ Handles the toolbar frame, buttons, columns menu, and daemon controls.
 from __future__ import annotations
 
 import tkinter as tk
-from tkinter import ttk
 from collections.abc import Callable
 from dataclasses import dataclass
+from tkinter import ttk
 
 
 @dataclass
@@ -50,7 +50,9 @@ class ToolbarWidgets:
 
 
 def build_toolbar(
-    parent: tk.Widget,
+    # tk.Misc (not tk.Widget) because the root window (tk.Tk) is not a
+    # Widget in tkinter's class hierarchy.
+    parent: tk.Misc,
     *,
     callbacks: ToolbarCallbacks,
     column_headings: dict[str, str],

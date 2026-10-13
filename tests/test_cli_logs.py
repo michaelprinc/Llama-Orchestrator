@@ -7,7 +7,6 @@ from typer.testing import CliRunner
 
 from llama_orchestrator.cli import app
 
-
 runner = CliRunner()
 
 

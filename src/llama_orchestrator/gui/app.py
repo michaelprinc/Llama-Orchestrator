@@ -18,10 +18,10 @@ import time
 import tkinter as tk
 import unicodedata
 from collections.abc import Callable, Sequence
-from dataclasses import replace
-from datetime import datetime, timezone
+from dataclasses import fields, replace
+from datetime import UTC, datetime
 from pathlib import Path
-from tkinter import filedialog, messagebox, scrolledtext, simpledialog, ttk
+from tkinter import filedialog, messagebox, simpledialog, ttk
 from uuid import uuid4
 
 from llama_orchestrator.benchmark import (
@@ -77,24 +77,26 @@ from llama_orchestrator.engine.state import (
     save_runtime,
     save_state,
 )
-from llama_orchestrator.gui.activity_log import build_activity_log_frame, append_activity
+from llama_orchestrator.gui.actions import (
+    copy_cli_command,
+    copy_endpoint_snippet,
+    diff_instances,
+    rename_instance,
+)
+from llama_orchestrator.gui.activity_log import append_activity, build_activity_log_frame
+from llama_orchestrator.gui.benchmark_controls import (
+    build_benchmark_frame,
+    update_benchmark_controls,
+)
 from llama_orchestrator.gui.dataclasses import (
     GuiRefreshSnapshot,
     TableRow,
 )
 from llama_orchestrator.gui.gpu_inventory import (
     build_gpu_inventory_frame,
-    render_gpu_inventory,
     edit_gpu_alias,
-    toggle_gpu_inventory,
+    render_gpu_inventory,
 )
-from llama_orchestrator.gui.row_renderer import filter_visible_rows, render_full_rows
-from llama_orchestrator.gui.benchmark_controls import (
-    build_benchmark_frame,
-    update_benchmark_controls,
-)
-from llama_orchestrator.gui.actions import copy_cli_command, rename_instance, diff_instances, copy_endpoint_snippet
-from llama_orchestrator.gui.toolbar import build_toolbar, ToolbarCallbacks
 from llama_orchestrator.gui.grid_benchmark_dialog import GridBenchmarkDialog
 from llama_orchestrator.gui.install_dialog import InstallBinaryDialog
 from llama_orchestrator.gui.live_metrics_window import (
@@ -102,15 +104,17 @@ from llama_orchestrator.gui.live_metrics_window import (
 )
 from llama_orchestrator.gui.model_dialogs import AddModelDialog
 from llama_orchestrator.gui.refresh import RenderDiffMixin
-from llama_orchestrator.gui.version_browser import (
-    LocalPackageImport,
-    SwitchServerDialog,
-    VersionBrowserDialog,
-)
+from llama_orchestrator.gui.row_renderer import filter_visible_rows, render_full_rows
+from llama_orchestrator.gui.toolbar import ToolbarCallbacks, build_toolbar
 from llama_orchestrator.gui.usability import (
     configure_status_tags,
     create_progress_bar,
     register_shortcuts,
+)
+from llama_orchestrator.gui.version_browser import (
+    LocalPackageImport,
+    SwitchServerDialog,
+    VersionBrowserDialog,
 )
 from llama_orchestrator.gui_state import (
     GuiSettings,
@@ -118,7 +122,6 @@ from llama_orchestrator.gui_state import (
     format_sort_heading,
     load_gui_settings,
     save_gui_settings,
-    stable_sort_rows,
 )
 from llama_orchestrator.health import check_instance_health
 from llama_orchestrator.health.ports import find_free_port, suggest_port_for_instance
@@ -126,8 +129,8 @@ from llama_orchestrator.hf_import import (
     DownloadProgress,
 )
 from llama_orchestrator.live_metrics import (
-    LiveMetricSnapshot,
     LiveMetricsMonitor,
+    LiveMetricSnapshot,
     LiveMetricsOptions,
     MetricTarget,
 )
@@ -255,7 +258,7 @@ def instance_alias_exists(name: str) -> bool:
 
 def _utc_now_iso() -> str:
     """Return a stable UTC timestamp for persisted clone metadata."""
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    return datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def build_cloned_instance_config(
@@ -758,10 +761,13 @@ def persist_instance_health(
     )
 
 
+# The base tuple is computed at import time so the test harness can substitute a
+# non-class tkinter mock (see tests/conftest.py); with real tkinter, tk.Tk is in
+# the bases. mypy sees the unpacked star-bases as a [misc] construct.
 _LLAMA_GUI_BASES = (tk.Tk, RenderDiffMixin) if isinstance(tk.Tk, type) else (RenderDiffMixin,)
 
 
-class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
+class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):  # type: ignore[misc]
     """Desktop GUI for managing llama.cpp model instances."""
 
     refresh_interval_ms = 5000
@@ -818,10 +824,10 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
         self._live_metrics_row_values: dict[str, tuple[str, ...]] = {}
         self._live_metrics_detail_window: LiveMetricsDetailWindow | None = None
 
-        # Mixin state variables
+        # Mixin state variables (declared on RenderDiffMixin)
         self._row_map: dict[str, TableRow] = {}
         self._last_gpu_inventory = None
-        self._gpu_inventory_ts = 0
+        self._gpu_inventory_ts = 0.0
 
         self._build_widgets()
         configure_status_tags(self.tree)
@@ -1308,7 +1314,7 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
     def _replace_live_metrics_rows(self, rows: tuple[tuple[str, tuple[str, ...]], ...]) -> None:
         """Apply a compact row diff so metric updates remain inexpensive."""
 
-        current = {name: values for name, values in rows}
+        current = dict(rows)
         for name, values in current.items():
             if name in self._live_metrics_row_values:
                 if self._live_metrics_row_values[name] != values:
@@ -1348,8 +1354,20 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
             self.tree.heading(
                 column,
                 text=format_sort_heading(COLUMN_HEADINGS[column], column, self.gui_settings.sort_order),
-                command=lambda current=column: self._toggle_sort(current),
+                command=self._make_heading_sort_command(column),
             )
+
+    def _make_heading_sort_command(self, column: str) -> Callable[[], object]:
+        """Build the zero-argument callback ttk.heading expects for a column.
+
+        A default-bound lambda cannot be type-inferred by mypy in this context,
+        so an explicitly annotated closure is used instead.
+        """
+
+        def toggle() -> None:
+            self._toggle_sort(column)
+
+        return toggle
 
     def _toggle_sort(self, column: str) -> None:
         self.gui_settings = replace(
@@ -1531,12 +1549,14 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
             state = states.get(name)
             try:
                 config = configs[name]
-                display_name = config.display_name
+                # The schema validator backfills display_name with the instance
+                # name, so it is always a non-empty str on loaded configs.
+                display_name = config.display_name or name
                 runtime_selection = describe_effective_runtime(
                     config, tolerate_unresolved_binary=True
                 )
                 port = str(config.server.port)
-                backend = config.gpu.backend
+                backend: str = config.gpu.backend
                 gpu = format_runtime_gpu_display(
                     runtime_selection.gpu_labels if runtime_selection.gpu_active else (),
                     detected_gpus,
@@ -1951,11 +1971,11 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
                 return f"Restarted {name} (PID {state.pid})."
             if action_name == "health":
                 config = get_instance_config(name)
-                state = list_instances().get(name)
+                existing_state = list_instances().get(name)
                 result = check_instance_health(name)
                 persist_instance_health(
                     name,
-                    state,
+                    existing_state,
                     port=config.server.port,
                     health=result.to_health_status,
                     error_message=result.error_message or "",
@@ -2089,6 +2109,10 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
 
         def action() -> str:
             try:
+
+                def stop_one(name_to_stop: str) -> None:
+                    stop_instance(name_to_stop)
+
                 return run_serial_benchmark_queue(
                     names,
                     should_stop=self._serial_benchmark_stop.is_set,
@@ -2098,7 +2122,7 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
                         current,
                         load_benchmark_settings(self.project_root),
                     ),
-                    stop_one=stop_instance,
+                    stop_one=stop_one,
                     handle_exception=self._handle_benchmark_exception,
                     post_message=self._post_message,
                 )
@@ -2219,7 +2243,14 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
         self._update_benchmark_controls()
 
     def _set_benchmark_settings(self, **changes: int | float | str | bool | Path | None) -> None:
-        self.benchmark_settings = replace(self.benchmark_settings, **changes)
+        valid_fields = {field.name for field in fields(self.benchmark_settings)}
+        unknown = sorted(set(changes) - valid_fields)
+        if unknown:
+            raise ValueError(f"Unknown benchmark setting(s): {', '.join(unknown)}")
+        # The heterogeneous kwargs splat cannot be expressed against the
+        # per-field types of dataclasses.replace without Any, which strict mode
+        # disallows; field names are validated above.
+        self.benchmark_settings = replace(self.benchmark_settings, **changes)  # type: ignore[arg-type]
         save_benchmark_settings(self.benchmark_settings, self.project_root)
         self.prompt_var.set(self.benchmark_settings.prompt_file.name)
         self._refresh_benchmark_params_menu()
@@ -2640,7 +2671,7 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
             messagebox.showerror("Rename failed", str(exc), parent=self)
             return
 
-        if rename_instance(name, config.display_name, self._confirm_rename, parent=self):
+        if rename_instance(name, config.display_name or name, self._confirm_rename, parent=self):
             self.refresh()
 
     def _start_daemon(self) -> None:
@@ -2677,7 +2708,7 @@ class LlamaOrchestratorGui(*_LLAMA_GUI_BASES):
             return
 
         # Build the export dict matching VS Code config.json schema
-        export_data = {
+        export_data: dict[str, object] = {
             "name": config.name,
             "schema_version": config.schema_version,
             "instance_uid": config.instance_uid,
@@ -2972,7 +3003,7 @@ def suggest_next_add_model_port(
 class ExistingModelFileDialog(tk.Toplevel):
     """Prompt for how to handle an already-downloaded GGUF file."""
 
-    def __init__(self, master: tk.Misc, final_path: Path) -> None:
+    def __init__(self, master: tk.Tk | tk.Toplevel, final_path: Path) -> None:
         super().__init__(master)
         self.title("Model already exists")
         self.resizable(False, False)
@@ -3000,8 +3031,10 @@ class ExistingModelFileDialog(tk.Toplevel):
         ttk.Button(frame, text="Cancel", command=self._cancel).grid(row=1, column=2, pady=(12, 0))
         self.protocol("WM_DELETE_WINDOW", self._cancel)
 
+    # master is Tk or Toplevel (both are Wm and Misc; typeshed has no common
+    # nominal base beyond object).
     @classmethod
-    def ask(cls, master: tk.Misc, final_path: Path) -> str:
+    def ask(cls, master: tk.Tk | tk.Toplevel, final_path: Path) -> str:
         dialog = cls(master, final_path)
         dialog.wait_window(dialog)
         return dialog.result
@@ -3021,5 +3054,10 @@ class ExistingModelFileDialog(tk.Toplevel):
 
 def launch_gui() -> None:
     """Launch the desktop GUI."""
+    # R15/D2: explicit state-DB initialization at the GUI entry point
+    # (init_db is no longer an import side effect of engine.state).
+    from llama_orchestrator.engine.state import init_db
+
+    init_db()
     app = LlamaOrchestratorGui()
     app.mainloop()

@@ -11,8 +11,9 @@ import hashlib
 import json
 import logging
 import shutil
+from collections.abc import Callable
 from pathlib import Path
-from typing import Callable, Optional
+from typing import Protocol
 from uuid import UUID, uuid4
 
 from llama_orchestrator.binaries.downloader import (
@@ -30,18 +31,32 @@ from llama_orchestrator.binaries.registry import (
     RegistryError,
 )
 from llama_orchestrator.binaries.schema import (
-    BinaryConfig,
     BinaryVersion,
     SupportedVariant,
 )
+from llama_orchestrator.naming import SERVER_BASE, executable_name, locate_executable
 
 logger = logging.getLogger(__name__)
+
+
+class BinaryConfigLike(Protocol):
+    """Structural view of a binary configuration used for resolution.
+
+    Both `llama_orchestrator.config.schema.BinaryConfig` (instance configs) and
+    `llama_orchestrator.binaries.schema.BinaryConfig` satisfy this protocol, so
+    the manager can resolve either without importing the config package
+    (which would create a circular import at package init time).
+    """
+
+    binary_id: UUID | None
+    version: str | None
+    variant: str
 
 
 class BinaryManagerError(Exception):
     """Error during binary management operations."""
 
-    def __init__(self, message: str, cause: Optional[Exception] = None):
+    def __init__(self, message: str, cause: Exception | None = None):
         self.message = message
         self.cause = cause
         super().__init__(message)
@@ -67,13 +82,13 @@ class BinaryInUseError(BinaryManagerError):
 
 
 # Progress callback type
-ProgressCallback = Callable[[int, Optional[int]], None]
+ProgressCallback = Callable[[int, int | None], None]
 
 
 def _package_matches_build(package_dir: Path, build_dir: Path) -> bool:
     """Return whether a package manifest points at the selected build tree."""
     manifest_path = package_dir / "manifest.json"
-    if not manifest_path.is_file() or not (package_dir / "llama-server.exe").is_file():
+    if not manifest_path.is_file() or locate_executable(package_dir, SERVER_BASE) is None:
         return False
     try:
         manifest = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
@@ -102,11 +117,11 @@ def resolve_local_package_directory(package_dir: Path) -> Path:
         raise BinaryManagerError(f"Local package directory does not exist: {selected}")
 
     build_dir: Path | None = None
-    if (selected / "bin" / "llama-server.exe").is_file():
+    if locate_executable(selected / "bin", SERVER_BASE) is not None:
         build_dir = selected
     elif (
         selected.name.casefold() == "bin"
-        and (selected / "llama-server.exe").is_file()
+        and locate_executable(selected, SERVER_BASE) is not None
         and selected.parent.parent.name.casefold() == "build"
     ):
         build_dir = selected.parent
@@ -114,7 +129,7 @@ def resolve_local_package_directory(package_dir: Path) -> Path:
     if build_dir is not None:
         package_root = build_dir.parent.parent / "package"
         package_dir = package_root / build_dir.name
-        if (package_dir / "llama-server.exe").is_file():
+        if locate_executable(package_dir, SERVER_BASE) is not None:
             return package_dir.resolve()
 
         # Package version IDs may intentionally differ from CMake build IDs.
@@ -141,15 +156,15 @@ def resolve_local_package_directory(package_dir: Path) -> Path:
             "or select the generated package folder."
         )
 
-    if (selected / "llama-server.exe").is_file():
+    if locate_executable(selected, SERVER_BASE) is not None:
         return selected
-    raise BinaryManagerError(f"llama-server.exe not found in local package: {selected}")
+    raise BinaryManagerError(f"{executable_name(SERVER_BASE)} not found in local package: {selected}")
 
 
 class BinaryManager:
     """
     Manager for llama.cpp binary versions.
-    
+
     Handles installation, removal, and resolution of binaries.
     UUID is the primary identifier for all operations.
     """
@@ -157,14 +172,14 @@ class BinaryManager:
     def __init__(self, project_root: Path):
         """
         Initialize binary manager.
-        
+
         Args:
             project_root: Path to llama-orchestrator project root
         """
         self.project_root = project_root
         self.bins_dir = project_root / "bins"
         self.legacy_bin_dir = project_root / "bin"
-        self._registry_manager: Optional[BinaryRegistryManager] = None
+        self._registry_manager: BinaryRegistryManager | None = None
 
     @property
     def registry(self) -> BinaryRegistryManager:
@@ -177,9 +192,9 @@ class BinaryManager:
         self,
         version: str,
         variant: SupportedVariant,
-        source_url: Optional[str] = None,
-        expected_sha256: Optional[str] = None,
-        progress_callback: Optional[ProgressCallback] = None,
+        source_url: str | None = None,
+        expected_sha256: str | None = None,
+        progress_callback: ProgressCallback | None = None,
         set_as_default: bool = False,
         insecure: bool = False,
     ) -> BinaryVersion:
@@ -211,8 +226,10 @@ class BinaryManager:
         # Resolve the newest release that has this backend's actual archive.
         # GitHub's /releases/latest may refer to a source-only semantic release.
         actual_version = version
-        download_url = source_url
-        if source_url is None:
+        download_url: str | None
+        if source_url is not None:
+            download_url = source_url
+        else:
             try:
                 with GitHubClient() as client:
                     if version == "latest":
@@ -294,10 +311,11 @@ class BinaryManager:
     ) -> BinaryVersion:
         """Copy a complete local server package into the UUID-managed catalog.
 
-        A package is copied as a unit so ``llama-server.exe`` always launches
-        beside the DLLs it was built and packaged with.  The stored checksum is
-        the imported server executable checksum; callers can retain a richer
-        build manifest in the source package when available.
+        A package is copied as a unit so the llama-server executable always
+        launches beside the shared libraries it was built and packaged with.
+        The stored checksum is the imported server executable checksum;
+        callers can retain a richer build manifest in the source package when
+        available.
         """
         source = resolve_local_package_directory(package_dir)
         if not version.strip() or not variant.strip():
@@ -315,54 +333,88 @@ class BinaryManager:
         try:
             self.bins_dir.mkdir(parents=True, exist_ok=True)
             shutil.copytree(source, destination)
+            server_file = locate_executable(destination, SERVER_BASE)
+            if server_file is None:  # pragma: no cover - source verified above
+                raise BinaryManagerError(
+                    f"{executable_name(SERVER_BASE)} missing from copied package {destination}"
+                )
             binary = BinaryVersion(
                 id=binary_id,
                 version=version.strip(),
                 variant=variant.strip(),
                 download_url=source_url or f"local://{source.name}",
-                sha256=hashlib.sha256((destination / "llama-server.exe").read_bytes()).hexdigest(),
+                sha256=hashlib.sha256(server_file.read_bytes()).hexdigest(),
                 path=Path(str(binary_id)),
                 size_bytes=get_directory_size(destination),
                 executables=find_executables(destination),
             )
             self.registry.add(binary)
             return binary
-        except (OSError, RegistryError) as exc:
+        except (OSError, RegistryError, BinaryManagerError) as exc:
             if destination.exists():
                 shutil.rmtree(destination, ignore_errors=True)
             raise BinaryManagerError(f"Local package registration failed: {exc}", cause=exc) from exc
 
+    def instances_using(self, binary_id: UUID) -> list[str]:
+        """
+        Return the names of configured instances that pin ``binary_id``.
+
+        An instance uses a binary when its config explicitly references the
+        binary's UUID (``binary.binary_id``). Instances that rely on the
+        default binary are not pinned and therefore do not block removal;
+        re-pin or stop them separately if required.
+
+        Imported lazily to avoid a circular import with ``config.loader``
+        (which resolves binaries through this module).
+
+        Raises:
+            ConfigLoadError: If any instance config is invalid. A binary must
+                not be removed while the set of instances referencing it is
+                unknown.
+        """
+        from llama_orchestrator.config.loader import load_all_instances
+
+        return sorted(
+            name
+            for name, config in load_all_instances().items()
+            if config.binary is not None and config.binary.binary_id == binary_id
+        )
+
     def uninstall(self, binary_id: UUID, force: bool = False) -> BinaryVersion:
         """
         Uninstall a binary by UUID.
-        
-        Removes from registry and deletes files.
-        
+
+        Atomic ordering: the registry entry is removed-and-persisted first;
+        files are deleted only afterwards. If file deletion fails, the
+        registry no longer lists the binary and the leftover directory can be
+        cleaned up manually — the reverse order (files gone, registry intact)
+        would leave a dangling registry entry.
+
         Args:
             binary_id: UUID of binary to remove
-            force: Force removal even if in use
-            
+            force: Force removal even if in use by instance configs
+
         Returns:
             Removed BinaryVersion
-            
+
         Raises:
             BinaryNotFoundError: If binary not found
-            BinaryInUseError: If binary in use and not force
+            BinaryInUseError: If an instance config pins the binary and not force
+            ConfigLoadError: If instance configs cannot be read (and not force)
         """
         binary = self.registry.get_by_id(binary_id)
         if binary is None:
             raise BinaryNotFoundError(str(binary_id))
 
-        # TODO: Check if in use by any instances (requires instance config scanning)
-        # if not force:
-        #     instances = self._find_instances_using(binary_id)
-        #     if instances:
-        #         raise BinaryInUseError(binary_id, instances)
+        if not force:
+            instances = self.instances_using(binary_id)
+            if instances:
+                raise BinaryInUseError(binary_id, instances)
 
-        # Remove from registry
+        # Remove from registry (persisted by BinaryRegistryManager.remove).
         self.registry.remove(binary_id)
 
-        # Delete files
+        # Delete files only after the registry update is durable.
         binary_dir = self.bins_dir / str(binary_id)
         if binary_dir.exists():
             shutil.rmtree(binary_dir)
@@ -371,19 +423,19 @@ class BinaryManager:
         logger.info(f"Uninstalled {binary.version} ({binary.variant}) UUID {binary_id}")
         return binary
 
-    def resolve(self, config: BinaryConfig) -> Optional[BinaryVersion]:
+    def resolve(self, config: BinaryConfigLike) -> BinaryVersion | None:
         """
         Resolve binary configuration to installed binary.
-        
+
         Resolution order:
         1. If binary_id is set, lookup by UUID (primary)
         2. If version+variant set, lookup by those (fallback)
         3. If only variant set, use default binary
         4. Return None if not found
-        
+
         Args:
-            config: BinaryConfig from instance config
-            
+            config: Binary configuration from an instance config
+
         Returns:
             BinaryVersion or None if not found/installed
         """
@@ -421,17 +473,17 @@ class BinaryManager:
         # Use default
         return self.registry.get_default()
 
-    def resolve_server_path(self, config: Optional[BinaryConfig]) -> Optional[Path]:
+    def resolve_server_path(self, config: BinaryConfigLike | None) -> Path | None:
         """
-        Resolve binary config to llama-server.exe path.
-        
+        Resolve binary config to the llama-server executable path.
+
         Falls back to legacy bin/ if no config or binary not found.
-        
+
         Args:
-            config: BinaryConfig from instance config (or None)
-            
+            config: Binary configuration from an instance config (or None)
+
         Returns:
-            Path to llama-server.exe
+            Path to the llama-server executable
         """
         # An explicit UUID is a reproducibility pin: never substitute another
         # package when it is missing or incomplete.
@@ -439,10 +491,12 @@ class BinaryManager:
             binary = self.registry.get_by_id(config.binary_id)
             if binary is None:
                 raise BinaryNotFoundError(str(config.binary_id))
-            server_path = self.bins_dir / str(binary.id) / "llama-server.exe"
-            if not server_path.is_file():
+            binary_dir = self.bins_dir / str(binary.id)
+            server_path = locate_executable(binary_dir, SERVER_BASE)
+            if server_path is None:
                 raise BinaryManagerError(
-                    f"Registered binary {config.binary_id} is incomplete: {server_path} is missing"
+                    f"Registered binary {config.binary_id} is incomplete: "
+                    f"{executable_name(SERVER_BASE)} missing in {binary_dir}"
                 )
             return server_path
 
@@ -451,23 +505,24 @@ class BinaryManager:
         if config is not None:
             binary = self.resolve(config)
             if binary is not None:
-                server_path = self.bins_dir / str(binary.id) / "llama-server.exe"
-                if server_path.exists():
+                server_path = locate_executable(self.bins_dir / str(binary.id), SERVER_BASE)
+                if server_path is not None:
                     return server_path
 
-        # Fall back to legacy bin/
-        legacy_path = self.legacy_bin_dir / "llama-server.exe"
-        if legacy_path.exists():
-            logger.debug("Using legacy bin/ for llama-server.exe")
+        # Fall back to legacy bin/ (platform-native name first, then the
+        # Windows-named file of a package created on another platform).
+        legacy_path = locate_executable(self.legacy_bin_dir, SERVER_BASE)
+        if legacy_path is not None:
+            logger.debug("Using legacy bin/ for the llama-server executable")
             return legacy_path
 
         return None
 
-    def get(self, binary_id: UUID) -> Optional[BinaryVersion]:
+    def get(self, binary_id: UUID) -> BinaryVersion | None:
         """Get binary by UUID."""
         return self.registry.get_by_id(binary_id)
 
-    def get_by_version(self, version: str, variant: str) -> Optional[BinaryVersion]:
+    def get_by_version(self, version: str, variant: str) -> BinaryVersion | None:
         """Get binary by version and variant."""
         return self.registry.get_by_version(version, variant)
 
@@ -475,7 +530,7 @@ class BinaryManager:
         """List all installed binaries."""
         return self.registry.list_all()
 
-    def get_default(self) -> Optional[BinaryVersion]:
+    def get_default(self) -> BinaryVersion | None:
         """Get the default binary."""
         return self.registry.get_default()
 
@@ -483,13 +538,13 @@ class BinaryManager:
         """Set the default binary by UUID."""
         return self.registry.set_default(binary_id)
 
-    def check_for_updates(self, binary_id: UUID) -> Optional[str]:
+    def check_for_updates(self, binary_id: UUID) -> str | None:
         """
         Check if a newer version is available.
-        
+
         Args:
             binary_id: UUID of binary to check
-            
+
         Returns:
             Latest version tag if newer, None otherwise
         """
@@ -513,19 +568,19 @@ class BinaryManager:
 
         return None
 
-    def migrate_legacy_bin(self) -> Optional[BinaryVersion]:
+    def migrate_legacy_bin(self) -> BinaryVersion | None:
         """
         Migrate legacy bin/ directory to bins/ structure.
-        
+
         Creates a new UUID-based entry for existing binary.
         Does NOT delete the original bin/ directory.
-        
+
         Returns:
             BinaryVersion for migrated binary, or None if nothing to migrate
         """
-        legacy_server = self.legacy_bin_dir / "llama-server.exe"
+        legacy_server = locate_executable(self.legacy_bin_dir, SERVER_BASE)
 
-        if not legacy_server.exists():
+        if legacy_server is None:
             logger.debug("No legacy bin/ to migrate")
             return None
 
@@ -558,10 +613,10 @@ class BinaryManager:
     def prune_unused(self, dry_run: bool = True) -> list[BinaryVersion]:
         """
         Find binaries not used by any instance.
-        
+
         Args:
             dry_run: If True, only report; if False, delete
-            
+
         Returns:
             List of unused binaries (deleted if not dry_run)
         """
@@ -572,13 +627,13 @@ class BinaryManager:
 
 
 # Convenience function for getting binary manager
-def get_binary_manager(project_root: Optional[Path] = None) -> BinaryManager:
+def get_binary_manager(project_root: Path | None = None) -> BinaryManager:
     """
     Get a BinaryManager instance.
-    
+
     Args:
         project_root: Project root path. If None, auto-detect.
-        
+
     Returns:
         BinaryManager instance
     """
